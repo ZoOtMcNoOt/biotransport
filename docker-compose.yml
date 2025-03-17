@@ -1,0 +1,9 @@
+version: '3'
+
+services:
+  biotransport:
+    build: .
+    volumes:
+      - .:/biotransport
+    stdin_open: true
+    tty: true
