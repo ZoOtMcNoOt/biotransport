@@ -3,6 +3,7 @@
 
 #include <biotransport/solvers/diffusion.hpp>
 #include <functional>
+#include <iostream>
 
 namespace biotransport {
 
