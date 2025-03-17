@@ -1,9 +1,11 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
+#include <pybind11/functional.h>
 
 #include <biotransport/core/mesh.hpp>
 #include <biotransport/solvers/diffusion.hpp>
+#include <biotransport/solvers/reaction_diffusion.hpp>
 
 namespace py = pybind11;
 
@@ -56,4 +58,13 @@ PYBIND11_MODULE(_core, m) {
                 py::capsule([]() {})           // Dummy capsule
             );
         });
+        
+    // Reaction-diffusion solver
+    py::class_<biotransport::ReactionDiffusionSolver, biotransport::DiffusionSolver>
+        (m, "ReactionDiffusionSolver")
+        .def(py::init<const biotransport::StructuredMesh&, double, 
+                     biotransport::ReactionDiffusionSolver::ReactionFunction>(),
+             py::arg("mesh"), py::arg("diffusivity"), py::arg("reaction"))
+        .def("solve", &biotransport::ReactionDiffusionSolver::solve,
+             py::arg("dt"), py::arg("num_steps"));
 }
