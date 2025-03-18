@@ -29,6 +29,7 @@ $RECYCLE.BIN/
 
 ## JetBrains IDEs
 .idea/
+.idea/**
 *.iml
 *.iws
 .idea_modules/

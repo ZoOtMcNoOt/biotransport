@@ -48,17 +48,19 @@ class CMakeBuild(build_ext):
                               cwd=self.build_temp, env=env)
         subprocess.check_call(['cmake', '--build', '.'] + build_args, 
                               cwd=self.build_temp)
+        subprocess.check_call(['cmake', '--install', '.'],
+                              cwd=self.build_temp)
 
 setup(
     name='biotransport',
     version='0.1.0',
-    author='Your Name',
-    author_email='your.email@example.com',
+    author='Grant McNatt',
+    author_email='gmcnatt1@tamu.edu',
     description='A library for biotransport phenomena modeling',
     long_description='',
     packages=find_packages('python'),
     package_dir={'': 'python'},
-    ext_modules=[CMakeExtension('biotransport._core')],
+    ext_modules=[CMakeExtension('biotransport._core._core')],
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
     python_requires='>=3.6',
