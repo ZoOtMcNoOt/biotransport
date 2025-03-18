@@ -13,7 +13,7 @@ for filename in os.listdir(_this_dir):
         extension_path = os.path.join(_this_dir, filename)
 
         # Load the extension module directly from file path
-        spec = importlib.util.spec_from_file_location("_temp_module", extension_path)
+        spec = importlib.util.spec_from_file_location("_core", extension_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 

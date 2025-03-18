@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.13)
+set(Python_EXECUTABLE "/opt/conda/envs/biotransport/bin/python")
 project(biotransport VERSION 0.1.0 LANGUAGES CXX)
 
 # Set C++ standard
+set(PYBIND11_PYTHON_VERSION 3.9)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -15,7 +17,8 @@ add_subdirectory(cpp)
 # Add Python bindings if requested
 if(BUILD_PYTHON_BINDINGS)
     # Find Python
-    find_package(Python 3.6 COMPONENTS Interpreter Development REQUIRED)
+    set(Python_EXECUTABLE $ENV{CONDA_PREFIX}/bin/python)
+    find_package(Python 3.9 EXACT COMPONENTS Interpreter Development REQUIRED)
     
     # Add pybind11 (download if not available)
     include(FetchContent)
