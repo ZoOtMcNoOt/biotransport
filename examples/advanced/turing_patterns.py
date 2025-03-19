@@ -208,7 +208,7 @@ model = GrayScottModel(mesh, Du, Dv, f, k)
 # Time integration parameters
 dt = 1.0
 total_steps = 10000
-display_interval = 500
+display_interval = 100
 
 # Solve the system
 for step in range(0, total_steps + 1, display_interval):
