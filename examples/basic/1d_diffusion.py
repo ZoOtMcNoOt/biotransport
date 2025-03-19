@@ -4,8 +4,13 @@ Example of 1D diffusion simulation.
 
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 from biotransport import StructuredMesh, DiffusionSolver
 from biotransport.visualization import plot_1d_solution
+from biotransport.utils import get_result_path
+
+# Create results subdirectory for this example
+EXAMPLE_NAME = "1d_diffusion"
 
 # Create a 1D mesh
 nx = 100
@@ -31,7 +36,7 @@ plt.grid(True)
 plt.title('Initial Condition')
 plt.xlabel('Position')
 plt.ylabel('Concentration')
-plt.savefig('initial_condition.png')
+plt.savefig(get_result_path('initial_condition.png', EXAMPLE_NAME))
 
 # Solve the diffusion equation
 dt = 0.0001  # time step
@@ -45,13 +50,14 @@ solver.solve(dt, num_steps)
 solution = solver.solution()
 
 # Plot the solution
-plot_1d_solution(mesh, solution, 
+plot_1d_solution(mesh, solution,
                  title=f'Diffusion after t = {total_time}',
                  xlabel='Position',
                  ylabel='Concentration')
 plt.plot(x, initial_condition, 'b--', alpha=0.5, label='Initial')
 plt.legend()
-plt.savefig('diffusion_result.png')
+plt.savefig(get_result_path('diffusion_result.png', EXAMPLE_NAME))
 plt.show()
 
-print("Simulation complete. Results saved to 'diffusion_result.png'")
+results_dir = get_result_path('', EXAMPLE_NAME)
+print(f"Simulation complete. Results saved to '{results_dir}'.")

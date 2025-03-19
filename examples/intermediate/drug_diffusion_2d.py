@@ -8,8 +8,13 @@ drug metabolism or degradation.
 
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 from biotransport import StructuredMesh, ReactionDiffusionSolver, BoundaryType
 from biotransport.visualization import plot_2d_solution, plot_2d_surface
+from biotransport.utils import get_result_path
+
+# Create results subdirectory for this example
+EXAMPLE_NAME = "drug_diffusion_2d"
 
 # Create a 2D mesh representing tissue domain
 nx, ny = 50, 50
@@ -36,7 +41,7 @@ for j in range(mesh.ny() + 1):
         y = mesh.y(i, j)
         r = np.sqrt(x*x + y*y)  # Distance from center
         idx = mesh.index(i, j)
-        
+
         # Gaussian initial distribution
         if r < 0.2:
             initial_condition[idx] = 1.0  # Normalized concentration
@@ -50,10 +55,10 @@ solver.set_neumann_boundary(2, 0.0)  # bottom
 solver.set_neumann_boundary(3, 0.0)  # top
 
 # Plot initial condition
-initial_plot = plot_2d_solution(mesh, initial_condition, 
-                              title='Initial Drug Distribution',
-                              colorbar_label='Concentration')
-plt.savefig('drug_initial.png')
+initial_plot = plot_2d_solution(mesh, initial_condition,
+                                title='Initial Drug Distribution',
+                                colorbar_label='Concentration')
+plt.savefig(get_result_path('drug_initial.png', EXAMPLE_NAME))
 
 # Solve the diffusion equation
 dt = 10.0  # time step (seconds)
@@ -67,17 +72,18 @@ solver.solve(dt, num_steps)
 solution = solver.solution()
 
 # Plot the results
-conc_plot = plot_2d_solution(mesh, solution, 
-                          title=f'Drug Concentration after {total_time/3600:.1f} hours',
-                          colorbar_label='Concentration')
-plt.savefig('drug_concentration.png')
+conc_plot = plot_2d_solution(mesh, solution,
+                             title=f'Drug Concentration after {total_time/3600:.1f} hours',
+                             colorbar_label='Concentration')
+plt.savefig(get_result_path('drug_concentration.png', EXAMPLE_NAME))
 
 # 3D surface plot
-surface_plot = plot_2d_surface(mesh, solution, 
-                             title=f'Drug Concentration Profile after {total_time/3600:.1f} hours',
-                             zlabel='Concentration')
-plt.savefig('drug_concentration_3d.png')
+surface_plot = plot_2d_surface(mesh, solution,
+                               title=f'Drug Concentration Profile after {total_time/3600:.1f} hours',
+                               zlabel='Concentration')
+plt.savefig(get_result_path('drug_concentration_3d.png', EXAMPLE_NAME))
 
 plt.show()
 
-print("Simulation complete. Results saved to image files.")
+results_dir = get_result_path('', EXAMPLE_NAME)
+print(f"Simulation complete. Results saved to '{results_dir}'.")

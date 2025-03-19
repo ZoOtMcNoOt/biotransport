@@ -1,4 +1,4 @@
-#include <biotransport/solvers/diffusion.hpp>
+#include <biotransport/physics/mass_transport/diffusion.hpp>
 #include <cmath>
 #include <stdexcept>
 #include <iostream>

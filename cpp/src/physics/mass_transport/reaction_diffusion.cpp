@@ -1,4 +1,4 @@
-#include <biotransport/solvers/reaction_diffusion.hpp>
+#include <biotransport/physics/mass_transport/reaction_diffusion.hpp>
 
 namespace biotransport {
 

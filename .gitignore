@@ -2,6 +2,14 @@
 scratch.txt
 explained-topics.md
 
+# Common data and cache directories
+data/raw/
+.cache/
+*.log
+
+# Results directory
+results/
+
 # Operating System files
 ## Windows
 Thumbs.db

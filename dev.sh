@@ -4,7 +4,9 @@
 set -e  # Exit immediately if a command exits with a non-zero status
 
 usage() {
-  echo "Usage: $0 {build|install|test|run example_name|clean}"
+  echo "Usage: $0 {build|install|test|run example_path|clean}"
+  echo "For examples: ./dev.sh run basic/1d_diffusion"
+  echo "              ./dev.sh run intermediate/drug_diffusion_2d"
   exit 1
 }
 
@@ -32,7 +34,35 @@ case "$1" in
       echo "Error: No example specified."
       usage
     fi
-    python "examples/$2.py"
+
+    # Check if the path exists directly
+    if [ -f "examples/$2.py" ]; then
+      python "examples/$2.py"
+    # Check in subdirectories
+    elif [ -f "examples/python/$2.py" ]; then
+      python "examples/python/$2.py"
+    elif [ -f "examples/basic/$2.py" ]; then
+      python "examples/basic/$2.py"
+    elif [ -f "examples/intermediate/$2.py" ]; then
+      python "examples/intermediate/$2.py"
+    elif [ -f "examples/advanced/$2.py" ]; then
+      python "examples/advanced/$2.py"
+    # Handle paths with subdirectory/filename format
+    elif [[ "$2" == */* ]]; then
+      if [ -f "examples/$2.py" ]; then
+        python "examples/$2.py"
+      elif [ -f "examples/python/$2.py" ]; then
+        python "examples/python/$2.py"
+      else
+        echo "Error: Example file not found at examples/$2.py or examples/python/$2.py"
+        exit 1
+      fi
+    else
+      echo "Error: Example file not found."
+      echo "Please specify the path relative to the examples directory:"
+      echo "  ./dev.sh run basic/1d_diffusion"
+      exit 1
+    fi
     ;;
   clean)
     echo "Cleaning build artifacts..."

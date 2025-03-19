@@ -1,4 +1,5 @@
-#include <biotransport/core/mesh.hpp>
+#include <biotransport/core/mesh/structured_mesh.hpp>
+#include <stdexcept>
 
 namespace biotransport {
 
