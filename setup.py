@@ -63,7 +63,7 @@ setup(
     ext_modules=[CMakeExtension('biotransport._core._core')],
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
-    python_requires='>=3.6',
+    python_requires='>=3.9',
     install_requires=[
         'numpy>=1.17.0',
         'matplotlib>=3.0.0',
