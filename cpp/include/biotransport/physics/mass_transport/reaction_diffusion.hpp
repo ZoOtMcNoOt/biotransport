@@ -1,7 +1,7 @@
 #ifndef BIOTRANSPORT_REACTION_DIFFUSION_HPP
 #define BIOTRANSPORT_REACTION_DIFFUSION_HPP
 
-#include <biotransport/solvers/diffusion.hpp>
+#include <biotransport/physics/mass_transport/diffusion.hpp>
 #include <functional>
 #include <iostream>
 

@@ -1,0 +1,7 @@
+[build-system]
+requires = ["setuptools>=42", "wheel", "scikit-build"]
+build-backend = "setuptools.build_meta"
+
+[tool.scikit-build]
+cmake.build-type = "Release"
+cmake.define = {CMAKE_POSITION_INDEPENDENT_CODE = "ON"}

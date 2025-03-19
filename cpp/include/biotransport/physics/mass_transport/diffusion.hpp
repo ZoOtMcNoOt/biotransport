@@ -3,7 +3,7 @@
 
 #include <vector>
 #include <array>
-#include <biotransport/core/mesh.hpp>
+#include <biotransport/core/mesh/mesh.hpp>
 
 namespace biotransport {
 

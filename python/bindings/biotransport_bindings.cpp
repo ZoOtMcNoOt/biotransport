@@ -3,9 +3,10 @@
 #include <pybind11/stl.h>
 #include <pybind11/functional.h>
 
-#include <biotransport/core/mesh.hpp>
-#include <biotransport/solvers/diffusion.hpp>
-#include <biotransport/solvers/reaction_diffusion.hpp>
+// Update includes to match the target structure
+#include <biotransport/core/mesh/structured_mesh.hpp>
+#include <biotransport/physics/mass_transport/diffusion.hpp>
+#include <biotransport/physics/mass_transport/reaction_diffusion.hpp>
 
 namespace py = pybind11;
 
