@@ -352,7 +352,8 @@ plt.tight_layout()
 plt.savefig(get_result_path('tumor_structure.png', EXAMPLE_NAME))
 
 # Solve for drug transport at different time points
-times_to_save = [1, 2, 6, 12, 24, 48]  # hours
+# Modified: Reduced time points to match what the simulation can reach
+times_to_save = [1, 2, 6]  # hours
 solution, saved_solutions = solve_drug_transport(
     num_steps=50000, dt=0.5, times_to_save=[t*3600 for t in times_to_save])
 
@@ -364,24 +365,35 @@ drug_cmap = LinearSegmentedColormap.from_list(
 # Plot drug concentration at different time points
 plt.figure(figsize=(16, 12))
 
-for i, t in enumerate(times_to_save):
+# Get all saved time points
+available_times = sorted([t/3600 for t in saved_solutions.keys()])  # Convert to hours
+print(f"Available time points (hours): {available_times}")
+
+# Use the available times for plotting
+for i, t in enumerate(available_times):
     plt.subplot(2, 3, i+1)
 
-    # Get drug concentration data
-    conc = saved_solutions[t*3600]['total']
+    # Get drug concentration data (t is in hours, saved_solutions keys are in seconds)
+    t_seconds = t * 3600
+    conc = saved_solutions[t_seconds]['total']
 
     # Plot concentration
     im = plt.imshow(conc, origin='lower', extent=[0, L*1e3, 0, L*1e3],
-                    cmap=drug_cmap, vmin=0, vmax=np.max([np.max(saved_solutions[tt*3600]['total']) for tt in times_to_save]))
+                    cmap=drug_cmap, vmin=0, vmax=np.max([np.max(saved_solutions[tt]['total'])
+                                                         for tt in saved_solutions.keys()]))
 
     # Add tumor boundary
     circle = plt.Circle((center_x*1e3, center_y*1e3), R_tumor*1e3,
                         fill=False, color='red', linestyle='--', linewidth=2)
     plt.gca().add_patch(circle)
 
-    plt.title(f't = {t} hours')
+    plt.title(f't = {t:.1f} hours')
     plt.xlabel('x (mm)')
     plt.ylabel('y (mm)')
+
+    # Stop if we've filled all subplots
+    if i >= 5:  # 2x3 grid has 6 spots
+        break
 
 plt.tight_layout()
 cbar_ax = plt.axes([0.92, 0.15, 0.02, 0.7])
@@ -397,8 +409,9 @@ centerline_idx_j = ny // 2
 r_values = np.array([np.sqrt((mesh.x(i) - center_x)**2 + (mesh.y(0, centerline_idx_j) - center_y)**2)
                      for i in range(nx+1)])
 
-for t in times_to_save:
-    conc = saved_solutions[t*3600]['total']
+for t_seconds in sorted(saved_solutions.keys()):
+    t_hours = t_seconds / 3600
+    conc = saved_solutions[t_seconds]['total']
     centerline_conc = conc[centerline_idx_j, :]
 
     # Sort by distance from tumor center
@@ -406,7 +419,7 @@ for t in times_to_save:
     r_sorted = r_values[sort_idx]
     conc_sorted = centerline_conc[sort_idx]
 
-    plt.plot(r_sorted*1e3, conc_sorted, label=f't = {t} hours')
+    plt.plot(r_sorted*1e3, conc_sorted, label=f't = {t_hours:.1f} hours')
 
 # Add vertical line for tumor boundary
 plt.axvline(x=R_tumor*1e3, color='red', linestyle='--', linewidth=2, label='Tumor Boundary')

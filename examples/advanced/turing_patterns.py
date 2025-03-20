@@ -14,12 +14,22 @@ Where U and V are two chemicals, and P is an inert product.
 
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from biotransport import StructuredMesh, DiffusionSolver
+import os
+import subprocess
+from biotransport import StructuredMesh
 from biotransport.utils import get_result_path
 
 # Create results subdirectory for this example
 EXAMPLE_NAME = "turing_patterns"
+
+# Check if ffmpeg is available
+def ffmpeg_available():
+    """Check if ffmpeg is available on the system."""
+    try:
+        subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        return True
+    except FileNotFoundError:
+        return False
 
 # Since our library doesn't directly support systems of PDEs,
 # we'll implement a simple solver for the Gray-Scott model ourselves,
@@ -66,6 +76,7 @@ class GrayScottModel:
         # Store all states for animation
         self.u_history = [self.u.copy()]
         self.v_history = [self.v.copy()]
+        self.steps = [0]
 
     def laplacian(self, field):
         """
@@ -152,7 +163,7 @@ class GrayScottModel:
 
         return laplacian
 
-    def step(self, dt, num_steps=1, store_history=False):
+    def step(self, dt, num_steps=1, store_history=False, store_interval=100):
         """
         Advance the simulation by num_steps with step size dt.
 
@@ -160,8 +171,10 @@ class GrayScottModel:
             dt: Time step size
             num_steps: Number of time steps
             store_history: Whether to store the history for animation
+            store_interval: How often to store history steps
         """
-        for _ in range(num_steps):
+        total_steps = 0
+        for step in range(num_steps):
             # Compute Laplacians
             laplacian_u = self.laplacian(self.u)
             laplacian_v = self.laplacian(self.v)
@@ -171,124 +184,225 @@ class GrayScottModel:
             reaction_u = -uvv + self.f * (1.0 - self.u)
             reaction_v = uvv - (self.f + self.k) * self.v
 
-            # Update concentrations
-            self.u += dt * (self.Du * laplacian_u + reaction_u)
-            self.v += dt * (self.Dv * laplacian_v + reaction_v)
+            # Update concentrations (copy to avoid simultaneous update issues)
+            u_new = self.u + dt * (self.Du * laplacian_u + reaction_u)
+            v_new = self.v + dt * (self.Dv * laplacian_v + reaction_v)
 
             # Ensure concentrations stay in valid range [0, 1]
-            self.u = np.clip(self.u, 0.0, 1.0)
-            self.v = np.clip(self.v, 0.0, 1.0)
+            self.u = np.clip(u_new, 0.0, 1.0)
+            self.v = np.clip(v_new, 0.0, 1.0)
 
-            if store_history:
+            total_steps += 1
+
+            if store_history and total_steps % store_interval == 0:
                 self.u_history.append(self.u.copy())
                 self.v_history.append(self.v.copy())
+                self.steps.append(total_steps)
 
-# Create a 2D mesh
-nx, ny = 200, 200
-Lx, Ly = 2.0, 2.0
-mesh = StructuredMesh(nx, ny, 0.0, Lx, 0.0, Ly)
+        return total_steps
 
-# Different pattern types (adjust f and k parameters)
+
+# Dictionary of pattern types with their parameters
 pattern_types = {
-    "spots": {"f": 0.025, "k": 0.06},
-    "stripes": {"f": 0.022, "k": 0.051},
-    "maze": {"f": 0.029, "k": 0.057},
-    "holes": {"f": 0.039, "k": 0.065}
+    "spots": {"f": 0.025, "k": 0.060, "description": "Isolated spots form"},
+    "stripes": {"f": 0.022, "k": 0.051, "description": "Parallel stripes develop"},
+    "maze": {"f": 0.029, "k": 0.057, "description": "Meandering labyrinth structure"},
+    "holes": {"f": 0.039, "k": 0.065, "description": "Isolated holes in a connected medium"}
 }
 
-# Select pattern type
-pattern_type = "maze"
-f = pattern_types[pattern_type]["f"]
-k = pattern_types[pattern_type]["k"]
+# Function to run simulation and visualize results
+def run_simulation(pattern_name, save_animation=True):
+    # Create a 2D mesh
+    nx, ny = 200, 200
+    Lx, Ly = 2.0, 2.0
+    mesh = StructuredMesh(nx, ny, 0.0, Lx, 0.0, Ly)
 
-# Create the Gray-Scott model
-Du, Dv = 0.16, 0.08  # Diffusion coefficients (Dv < Du is required for patterns)
-model = GrayScottModel(mesh, Du, Dv, f, k)
+    # Get pattern parameters
+    params = pattern_types[pattern_name]
+    f = params["f"]
+    k = params["k"]
+    description = params["description"]
+    print(f"\nSimulating {pattern_name.capitalize()} pattern (f={f}, k={k})")
+    print(f"Description: {description}")
 
-# Time integration parameters
-dt = 1.0
-total_steps = 10000
-display_interval = 100
+    # Create the Gray-Scott model
+    Du, Dv = 0.16, 0.08  # Diffusion coefficients (Dv < Du is required for patterns)
+    model = GrayScottModel(mesh, Du, Dv, f, k)
 
-# Solve the system
-for step in range(0, total_steps + 1, display_interval):
-    if step > 0:
-        print(f"Computing steps {step-display_interval+1} to {step}...")
-        model.step(dt, display_interval)
+    # Time integration parameters
+    dt = 1.0
+    total_steps = 25000  # Increased for better pattern development
+    display_steps = [0, 500, 1000, 2500, 5000, 10000, 25000]
 
-    # Plot the current state
+    # Save initial state
     plt.figure(figsize=(10, 8))
-
-    # Use the V concentration for visualization
     plt.imshow(model.v, origin='lower', cmap='viridis',
-               extent=[0, Lx, 0, Ly])
-
+               extent=[0, Lx, 0, Ly], vmin=0, vmax=0.4)
     plt.colorbar(label='V Concentration')
-    plt.title(f'Gray-Scott Model: {pattern_type.capitalize()} Pattern (Step {step})')
+    plt.title(f'Gray-Scott Model: {pattern_name.capitalize()} Pattern (Initial)')
+    plt.xlabel('X')
+    plt.ylabel('Y')
+    plt.savefig(get_result_path(f'pattern_{pattern_name}_initial.png', EXAMPLE_NAME))
+    plt.close()
+
+    current_step = 0
+    # Run simulation, saving at key time points
+    for target_step in display_steps[1:]:
+        steps_to_run = target_step - current_step
+        if steps_to_run <= 0:
+            continue
+
+        print(f"Computing steps {current_step+1} to {target_step}...")
+        current_step += model.step(dt, steps_to_run)
+
+        # Plot and save the current state
+        plt.figure(figsize=(10, 8))
+        plt.imshow(model.v, origin='lower', cmap='viridis',
+                   extent=[0, Lx, 0, Ly], vmin=0, vmax=0.4)
+        plt.colorbar(label='V Concentration')
+        plt.title(f'Gray-Scott Model: {pattern_name.capitalize()} Pattern (Step {current_step})')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.savefig(get_result_path(f'pattern_{pattern_name}_step_{current_step:05d}.png', EXAMPLE_NAME))
+        plt.close()
+
+    # Create animation data
+    if save_animation:
+        print("Preparing animation frames...")
+        # Reset model and store history for animation
+        model = GrayScottModel(mesh, Du, Dv, f, k)
+        animation_frames = 50
+        steps_per_frame = total_steps // animation_frames
+
+        # Run model again, storing history at regular intervals
+        current_step = 0
+        while current_step < total_steps:
+            steps_to_run = min(steps_per_frame, total_steps - current_step)
+            current_step += model.step(dt, steps_to_run, store_history=True, store_interval=steps_per_frame)
+            print(f"Animation progress: {current_step}/{total_steps} steps")
+
+        # Save individual frames (always do this as backup)
+        print("Saving animation frames...")
+        frames_dir = get_result_path(f'frames_{pattern_name}', EXAMPLE_NAME)
+        os.makedirs(frames_dir, exist_ok=True)
+
+        for i, (step, v) in enumerate(zip(model.steps, model.v_history)):
+            plt.figure(figsize=(8, 8))
+            plt.imshow(v, origin='lower', cmap='viridis',
+                       extent=[0, Lx, 0, Ly], vmin=0, vmax=0.4)
+            plt.colorbar(label='V Concentration')
+            plt.title(f'Gray-Scott Model: {pattern_name.capitalize()} Pattern (Step {step})')
+            plt.xlabel('X')
+            plt.ylabel('Y')
+            frame_file = os.path.join(frames_dir, f'frame_{i:04d}.png')
+            plt.savefig(frame_file)
+            plt.close()
+
+        # Save GIF using imageio (more reliable than matplotlib's animation)
+        try:
+            import imageio
+
+            frames = []
+            for i in range(len(model.v_history)):
+                frame_file = os.path.join(frames_dir, f'frame_{i:04d}.png')
+                frames.append(imageio.imread(frame_file))
+
+            gif_file = get_result_path(f'pattern_{pattern_name}_animation.gif', EXAMPLE_NAME)
+            imageio.mimsave(gif_file, frames, duration=0.1)
+            print(f"GIF animation saved to: {gif_file}")
+        except ImportError:
+            print("imageio not found - skipping GIF creation")
+            print("To create GIFs, install imageio: pip install imageio")
+
+        # Try to create an MP4 using ffmpeg if available
+        if ffmpeg_available():
+            try:
+                mp4_file = get_result_path(f'pattern_{pattern_name}_animation.mp4', EXAMPLE_NAME)
+                print(f"Creating MP4 animation using ffmpeg: {mp4_file}")
+
+                # Create MP4 from frames using ffmpeg
+                cmd = [
+                    'ffmpeg', '-y', '-framerate', '10',
+                    '-i', os.path.join(frames_dir, 'frame_%04d.png'),
+                    '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+                    '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',  # Ensure dimensions are even
+                    mp4_file
+                ]
+                subprocess.run(cmd, check=True)
+                print(f"MP4 animation saved to: {mp4_file}")
+            except Exception as e:
+                print(f"Error creating MP4: {e}")
+        else:
+            print("ffmpeg not found - skipping MP4 creation")
+
+    # Final comparison plot showing U and V
+    plt.figure(figsize=(15, 6))
+
+    plt.subplot(1, 2, 1)
+    plt.imshow(model.u, origin='lower', cmap='Blues',
+               extent=[0, Lx, 0, Ly])
+    plt.colorbar(label='U Concentration')
+    plt.title('Chemical U (Substrate)')
     plt.xlabel('X')
     plt.ylabel('Y')
 
-    # Save figure
-    plt.savefig(get_result_path(f'pattern_{pattern_type}_{step:05d}.png', EXAMPLE_NAME))
+    plt.subplot(1, 2, 2)
+    plt.imshow(model.v, origin='lower', cmap='viridis',
+               extent=[0, Lx, 0, Ly])
+    plt.colorbar(label='V Concentration')
+    plt.title('Chemical V (Activator)')
+    plt.xlabel('X')
+    plt.ylabel('Y')
+
+    plt.tight_layout()
+    plt.savefig(get_result_path(f'pattern_{pattern_name}_final_comparison.png', EXAMPLE_NAME))
     plt.close()
 
-# Create an animation of the pattern formation
-print("Creating animation...")
+    return model
 
-# We'll store a subset of steps for the animation to keep file size reasonable
-animation_steps = 50
-step_size = total_steps // animation_steps
+# Run simulations for different pattern types
+print("Demonstrating Turing pattern formation with the Gray-Scott model")
 
-# Run the simulation again, storing history this time
-model = GrayScottModel(mesh, Du, Dv, f, k)
-for i in range(animation_steps + 1):
-    if i > 0:
-        model.step(dt, step_size, store_history=True)
-    print(f"Animation frame {i}/{animation_steps}")
+# Create a comparison of all pattern types
+def compare_patterns():
+    plt.figure(figsize=(15, 12))
 
-# Create the animation
-fig, ax = plt.subplots(figsize=(8, 8))
-img = ax.imshow(model.v_history[0], origin='lower', cmap='viridis',
-                extent=[0, Lx, 0, Ly], vmin=0, vmax=0.4)
-plt.colorbar(img, label='V Concentration')
-ax.set_title(f'Gray-Scott Model: {pattern_type.capitalize()} Pattern')
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
+    for i, (pattern_name, params) in enumerate(pattern_types.items()):
+        # Create a small version for the comparison
+        nx, ny = 100, 100
+        Lx, Ly = 2.0, 2.0
+        mesh = StructuredMesh(nx, ny, 0.0, Lx, 0.0, Ly)
 
-def update_frame(i):
-    img.set_array(model.v_history[i])
-    ax.set_title(f'Gray-Scott Model: {pattern_type.capitalize()} Pattern (Step {i*step_size})')
-    return [img]
+        # Create the model
+        Du, Dv = 0.16, 0.08
+        model = GrayScottModel(mesh, Du, Dv, params["f"], params["k"])
 
-ani = animation.FuncAnimation(fig, update_frame, frames=len(model.v_history), interval=100, blit=True)
+        # Run for a fixed number of steps
+        dt = 1.0
+        print(f"Computing pattern: {pattern_name}...")
+        model.step(dt, 10000)  # Run for 10000 steps
 
-# Save the animation
-animation_file = get_result_path(f'pattern_{pattern_type}_animation.mp4', EXAMPLE_NAME)
-ani.save(animation_file, writer='ffmpeg', fps=10, dpi=100)
+        # Plot
+        plt.subplot(2, 2, i+1)
+        plt.imshow(model.v, origin='lower', cmap='viridis',
+                   extent=[0, Lx, 0, Ly], vmin=0, vmax=0.4)
+        plt.colorbar(label='V Concentration')
+        plt.title(f'{pattern_name.capitalize()} (f={params["f"]}, k={params["k"]})')
+        plt.xlabel('X')
+        plt.ylabel('Y')
 
-print(f"Animation saved to {animation_file}")
+    plt.tight_layout()
+    plt.savefig(get_result_path('pattern_comparison.png', EXAMPLE_NAME))
+    plt.close()
 
-# Final plots showing both chemicals
-plt.figure(figsize=(15, 6))
+# First create a pattern comparison
+compare_patterns()
 
-plt.subplot(1, 2, 1)
-plt.imshow(model.u, origin='lower', cmap='Blues',
-           extent=[0, Lx, 0, Ly])
-plt.colorbar(label='U Concentration')
-plt.title('Chemical U (Substrate)')
-plt.xlabel('X')
-plt.ylabel('Y')
-
-plt.subplot(1, 2, 2)
-plt.imshow(model.v, origin='lower', cmap='viridis',
-           extent=[0, Lx, 0, Ly])
-plt.colorbar(label='V Concentration')
-plt.title('Chemical V (Activator)')
-plt.xlabel('X')
-plt.ylabel('Y')
-
-plt.tight_layout()
-plt.savefig(get_result_path(f'pattern_{pattern_type}_final.png', EXAMPLE_NAME))
+# Run a full simulation for the selected pattern type
+selected_pattern = "maze"  # Change this to explore different patterns
+model = run_simulation(selected_pattern, save_animation=True)
 
 results_dir = get_result_path('', EXAMPLE_NAME)
-print(f"Simulation complete. Results saved to '{results_dir}'.")
+print(f"\nSimulation complete. Results saved to '{results_dir}'.")
+print(f"Check out the different pattern types in 'pattern_comparison.png'.")
+print(f"For a detailed view of {selected_pattern} pattern evolution, see the step images and animation.")
