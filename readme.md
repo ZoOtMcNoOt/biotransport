@@ -1,6 +1,6 @@
 # BioTransport Library
 
-A high-performance C++ library with Python bindings for modeling biotransport phenomena in biological systems.
+A very much in progress high-performance C++ library with Python bindings for modeling biotransport phenomena in biological systems.
 
 ## Overview
 
