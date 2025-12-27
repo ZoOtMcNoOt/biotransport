@@ -65,6 +65,54 @@ std::vector<double> TumorDrugDeliverySolver::solvePressureSOR(int max_iter, doub
     for (int iter = 0; iter < max_iter; ++iter) {
         double max_delta = 0.0;
 
+// MSVC OpenMP doesn't support max reduction, use critical section
+#ifdef _MSC_VER
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (int j = 1; j < ny_; ++j) {
+            double local_max = 0.0;
+            for (int i = 1; i < nx_; ++i) {
+                const std::size_t c = idx(i, j, stride_);
+
+                // Skip pinned tumor nodes
+                if (tumor_mask_[c] != 0) {
+                    continue;
+                }
+
+                const std::size_t e = idx(i + 1, j, stride_);
+                const std::size_t w = idx(i - 1, j, stride_);
+                const std::size_t n = idx(i, j + 1, stride_);
+                const std::size_t s = idx(i, j - 1, stride_);
+
+                const double Kc = K_[c];
+                const double Ke = 0.5 * (Kc + K_[e]);
+                const double Kw = 0.5 * (Kc + K_[w]);
+                const double Kn = 0.5 * (Kc + K_[n]);
+                const double Ks = 0.5 * (Kc + K_[s]);
+
+                const double a_center = (Ke + Kw) / dx2 + (Kn + Ks) / dy2;
+
+                // East/west/north/south pressures are already pinned on boundary/tumor when needed
+                const double rhs = (Ke * p[e] + Kw * p[w]) / dx2 + (Kn * p[n] + Ks * p[s]) / dy2;
+                const double p_gs = rhs / a_center;
+
+                const double p_old = p[c];
+                const double p_new = (1.0 - omega) * p_old + omega * p_gs;
+
+                const double delta = std::fabs(p_new - p_old);
+                local_max = std::max(local_max, delta);
+                p[c] = p_new;
+            }
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp critical
+#endif
+            max_delta = std::max(max_delta, local_max);
+        }
+#else
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static) reduction(max : max_delta)
+#endif
         for (int j = 1; j < ny_; ++j) {
             for (int i = 1; i < nx_; ++i) {
                 const std::size_t c = idx(i, j, stride_);
@@ -99,6 +147,7 @@ std::vector<double> TumorDrugDeliverySolver::solvePressureSOR(int max_iter, doub
                 p[c] = p_new;
             }
         }
+#endif
 
         if (max_delta < tol) {
             break;
@@ -166,6 +215,9 @@ TumorDrugDeliverySaved TumorDrugDeliverySolver::simulate(
     const double inv_2dx = 1.0 / (2.0 * dx);
     const double inv_2dy = 1.0 / (2.0 * dy);
 
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (int j = 1; j < ny_; ++j) {
         for (int i = 1; i < nx_; ++i) {
             const std::size_t c = idx(i, j, stride_);
@@ -242,6 +294,9 @@ TumorDrugDeliverySaved TumorDrugDeliverySolver::simulate(
 
     for (int step = 0; step < num_steps; ++step) {
         // Interior update in 2D
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int j = 1; j < ny_; ++j) {
             for (int i = 1; i < nx_; ++i) {
                 const std::size_t c = idx(i, j, stride_);

@@ -76,6 +76,9 @@ GrayScottRunResult GrayScottSolver::simulate(const std::vector<float>& u0,
     bool stable = false;
 
     for (int step = 1; step <= total_steps; ++step) {
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int j = 0; j < ny_; ++j) {
             const int jn = wrap_index(j + 1, ny_);
             const int js = wrap_index(j - 1, ny_);
@@ -115,8 +118,15 @@ GrayScottRunResult GrayScottSolver::simulate(const std::vector<float>& u0,
 
         if (step % check_interval == 0) {
             float max_diff = 0.0f;
-            for (std::size_t p = 0; p < n; ++p) {
+            // MSVC OpenMP doesn't support max reduction, compute serially or with critical
+#if !defined(_MSC_VER) && defined(BIOTRANSPORT_ENABLE_OPENMP)
+#pragma omp parallel for schedule(static) reduction(max : max_diff)
+#endif
+            for (int p = 0; p < static_cast<int>(n); ++p) {
                 const float d = std::fabs(v[p] - last_check[p]);
+#if defined(_MSC_VER) && defined(BIOTRANSPORT_ENABLE_OPENMP)
+#pragma omp critical
+#endif
                 max_diff = std::max(max_diff, d);
             }
             last_check = v;

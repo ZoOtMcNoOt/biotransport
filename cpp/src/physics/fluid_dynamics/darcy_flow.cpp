@@ -153,6 +153,9 @@ void DarcyFlowSolver::computeVelocity(const std::vector<double>& pressure, std::
     vy.assign(mesh_.numNodes(), 0.0);
 
     // Interior: central difference
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (int j = 1; j < ny; ++j) {
         for (int i = 1; i < nx; ++i) {
             const int c = mesh_.index(i, j);
@@ -257,6 +260,45 @@ DarcyFlowResult DarcyFlowSolver::solve() const {
     for (int iter = 0; iter < max_iter_; ++iter) {
         double max_delta = 0.0;
 
+// MSVC OpenMP doesn't support max reduction, use critical section
+#if defined(_MSC_VER) && defined(BIOTRANSPORT_ENABLE_OPENMP)
+#pragma omp parallel for schedule(static)
+        for (int j = 1; j < ny; ++j) {
+            double local_max = 0.0;
+            for (int i = 1; i < nx; ++i) {
+                const int c = mesh_.index(i, j);
+
+                if (has_internal_pressure_ && internal_mask_[c] != 0) {
+                    continue;
+                }
+
+                const int e = mesh_.index(i + 1, j);
+                const int w = mesh_.index(i - 1, j);
+                const int n = mesh_.index(i, j + 1);
+                const int s = mesh_.index(i, j - 1);
+
+                // Harmonic mean of conductivities
+                const double Kc = kappa_[c];
+                const double Ke = 2.0 * Kc * kappa_[e] / (Kc + kappa_[e]);
+                const double Kw = 2.0 * Kc * kappa_[w] / (Kc + kappa_[w]);
+                const double Kn = 2.0 * Kc * kappa_[n] / (Kc + kappa_[n]);
+                const double Ks = 2.0 * Kc * kappa_[s] / (Kc + kappa_[s]);
+
+                const double a_center = (Ke + Kw) / dx2 + (Kn + Ks) / dy2;
+                const double rhs = (Ke * p[e] + Kw * p[w]) / dx2 + (Kn * p[n] + Ks * p[s]) / dy2;
+
+                const double p_gs = rhs / a_center;
+                const double p_old = p[c];
+                const double p_new = (1.0 - omega_) * p_old + omega_ * p_gs;
+
+                local_max = std::max(local_max, std::abs(p_new - p_old));
+                p[c] = p_new;
+            }
+#pragma omp critical
+            max_delta = std::max(max_delta, local_max);
+        }
+#elif defined(BIOTRANSPORT_ENABLE_OPENMP)
+#pragma omp parallel for schedule(static) reduction(max : max_delta)
         for (int j = 1; j < ny; ++j) {
             for (int i = 1; i < nx; ++i) {
                 const int c = mesh_.index(i, j);
@@ -288,6 +330,39 @@ DarcyFlowResult DarcyFlowSolver::solve() const {
                 p[c] = p_new;
             }
         }
+#else
+        for (int j = 1; j < ny; ++j) {
+            for (int i = 1; i < nx; ++i) {
+                const int c = mesh_.index(i, j);
+
+                if (has_internal_pressure_ && internal_mask_[c] != 0) {
+                    continue;
+                }
+
+                const int e = mesh_.index(i + 1, j);
+                const int w = mesh_.index(i - 1, j);
+                const int n = mesh_.index(i, j + 1);
+                const int s = mesh_.index(i, j - 1);
+
+                // Harmonic mean of conductivities
+                const double Kc = kappa_[c];
+                const double Ke = 2.0 * Kc * kappa_[e] / (Kc + kappa_[e]);
+                const double Kw = 2.0 * Kc * kappa_[w] / (Kc + kappa_[w]);
+                const double Kn = 2.0 * Kc * kappa_[n] / (Kc + kappa_[n]);
+                const double Ks = 2.0 * Kc * kappa_[s] / (Kc + kappa_[s]);
+
+                const double a_center = (Ke + Kw) / dx2 + (Kn + Ks) / dy2;
+                const double rhs = (Ke * p[e] + Kw * p[w]) / dx2 + (Kn * p[n] + Ks * p[s]) / dy2;
+
+                const double p_gs = rhs / a_center;
+                const double p_old = p[c];
+                const double p_new = (1.0 - omega_) * p_old + omega_ * p_gs;
+
+                max_delta = std::max(max_delta, std::abs(p_new - p_old));
+                p[c] = p_new;
+            }
+        }
+#endif
 
         // Handle Neumann boundaries
         if (boundaries_[to_index(Boundary::Left)].type == BoundaryType::NEUMANN) {

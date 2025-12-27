@@ -283,9 +283,8 @@ private:
                 }
             } else {
                 // 2D case - Jacobi is fully parallelizable
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#if !defined(_MSC_VER) && defined(BIOTRANSPORT_ENABLE_OPENMP)
 #pragma omp parallel for schedule(static) reduction(max : max_diff)
-#endif
                 for (int j = 1; j < ny; ++j) {
                     for (int i = 1; i < nx; ++i) {
                         int idx = j * stride + i;
@@ -298,6 +297,39 @@ private:
                         solution_[idx] = u_new;
                     }
                 }
+#elif defined(_MSC_VER) && defined(BIOTRANSPORT_ENABLE_OPENMP)
+                // MSVC doesn't support max reduction, use local max + critical
+#pragma omp parallel for schedule(static)
+                for (int j = 1; j < ny; ++j) {
+                    double local_max = 0.0;
+                    for (int i = 1; i < nx; ++i) {
+                        int idx = j * stride + i;
+                        double u_new =
+                            (rhs_[idx] + off_diag_x * (scratch_[idx - 1] + scratch_[idx + 1]) +
+                             off_diag_y * (scratch_[idx - stride] + scratch_[idx + stride])) *
+                            diag_inv;
+                        double diff = std::abs(u_new - solution_[idx]);
+                        local_max = std::max(local_max, diff);
+                        solution_[idx] = u_new;
+                    }
+#pragma omp critical
+                    max_diff = std::max(max_diff, local_max);
+                }
+#else
+                // No OpenMP - serial version
+                for (int j = 1; j < ny; ++j) {
+                    for (int i = 1; i < nx; ++i) {
+                        int idx = j * stride + i;
+                        double u_new =
+                            (rhs_[idx] + off_diag_x * (scratch_[idx - 1] + scratch_[idx + 1]) +
+                             off_diag_y * (scratch_[idx - stride] + scratch_[idx + stride])) *
+                            diag_inv;
+                        double diff = std::abs(u_new - solution_[idx]);
+                        max_diff = std::max(max_diff, diff);
+                        solution_[idx] = u_new;
+                    }
+                }
+#endif
             }
 
             // Apply boundary conditions

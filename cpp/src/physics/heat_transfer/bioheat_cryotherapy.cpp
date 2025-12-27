@@ -125,6 +125,9 @@ BioheatSaved BioheatCryotherapySolver::simulate(double dt, int num_steps,
 
     for (int step = 1; step <= num_steps; ++step) {
         // Interior updates
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int j = 1; j < ny_; ++j) {
             for (int i = 1; i < nx_; ++i) {
                 const std::size_t c = idx(i, j, stride_);

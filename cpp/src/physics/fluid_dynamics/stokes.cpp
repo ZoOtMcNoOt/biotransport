@@ -88,6 +88,9 @@ void StokesSolver::solveMomentum(std::vector<double>& u, std::vector<double>& v,
     // Gauss-Seidel iterations for momentum equations
     for (int gs_iter = 0; gs_iter < 20; ++gs_iter) {
         // Solve for u-velocity (x-momentum): 0 = -dp/dx + mu*lap(u) + fx
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int j = 1; j < ny; ++j) {
             for (int i = 1; i < nx; ++i) {
                 int idx = j * stride + i;
@@ -116,6 +119,9 @@ void StokesSolver::solveMomentum(std::vector<double>& u, std::vector<double>& v,
         }
 
         // Solve for v-velocity (y-momentum): 0 = -dp/dy + mu*lap(v) + fy
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int j = 1; j < ny; ++j) {
             for (int i = 1; i < nx; ++i) {
                 int idx = j * stride + i;
@@ -171,6 +177,34 @@ void StokesSolver::solvePressurePoisson(std::vector<double>& p, const std::vecto
     for (int iter = 0; iter < 200; ++iter) {
         double max_correction = 0.0;
 
+// MSVC OpenMP doesn't support max reduction, use critical section
+#if defined(_MSC_VER) && defined(BIOTRANSPORT_ENABLE_OPENMP)
+#pragma omp parallel for schedule(static)
+        for (int j = 1; j < ny; ++j) {
+            double local_max = 0.0;
+            for (int i = 1; i < nx; ++i) {
+                int idx = j * stride + i;
+
+                // Divergence of velocity at cell center (central difference)
+                double div_u = (u[idx + 1] - u[idx - 1]) / (2.0 * dx) +
+                               (v[idx + stride] - v[idx - stride]) / (2.0 * dy);
+
+                // Neighbor pressure contributions
+                double p_neighbors =
+                    a_ew * (p[idx - 1] + p[idx + 1]) + a_ns * (p[idx - stride] + p[idx + stride]);
+
+                // Solve: lap(p) = scale * div(u)
+                // This drives pressure to enforce continuity
+                double p_new = (p_neighbors - scale * div_u) / a_p;
+                double correction = p_new - p[idx];
+                p[idx] = p[idx] + omega_sor * correction;
+                local_max = std::max(local_max, std::abs(correction));
+            }
+#pragma omp critical
+            max_correction = std::max(max_correction, local_max);
+        }
+#elif defined(BIOTRANSPORT_ENABLE_OPENMP)
+#pragma omp parallel for schedule(static) reduction(max : max_correction)
         for (int j = 1; j < ny; ++j) {
             for (int i = 1; i < nx; ++i) {
                 int idx = j * stride + i;
@@ -191,6 +225,28 @@ void StokesSolver::solvePressurePoisson(std::vector<double>& p, const std::vecto
                 max_correction = std::max(max_correction, std::abs(correction));
             }
         }
+#else
+        for (int j = 1; j < ny; ++j) {
+            for (int i = 1; i < nx; ++i) {
+                int idx = j * stride + i;
+
+                // Divergence of velocity at cell center (central difference)
+                double div_u = (u[idx + 1] - u[idx - 1]) / (2.0 * dx) +
+                               (v[idx + stride] - v[idx - stride]) / (2.0 * dy);
+
+                // Neighbor pressure contributions
+                double p_neighbors =
+                    a_ew * (p[idx - 1] + p[idx + 1]) + a_ns * (p[idx - stride] + p[idx + stride]);
+
+                // Solve: lap(p) = scale * div(u)
+                // This drives pressure to enforce continuity
+                double p_new = (p_neighbors - scale * div_u) / a_p;
+                double correction = p_new - p[idx];
+                p[idx] = p[idx] + omega_sor * correction;
+                max_correction = std::max(max_correction, std::abs(correction));
+            }
+        }
+#endif
 
         // Neumann BCs for pressure (dp/dn = 0)
         applyPressureNeumannBCs(mesh_, p);
