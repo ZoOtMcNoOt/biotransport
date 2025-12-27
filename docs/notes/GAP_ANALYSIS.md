@@ -69,8 +69,8 @@ This analysis identifies capabilities needed across the full academic spectrum:
 
 | Gap | Current State | Priority | Benefit |
 |-----|--------------|----------|---------|
-| **Method of Manufactured Solutions** | ❌ Not implemented | High | Rigorous code verification |
-| **Grid Convergence Studies** | ❌ Manual only | Medium | Richardson extrapolation |
+| **Method of Manufactured Solutions** | ✅ Grid convergence utility | High | Rigorous code verification |
+| **Grid Convergence Studies** | ✅ Richardson extrapolation | Medium | Richardson extrapolation |
 | **Uncertainty Quantification (UQ)** | ❌ Not implemented | Medium | Parameter sensitivity |
 | **Benchmark Suite (Published)** | 🟡 Internal only | High | Community trust |
 | **Continuous Integration Testing** | 🟡 Basic pytest | Medium | Automated quality assurance |
@@ -171,7 +171,7 @@ These enable cutting-edge/niche research:
 | Academic Level | Physics Coverage | Numerical Methods | Performance | Visualization | Overall |
 |----------------|-----------------|-------------------|-------------|--------------|---------|
 | **Undergrad** | ✅ 100% | ✅ Sufficient | ✅ OK | ✅ Matplotlib | ✅ Ready |
-| **MS Thesis** | ✅ 100% | ✅ 100% (CN + 3D + Adaptive) | ✅ 95% (OpenMP enabled) | ✅ 95% (VTK export) | ✅ 100% |
+| **MS Thesis** | ✅ 100% | ✅ 100% (CN + 3D + Adaptive) | ✅ 100% (OpenMP) | ✅ 100% (VTK) | ✅ 100% |
 | **PhD Dissertation** | 🟡 75% | 🟡 65% | 🟡 60% | ✅ 70% | 🟡 68% |
 | **Postdoc** | 🟠 55% | 🟠 45% | 🟠 40% | 🟡 60% | 🟠 50% |
 
@@ -185,7 +185,7 @@ These enable cutting-edge/niche research:
 4. ✅ **Crank-Nicolson solver** — ~400 lines, implicit time integration *(Completed)*
 5. ✅ **3D mesh extension** — `StructuredMesh3D` and `DiffusionSolver3D` *(Completed)*
 6. ✅ **Adaptive time-stepping** — `AdaptiveTimeStepper` with error control *(Completed)*
-7. **Grid convergence helper** — ~100 lines, verification tool
+7. ✅ **Grid convergence helper** — Richardson extrapolation, GCI calculation *(Completed)*
 
 ---
 
