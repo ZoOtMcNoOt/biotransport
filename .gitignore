@@ -1,7 +1,12 @@
 # Project-specific files (preserving original entries)
 scratch.txt
 explained-topics.md
-docs/
+
+# Documentation - track configs, ignore generated output
+docs/doxygen/html/
+docs/sphinx/_build/
+docs/_build/
+docs/generated/
 
 # Common data and cache directories
 data/raw/
@@ -121,12 +126,4 @@ slprj/
 .RData
 .Ruserdata
 
-# Common data and cache directories
-data/raw/
-.cache/
-*.log
-
-# Documentation
-docs/_build/
-docs/generated/
-.idea/vcs.xml
+# IDE
