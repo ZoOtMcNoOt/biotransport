@@ -119,6 +119,16 @@ from .config import (
 # Adaptive time-stepping
 from .adaptive import AdaptiveTimeStepper, AdaptiveResult, solve_adaptive
 
+# Grid convergence studies (verification)
+from .convergence import (
+    GridConvergenceStudy,
+    ConvergenceResult,
+    compute_order_of_accuracy,
+    run_convergence_study,
+    temporal_convergence_study,
+    plot_convergence,
+)
+
 # ============================================================================
 # User-friendly aliases
 # ============================================================================
@@ -167,6 +177,13 @@ __all__ = [
     "AdaptiveTimeStepper",
     "AdaptiveResult",
     "solve_adaptive",
+    # ========== Grid convergence (verification) ==========
+    "GridConvergenceStudy",
+    "ConvergenceResult",
+    "compute_order_of_accuracy",
+    "run_convergence_study",
+    "temporal_convergence_study",
+    "plot_convergence",
     # ========== Plotting variants ==========
     "plot_field",
     "plot_1d",
