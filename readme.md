@@ -1,32 +1,46 @@
 # BioTransport Library
 
-A (work-in-progress) high-performance C++ library with Python bindings for modeling biotransport phenomena in biological systems.
+A high-performance C++ library with Python bindings for modeling biotransport phenomena in biological systems.
+
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![C++17](https://img.shields.io/badge/C++-17-blue.svg)](https://isocpp.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
-BioTransport is designed to simulate various transport processes that occur in biological systems, such as diffusion, convection, and reaction-diffusion. It provides a solid foundation for implementing custom biotransport models with a focus on performance and ease of use.
+BioTransport provides a comprehensive framework for simulating transport processes in biological systems—diffusion, convection, reaction-diffusion, and fluid dynamics. Built with a high-performance C++ core and intuitive Python bindings, it bridges the gap between computational efficiency and ease of use.
 
 ## Features
 
 ### Core Infrastructure
-- C++ core (C++17) for high performance computations
-- Python bindings for easy scripting and visualization
-- Structured mesh generation for 1D and 2D domains
-- Boundary condition handling (Dirichlet, Neumann)
-- Visualization tools for solution analysis
+- **C++ core (C++17)** for high-performance computations
+- **Python bindings** via pybind11 for easy scripting and visualization
+- **Structured meshes** — 1D, 2D Cartesian, and cylindrical coordinate systems
+- **Boundary conditions** — Dirichlet, Neumann, and Robin types
+- **Visualization tools** — Built-in plotting with `plot_field()` for 1D/2D solutions
 
-### Solvers
-- **Diffusion solvers** — 1D/2D diffusion with uniform or spatially-varying coefficients
-- **Reaction-diffusion** — Linear reaction terms with diffusion
+### Mass Transport Solvers
+- **Diffusion** — 1D/2D with uniform or spatially-varying coefficients
+- **Reaction-diffusion** — Linear, logistic, Michaelis-Menten kinetics
 - **Advection-diffusion** — Convection-diffusion with velocity fields (upwind scheme)
-- **Darcy flow** — Porous media pressure/velocity field computation
-- **Membrane diffusion** — 1D steady-state with partition coefficients and hindered transport
-- **Multi-physics** — Tumor drug delivery and bioheat cryotherapy solvers
+- **Membrane diffusion** — Steady-state with partition coefficients and hindered transport (Renkin)
+- **Gray-Scott model** — Pattern formation (Turing patterns)
 
-### BMEN 341 Course Utilities
+### Fluid Dynamics Solvers
+- **Stokes flow** — Viscous incompressible creeping flow
+- **Navier-Stokes** — Incompressible viscous flow with inertial effects
+- **Darcy flow** — Porous media pressure/velocity field computation
+- **Non-Newtonian models** — Power-law, Carreau, Casson, Cross models for blood rheology
+
+### Multi-Physics Applications
+- **Tumor drug delivery** — Coupled pressure-concentration with elevated IFP
+- **Bioheat cryotherapy** — Pennes bioheat with phase change and Arrhenius damage
+
+### Educational Utilities (BMEN 341)
 - **Dimensionless numbers** — Reynolds, Schmidt, Péclet, Biot, Fourier, Sherwood, Damköhler
-- **Analytical solutions** — Semi-infinite diffusion, Poiseuille/Couette flow, etc.
+- **Analytical solutions** — Semi-infinite diffusion, Poiseuille flow, Taylor-Couette flow
 - **Configuration dataclasses** — `TumorDrugDeliveryConfig`, `BioheatCryotherapyConfig` with documented parameters
+- **Verification scripts** — Compare numerical results against analytical solutions
 
 ## Prerequisites
 
@@ -155,42 +169,42 @@ python -m pytest python/tests
 
 ## Running Examples
 
-The project includes several examples demonstrating different biotransport phenomena:
+The project includes 19 examples organized by complexity:
 
-1. **1D Diffusion**:
-   ```bash
-   ./dev.sh run 1d_diffusion
-   ```
+### Basic Examples
+```bash
+python examples/basic/1d_diffusion.py       # Simple 1D diffusion
+python examples/basic/heat_conduction.py    # 2D heat equation
+```
 
-2. **2D Drug Diffusion**:
-   ```bash
-   ./dev.sh run drug_diffusion_2d
-   ```
+### Intermediate Examples
+```bash
+python examples/intermediate/membrane_diffusion.py       # Transient membrane transport
+python examples/intermediate/steady_membrane_diffusion.py # Steady-state with partitioning
+python examples/intermediate/oxygen_diffusion.py         # O2 consumption in tissue
+python examples/intermediate/drug_diffusion_2d.py        # 2D drug release
+python examples/intermediate/advection_diffusion.py      # Convection-diffusion
+python examples/intermediate/darcy_flow.py               # Porous media flow
+python examples/intermediate/stokes_flow.py              # Creeping viscous flow
+python examples/intermediate/navier_stokes_flow.py       # Inertial viscous flow
+python examples/intermediate/blood_rheology.py           # Non-Newtonian blood models
+python examples/intermediate/cylindrical_coordinates.py  # Axisymmetric problems
+```
 
-3. **Advection-Diffusion**:
-   ```bash
-   python examples/intermediate/advection_diffusion.py
-   ```
+### Advanced Examples
+```bash
+python examples/advanced/tumor_drug_delivery.py   # Multi-physics drug transport
+python examples/advanced/bioheat_cryotherapy.py   # Cryotherapy with tissue damage
+python examples/advanced/turing_patterns.py       # Gray-Scott reaction-diffusion
+```
 
-4. **Darcy Flow** (porous media):
-   ```bash
-   python examples/intermediate/darcy_flow.py
-   ```
-
-5. **Membrane Diffusion**:
-   ```bash
-   python examples/basic/membrane_diffusion.py
-   ```
-
-6. **Tumor Drug Delivery** (advanced multi-physics):
-   ```bash
-   python examples/advanced/tumor_drug_delivery.py
-   ```
-
-7. **Bioheat Cryotherapy** (phase change + Arrhenius damage):
-   ```bash
-   python examples/advanced/bioheat_cryotherapy.py
-   ```
+### Verification Scripts
+```bash
+python examples/verification/verify_diffusion.py       # Against analytical solution
+python examples/verification/verify_poiseuille.py      # Pipe flow validation
+python examples/verification/verify_taylor_couette.py  # Rotating cylinders
+python examples/verification/verify_viscoelastic.py    # Non-Newtonian validation
+```
 
 ### Running All Examples
 
@@ -306,7 +320,8 @@ print(f"IFP in Pascals: {config.IFP_tumor_Pa:.1f}")
 print(f"Tumor area fraction: {config.tumor_area_fraction:.1%}")
 ```
 
-See [docs/PARAMETERS.md](docs/PARAMETERS.md) for complete parameter reference.
+See the `python/biotransport/config/` module for complete parameter definitions with units and ranges.
+
 ### Python “golden path” (least LoC)
 
 For problems that support the façade API (`*Problem` + `ExplicitFD`), you can use the
@@ -371,25 +386,41 @@ If you encounter issues with Docker:
    docker rm gdb-install
    ```
 
-## Documentation
+## Project Structure
 
-For deeper dives into the codebase:
+```
+biotransport/
+├── cpp/                    # C++ core library
+│   ├── include/biotransport/
+│   │   ├── core/          # Mesh, numerics, analytical solutions
+│   │   ├── physics/       # Fluid dynamics, mass transport, heat transfer
+│   │   └── solvers/       # Diffusion, advection-diffusion, explicit FD
+│   ├── src/               # Implementation files
+│   ├── tests/             # C++ unit tests (Google Test)
+│   └── benchmarks/        # Performance benchmarks
+├── python/
+│   ├── bindings/          # pybind11 bindings
+│   ├── biotransport/      # Python package
+│   │   ├── config/        # Configuration dataclasses
+│   │   ├── visualization.py
+│   │   └── ...
+│   └── tests/             # Python tests (pytest)
+├── examples/
+│   ├── basic/             # Introductory examples
+│   ├── intermediate/      # Standard physics problems
+│   ├── advanced/          # Multi-physics simulations
+│   └── verification/      # Validation against analytical solutions
+└── results/               # Output directory for simulations
+```
 
-- **[docs/FOOTPRINT.md](docs/FOOTPRINT.md)** — Full repository map + public API surface (C++ and Python).
-- **[docs/PARAMETERS.md](docs/PARAMETERS.md)** — Multi-physics solver parameter reference with units and ranges.
-- **[docs/PAIN_POINTS.md](docs/PAIN_POINTS.md)** — Known friction points and suggested remedies.
-- **[docs/ROADMAP.md](docs/ROADMAP.md)** — Iteration history and upcoming priorities.
-- **[docs/GAMEPLAN.md](docs/GAMEPLAN.md)** — Phased action plan for tech debt and new features.
-- **[docs/BMEN341_BioTransport_Analysis.md](docs/BMEN341_BioTransport_Analysis.md)** — Course alignment analysis (Texas A&M BMEN 341).
-
-### Results directory behavior
+### Results Directory Behavior
 
 Python examples write output to a `results/` folder. The location is chosen by this precedence:
 
-1. **`BIOTRANSPORT_RESULTS_DIR`** environment variable (if set).
-2. **`base_dir`** argument passed to `get_result_path(...)`.
-3. **Repo-root auto-detection** (walks up from script looking for `pyproject.toml`).
-4. **Current working directory** as fallback.
+1. **`BIOTRANSPORT_RESULTS_DIR`** environment variable (if set)
+2. **`base_dir`** argument passed to `get_result_path(...)`
+3. **Repo-root auto-detection** (walks up from script looking for `pyproject.toml`)
+4. **Current working directory** as fallback
 
 Set the environment variable for a predictable location when running from any CWD.
 
