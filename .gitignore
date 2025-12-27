@@ -16,6 +16,13 @@ data/raw/
 # Results directory
 results/
 
+# VTK/ParaView output files
+*.vtk
+*.vtu
+*.vtp
+*.pvd
+*.pvtu
+
 # Operating System files
 ## Windows
 Thumbs.db

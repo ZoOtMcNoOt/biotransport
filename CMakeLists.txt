@@ -39,12 +39,21 @@ if(BUILD_PYTHON_BINDINGS)
     STATUS "Found Python: ${Python_EXECUTABLE} (Version: ${Python_VERSION})")
   message(STATUS "Python include dirs: ${Python_INCLUDE_DIRS}")
 
+  # Set variables that pybind11's find_package(PythonInterp/PythonLibs) might
+  # use This ensures pybind11 uses the SAME Python we found
+  set(PYTHON_EXECUTABLE
+      ${Python_EXECUTABLE}
+      CACHE PATH "Python executable" FORCE)
+  set(PYBIND11_PYTHON_VERSION
+      ${Python_VERSION}
+      CACHE STRING "Python version" FORCE)
+
   # Add pybind11 (download if not available)
   include(FetchContent)
   FetchContent_Declare(
     pybind11
     GIT_REPOSITORY https://github.com/pybind/pybind11.git
-    GIT_TAG v2.10.0)
+    GIT_TAG v2.13.6)
   FetchContent_MakeAvailable(pybind11)
 
   # Add the bindings directory

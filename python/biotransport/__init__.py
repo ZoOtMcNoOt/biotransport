@@ -66,6 +66,10 @@ from ._core import (
     blood_casson_model,
     blood_carreau_model,
     pipe_wall_shear_rate,
+    # I/O and visualization
+    write_vtk,
+    write_vtk_series,
+    write_vtk_series_with_metadata,
 )
 
 # Expose utility functions
@@ -100,9 +104,6 @@ from .fields import SpatialField, layered_1d
 
 # Initial condition helpers
 from .initial_conditions import gaussian, step, uniform, circle, sinusoidal
-
-# VTK export for ParaView visualization
-from .vtk_export import write_vtk, write_vtk_series
 
 # Configuration dataclasses for multi-physics solvers
 from .config import (
@@ -222,6 +223,7 @@ __all__ = [
     "get_result_path",
     "write_vtk",
     "write_vtk_series",
+    "write_vtk_series_with_metadata",
     "dimensionless",
     "analytical",
     # ========== Configuration ==========

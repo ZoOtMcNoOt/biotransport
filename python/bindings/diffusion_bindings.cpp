@@ -451,7 +451,11 @@ void register_diffusion_bindings(py::module_& m) {
         .def("diffusivity",
              static_cast<TransportProblem& (TransportProblem::*)(double)>(
                  &TransportProblem::diffusivity),
-             py::arg("diffusivity"), py::return_value_policy::reference_internal)
+             py::arg("diffusivity"), py::return_value_policy::reference_internal,
+             "Set uniform diffusivity")
+        .def("diffusivity",
+             static_cast<double (TransportProblem::*)() const>(&TransportProblem::diffusivity),
+             "Get diffusivity value")
         .def("diffusivity_field",
              static_cast<TransportProblem& (TransportProblem::*)(const std::vector<double>&)>(
                  &TransportProblem::diffusivityField),
@@ -475,10 +479,14 @@ void register_diffusion_bindings(py::module_& m) {
              static_cast<TransportProblem& (TransportProblem::*)(AdvectionScheme)>(
                  &TransportProblem::advectionScheme),
              py::arg("scheme"), py::return_value_policy::reference_internal)
-        .def("initial_condition",
-             static_cast<TransportProblem& (TransportProblem::*)(const std::vector<double>&)>(
-                 &TransportProblem::initialCondition),
-             py::arg("values"), py::return_value_policy::reference_internal)
+        .def(
+            "initial_condition",
+            [](TransportProblem& self, const std::vector<double>& values) -> TransportProblem& {
+                // Explicit copy to avoid any dangling reference issues
+                std::vector<double> values_copy(values.begin(), values.end());
+                return self.initialCondition(values_copy);
+            },
+            py::arg("values"), py::return_value_policy::reference_internal)
         .def("initial_condition",
              static_cast<TransportProblem& (TransportProblem::*)(double)>(
                  &TransportProblem::initialCondition),
@@ -490,7 +498,22 @@ void register_diffusion_bindings(py::module_& m) {
         .def("neumann", &TransportProblem::neumann, py::arg("side"), py::arg("flux"),
              py::return_value_policy::reference_internal)
         .def("robin", &TransportProblem::robin, py::arg("side"), py::arg("a"), py::arg("b"),
-             py::arg("c"), py::return_value_policy::reference_internal);
+             py::arg("c"), py::return_value_policy::reference_internal)
+        // Accessors
+        .def("mesh", &TransportProblem::mesh, py::return_value_policy::reference_internal)
+        .def("initial",
+             [](const TransportProblem& prob) -> py::array_t<double> {
+                 const std::vector<double>& vec = prob.initial();
+                 // Create a copy to avoid any reference issues
+                 std::vector<double> vec_copy(vec.begin(), vec.end());
+                 py::array_t<double> result(vec_copy.size());
+                 auto r = result.mutable_unchecked<1>();
+                 for (size_t i = 0; i < vec_copy.size(); ++i) {
+                     r(i) = vec_copy[i];
+                 }
+                 return result;
+             })
+        .def("boundaries", &TransportProblem::boundaries, py::return_value_policy::copy);
 
     // ExplicitFD facade - now uses unified TransportProblem
     py::class_<ExplicitFD>(m, "ExplicitFD")

@@ -69,6 +69,10 @@ from ._core import (
     blood_casson_model,
     blood_carreau_model,
     pipe_wall_shear_rate,
+    # I/O and visualization
+    write_vtk,
+    write_vtk_series,
+    write_vtk_series_with_metadata,
 )
 
 __all__ = [
@@ -131,4 +135,8 @@ __all__ = [
     "blood_casson_model",
     "blood_carreau_model",
     "pipe_wall_shear_rate",
+    # I/O and visualization
+    "write_vtk",
+    "write_vtk_series",
+    "write_vtk_series_with_metadata",
 ]

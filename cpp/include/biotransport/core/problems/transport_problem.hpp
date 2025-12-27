@@ -165,7 +165,7 @@ public:
      * @brief Set initial condition from vector.
      */
     TransportProblem& initialCondition(const std::vector<double>& values) {
-        initial_ = values;
+        initial_ = values;  // Copy assignment
         return *this;
     }
 
