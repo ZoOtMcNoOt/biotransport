@@ -1,0 +1,17 @@
+name: biotransport
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - cmake>=3.13
+  - compilers
+  - pybind11=2.10
+  - numpy>=1.17.0
+  - matplotlib>=3.0.0
+  - scipy>=1.9.0
+  - pytest
+  - pip
+  - ninja
+  - ffmpeg
+  - imageio>=2.19.0

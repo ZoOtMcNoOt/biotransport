@@ -1,0 +1,132 @@
+# Project-specific files (preserving original entries)
+scratch.txt
+explained-topics.md
+docs/
+
+# Common data and cache directories
+data/raw/
+.cache/
+*.log
+
+# Results directory
+results/
+
+# Operating System files
+## Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+## macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Editor/IDE files
+## VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+## JetBrains IDEs
+.idea/
+.idea/**
+*.iml
+*.iws
+.idea_modules/
+
+# Build system files
+## CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest*.txt
+compile_commands.json
+CTestTestfile.cmake
+cmake-build-*/
+build-*/
+build-cpp-tests/
+build-cpp*/
+cmake-build-debug/
+cmake-build-release/
+_deps/
+.cmake/
+
+## Build artifacts
+build/
+*.o
+*.obj
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.a
+*.lib
+*.ninja
+*.ninja_*
+.ninja_*
+
+# Language-specific files
+## Python
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+ENV/
+.venv/
+.env/
+build/temp.*
+*.cpython-*.so
+
+## MATLAB
+*.mexa64
+*.mexw64
+*.mexmaci64
+*.m~
+slprj/
+
+## R
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+
+# Common data and cache directories
+data/raw/
+.cache/
+*.log
+
+# Documentation
+docs/_build/
+docs/generated/
+.idea/vcs.xml

@@ -1,0 +1,62 @@
+# Clang-format style for BioTransport C++ code
+# Based on Google style with minor adjustments
+
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++17
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+IndentCaseLabels: true
+NamespaceIndentation: None
+
+# Line breaking
+ColumnLimit: 100
+AllowShortBlocksOnASingleLine: Empty
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortLambdasOnASingleLine: Inline
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBraces: Attach
+
+# Spacing
+SpaceAfterCStyleCast: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpacesInAngles: Never
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignOperands: true
+AlignTrailingComments: true
+
+# Includes
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Local headers
+  - Regex: '^"biotransport/'
+    Priority: 1
+  # Third-party headers
+  - Regex: '^<(pybind11|Eigen|fmt)/'
+    Priority: 2
+  # Standard library
+  - Regex: '^<.*>'
+    Priority: 3
+SortIncludes: CaseSensitive
+
+# Pointer alignment
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Miscellaneous
+FixNamespaceComments: true
+ReflowComments: true
