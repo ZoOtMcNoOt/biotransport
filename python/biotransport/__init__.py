@@ -116,6 +116,9 @@ from .config import (
     get_parameter_ranges,
 )
 
+# Adaptive time-stepping
+from .adaptive import AdaptiveTimeStepper, AdaptiveResult, solve_adaptive
+
 # ============================================================================
 # User-friendly aliases
 # ============================================================================
@@ -160,6 +163,10 @@ __all__ = [
     "SolverStats",
     "run",
     "run_checkpoints",
+    # ========== Adaptive time-stepping ==========
+    "AdaptiveTimeStepper",
+    "AdaptiveResult",
+    "solve_adaptive",
     # ========== Plotting variants ==========
     "plot_field",
     "plot_1d",
