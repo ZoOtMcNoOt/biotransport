@@ -35,6 +35,7 @@
 
 // Diffusion and reaction-diffusion (consolidated)
 #include <biotransport/solvers/advection_diffusion_solver.hpp>
+#include <biotransport/solvers/crank_nicolson.hpp>
 #include <biotransport/solvers/diffusion_solvers.hpp>
 
 // Reactions library

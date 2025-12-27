@@ -5,6 +5,8 @@ BioTransport - A library for modeling biotransport phenomena
 from ._core import (
     StructuredMesh,
     DiffusionSolver,
+    CrankNicolsonDiffusion,
+    CNSolveResult,
     ConstantSourceReactionDiffusionSolver,
     LinearReactionDiffusionSolver,
     LogisticReactionDiffusionSolver,
@@ -167,6 +169,8 @@ __all__ = [
     "layered_1d",
     # ========== Specialized solvers ==========
     "DiffusionSolver",
+    "CrankNicolsonDiffusion",
+    "CNSolveResult",
     "ConstantSourceReactionDiffusionSolver",
     "LinearReactionDiffusionSolver",
     "LogisticReactionDiffusionSolver",

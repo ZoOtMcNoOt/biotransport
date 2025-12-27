@@ -10,6 +10,8 @@ from ._core import (
     BoundaryCondition,
     BoundaryType,
     DiffusionSolver,
+    CrankNicolsonDiffusion,
+    CNSolveResult,
     ConstantSourceReactionDiffusionSolver,
     ExplicitFD,
     TransportProblem,
@@ -72,6 +74,8 @@ from ._core import (
 __all__ = [
     "StructuredMesh",
     "DiffusionSolver",
+    "CrankNicolsonDiffusion",
+    "CNSolveResult",
     "ConstantSourceReactionDiffusionSolver",
     "LinearReactionDiffusionSolver",
     "LogisticReactionDiffusionSolver",
