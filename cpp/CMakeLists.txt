@@ -5,6 +5,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(SOURCES
     # Core
     src/core/mesh/structured_mesh.cpp
+    src/core/mesh/structured_mesh_3d.cpp
     src/core/mesh/cylindrical_mesh.cpp
     src/core/utils.cpp
     # Mass transport (specialized solvers only - base solvers are header-only)

@@ -12,6 +12,7 @@
 #include "binding_helpers.hpp"
 #include <biotransport/core/boundary.hpp>
 #include <biotransport/core/mesh/structured_mesh.hpp>
+#include <biotransport/core/mesh/structured_mesh_3d.hpp>
 #include <biotransport/core/problems/transport_problem.hpp>
 #include <biotransport/physics/heat_transfer/bioheat_cryotherapy.hpp>
 #include <biotransport/physics/mass_transport/gray_scott.hpp>
@@ -20,6 +21,7 @@
 #include <biotransport/physics/reactions.hpp>
 #include <biotransport/solvers/advection_diffusion_solver.hpp>
 #include <biotransport/solvers/crank_nicolson.hpp>
+#include <biotransport/solvers/diffusion_solver_3d.hpp>
 #include <biotransport/solvers/diffusion_solvers.hpp>
 #include <biotransport/solvers/explicit_fd.hpp>
 
@@ -521,6 +523,86 @@ void register_diffusion_bindings(py::module_& m) {
         .def("safety_factor", &ExplicitFD::safetyFactor, py::arg("factor"),
              py::return_value_policy::reference_internal)
         .def("run", &ExplicitFD::run, py::arg("problem"), py::arg("t_end"));
+
+    // =========================================================================
+    // 3D Diffusion Solvers
+    // =========================================================================
+
+    py::class_<DiffusionSolver3D>(m, "DiffusionSolver3D",
+                                  R"(3D diffusion solver for the equation: ∂u/∂t = D∇²u
+
+        Supports OpenMP parallelization for multi-core acceleration.
+
+        Example:
+            >>> mesh = bt.StructuredMesh3D(20, 20, 20, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
+            >>> solver = bt.DiffusionSolver3D(mesh, 1e-5)
+            >>> solver.set_initial_condition(u0)
+            >>> solver.solve(dt, num_steps)
+        )")
+        .def(py::init<const StructuredMesh3D&, double>(), py::arg("mesh"), py::arg("diffusivity"))
+        .def("set_initial_condition", &DiffusionSolver3D::setInitialCondition, py::arg("values"))
+        .def("set_dirichlet_boundary",
+             py::overload_cast<int, double>(&DiffusionSolver3D::setDirichletBoundary),
+             py::arg("boundary_id"), py::arg("value"))
+        .def("set_dirichlet_boundary",
+             py::overload_cast<Boundary3D, double>(&DiffusionSolver3D::setDirichletBoundary),
+             py::arg("boundary"), py::arg("value"))
+        .def("set_neumann_boundary",
+             py::overload_cast<int, double>(&DiffusionSolver3D::setNeumannBoundary),
+             py::arg("boundary_id"), py::arg("flux"))
+        .def("set_neumann_boundary",
+             py::overload_cast<Boundary3D, double>(&DiffusionSolver3D::setNeumannBoundary),
+             py::arg("boundary"), py::arg("flux"))
+        .def("solve", &DiffusionSolver3D::solve, py::arg("dt"), py::arg("num_steps"))
+        .def("check_stability", &DiffusionSolver3D::checkStability, py::arg("dt"),
+             "Check if the given time step satisfies the CFL stability condition.")
+        .def("max_stable_time_step", &DiffusionSolver3D::maxStableTimeStep,
+             "Get the maximum stable time step for explicit integration.")
+        .def("time", &DiffusionSolver3D::time, "Get current simulation time.")
+        .def("solution",
+             [](const DiffusionSolver3D& solver) {
+                 return to_numpy_with_base(solver.solution(), py::cast(&solver));
+             })
+        .def("mesh", &DiffusionSolver3D::mesh, py::return_value_policy::reference_internal);
+
+    py::class_<LinearReactionDiffusionSolver3D>(m, "LinearReactionDiffusionSolver3D",
+                                                R"(3D reaction-diffusion solver: ∂u/∂t = D∇²u - k*u
+
+        Uses implicit treatment of decay term for unconditional stability.
+
+        Example:
+            >>> mesh = bt.StructuredMesh3D(20, 1.0)  # 20x20x20 unit cube
+            >>> solver = bt.LinearReactionDiffusionSolver3D(mesh, D=1e-5, decay_rate=0.01)
+        )")
+        .def(py::init<const StructuredMesh3D&, double, double>(), py::arg("mesh"),
+             py::arg("diffusivity"), py::arg("decay_rate"))
+        .def("set_initial_condition", &LinearReactionDiffusionSolver3D::setInitialCondition,
+             py::arg("values"))
+        .def("set_dirichlet_boundary",
+             py::overload_cast<int, double>(&LinearReactionDiffusionSolver3D::setDirichletBoundary),
+             py::arg("boundary_id"), py::arg("value"))
+        .def("set_dirichlet_boundary",
+             py::overload_cast<Boundary3D, double>(
+                 &LinearReactionDiffusionSolver3D::setDirichletBoundary),
+             py::arg("boundary"), py::arg("value"))
+        .def("set_neumann_boundary",
+             py::overload_cast<int, double>(&LinearReactionDiffusionSolver3D::setNeumannBoundary),
+             py::arg("boundary_id"), py::arg("flux"))
+        .def("set_neumann_boundary",
+             py::overload_cast<Boundary3D, double>(
+                 &LinearReactionDiffusionSolver3D::setNeumannBoundary),
+             py::arg("boundary"), py::arg("flux"))
+        .def("solve", &LinearReactionDiffusionSolver3D::solve, py::arg("dt"), py::arg("num_steps"))
+        .def("check_stability", &LinearReactionDiffusionSolver3D::checkStability, py::arg("dt"))
+        .def("max_stable_time_step", &LinearReactionDiffusionSolver3D::maxStableTimeStep)
+        .def("decay_rate", &LinearReactionDiffusionSolver3D::decayRate)
+        .def("time", &LinearReactionDiffusionSolver3D::time)
+        .def("solution",
+             [](const LinearReactionDiffusionSolver3D& solver) {
+                 return to_numpy_with_base(solver.solution(), py::cast(&solver));
+             })
+        .def("mesh", &LinearReactionDiffusionSolver3D::mesh,
+             py::return_value_policy::reference_internal);
 }
 
 }  // namespace bindings

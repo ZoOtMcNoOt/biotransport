@@ -7,9 +7,12 @@ Public users should import symbols from the top-level `biotransport` package.
 
 from ._core import (
     Boundary,
+    Boundary3D,
     BoundaryCondition,
     BoundaryType,
     DiffusionSolver,
+    DiffusionSolver3D,
+    LinearReactionDiffusionSolver3D,
     CrankNicolsonDiffusion,
     CNSolveResult,
     ConstantSourceReactionDiffusionSolver,
@@ -29,6 +32,7 @@ from ._core import (
     RunResult,
     SolverStats,
     StructuredMesh,
+    StructuredMesh3D,
     # Advection-diffusion (Phase 2)
     AdvectionScheme,
     AdvectionDiffusionSolver,
@@ -77,7 +81,11 @@ from ._core import (
 
 __all__ = [
     "StructuredMesh",
+    "StructuredMesh3D",
+    "Boundary3D",
     "DiffusionSolver",
+    "DiffusionSolver3D",
+    "LinearReactionDiffusionSolver3D",
     "CrankNicolsonDiffusion",
     "CNSolveResult",
     "ConstantSourceReactionDiffusionSolver",

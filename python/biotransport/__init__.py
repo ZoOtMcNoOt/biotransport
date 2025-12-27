@@ -4,7 +4,11 @@ BioTransport - A library for modeling biotransport phenomena
 
 from ._core import (
     StructuredMesh,
+    StructuredMesh3D,
+    Boundary3D,
     DiffusionSolver,
+    DiffusionSolver3D,
+    LinearReactionDiffusionSolver3D,
     CrankNicolsonDiffusion,
     CNSolveResult,
     ConstantSourceReactionDiffusionSolver,
@@ -144,6 +148,10 @@ __all__ = [
     "sinusoidal",
     # ========== Slightly more advanced ==========
     "StructuredMesh",
+    "StructuredMesh3D",
+    "Boundary3D",
+    "DiffusionSolver3D",
+    "LinearReactionDiffusionSolver3D",
     "TransportProblem",
     "ExplicitFD",
     "Boundary",
