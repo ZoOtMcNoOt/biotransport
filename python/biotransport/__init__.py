@@ -99,6 +99,9 @@ from .fields import SpatialField, layered_1d
 # Initial condition helpers
 from .initial_conditions import gaussian, step, uniform, circle, sinusoidal
 
+# VTK export for ParaView visualization
+from .vtk_export import write_vtk, write_vtk_series
+
 # Configuration dataclasses for multi-physics solvers
 from .config import (
     TumorDrugDeliveryConfig,
@@ -213,6 +216,8 @@ __all__ = [
     # ========== Utilities ==========
     "get_results_dir",
     "get_result_path",
+    "write_vtk",
+    "write_vtk_series",
     "dimensionless",
     "analytical",
     # ========== Configuration ==========
