@@ -34,6 +34,7 @@
 #include <biotransport/solvers/solver_base.hpp>
 
 // Diffusion and reaction-diffusion (consolidated)
+#include <biotransport/solvers/adi_solver.hpp>
 #include <biotransport/solvers/advection_diffusion_solver.hpp>
 #include <biotransport/solvers/crank_nicolson.hpp>
 #include <biotransport/solvers/diffusion_solvers.hpp>

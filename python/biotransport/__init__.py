@@ -11,6 +11,10 @@ from ._core import (
     LinearReactionDiffusionSolver3D,
     CrankNicolsonDiffusion,
     CNSolveResult,
+    # ADI solvers (Alternating Direction Implicit)
+    ADIDiffusion2D,
+    ADIDiffusion3D,
+    ADISolveResult,
     ConstantSourceReactionDiffusionSolver,
     LinearReactionDiffusionSolver,
     LogisticReactionDiffusionSolver,
@@ -204,6 +208,10 @@ __all__ = [
     "DiffusionSolver",
     "CrankNicolsonDiffusion",
     "CNSolveResult",
+    # ADI solvers
+    "ADIDiffusion2D",
+    "ADIDiffusion3D",
+    "ADISolveResult",
     "ConstantSourceReactionDiffusionSolver",
     "LinearReactionDiffusionSolver",
     "LogisticReactionDiffusionSolver",

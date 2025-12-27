@@ -20,7 +20,7 @@ This analysis identifies capabilities needed across the full academic spectrum:
 | Gap | Current State | Priority | Benefit |
 |-----|--------------|----------|---------|
 | **Implicit Time Integration** | 🟡 Crank-Nicolson only | High | Stiff problems, larger timesteps |
-| **ADI (Alternating Direction Implicit)** | ❌ Not implemented | High | Fast 2D/3D implicit without full matrix |
+| **ADI (Alternating Direction Implicit)** | ✅ Complete | High | Fast 2D/3D implicit without full matrix |
 | **Multigrid Solvers** | ❌ Not implemented | Medium | O(n) complexity for elliptic PDEs |
 | **Sparse Matrix Support** | ❌ No sparse library | High | Implicit methods, eigenvalue problems |
 | **Higher-Order Schemes** | ❌ Only 2nd-order central | Medium | 4th-order for research accuracy |
@@ -147,13 +147,13 @@ These enable cutting-edge/niche research:
 
 ### Tier 2: Early PhD Readiness
 
-| Item | Effort | Impact |
-|------|--------|--------|
-| Sparse matrix interface (Eigen) | 2-3 weeks | Implicit at scale |
-| ADI for 2D/3D diffusion | 2 weeks | Fast implicit |
-| Grid convergence utility | 1 week | Verification |
-| Multi-species framework (N>2) | 2-3 weeks | Complex chemistry |
-| Nernst-Planck transport | 2-3 weeks | Ion transport |
+| Item | Status | Effort | Impact |
+|------|--------|--------|--------|
+| ADI for 2D/3D diffusion | ✅ Complete | 2 weeks | Fast implicit |
+| Sparse matrix interface (Eigen) | ❌ Pending | 2-3 weeks | Implicit at scale |
+| Grid convergence utility | ✅ Complete | 1 week | Verification |
+| Multi-species framework (N>2) | ❌ Pending | 2-3 weeks | Complex chemistry |
+| Nernst-Planck transport | ❌ Pending | 2-3 weeks | Ion transport |
 
 ### Tier 3: Late PhD / Postdoc
 

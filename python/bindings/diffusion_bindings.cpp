@@ -19,6 +19,7 @@
 #include <biotransport/physics/mass_transport/membrane_diffusion.hpp>
 #include <biotransport/physics/mass_transport/tumor_drug_delivery.hpp>
 #include <biotransport/physics/reactions.hpp>
+#include <biotransport/solvers/adi_solver.hpp>
 #include <biotransport/solvers/advection_diffusion_solver.hpp>
 #include <biotransport/solvers/crank_nicolson.hpp>
 #include <biotransport/solvers/diffusion_solver_3d.hpp>
@@ -106,6 +107,102 @@ void register_diffusion_bindings(py::module_& m) {
             "Get the current solution as numpy array")
         .def("time", &CrankNicolsonDiffusion::time, "Get current simulation time")
         .def_property_readonly("diffusivity", &CrankNicolsonDiffusion::diffusivity,
+                               "Diffusion coefficient");
+
+    // =========================================================================
+    // ADI Solvers (Alternating Direction Implicit)
+    // =========================================================================
+    py::class_<ADISolveResult>(m, "ADISolveResult", "Result of an ADI solve step")
+        .def(py::init<>())
+        .def_readonly("steps", &ADISolveResult::steps, "Number of time steps completed")
+        .def_readonly("substeps", &ADISolveResult::substeps,
+                      "Number of substeps (2 for 2D, 3 for 3D)")
+        .def_readonly("time", &ADISolveResult::time, "Current simulation time after step()")
+        .def_readonly("total_time", &ADISolveResult::total_time,
+                      "Total simulation time after solve()")
+        .def_readonly("success", &ADISolveResult::success,
+                      "Whether the step completed successfully");
+
+    py::class_<ADIDiffusion2D>(m, "ADIDiffusion2D",
+                               R"(2D ADI solver using Peaceman-Rachford splitting.
+
+        Solves the 2D diffusion equation using the Alternating Direction Implicit method.
+        Unconditionally stable and second-order accurate in space and time.
+        Uses O(N) Thomas algorithm sweeps - much faster than iterative methods.
+
+        Example:
+            >>> mesh = bt.StructuredMesh(1.0, 1.0, 50, 50)  # 50x50 grid
+            >>> solver = bt.ADIDiffusion2D(mesh, 1e-5)      # D = 10^-5 m^2/s
+            >>> solver.set_initial_condition(u0)
+            >>> solver.set_dirichlet_boundary(bt.Boundary.Left, 100.0)
+            >>> solver.set_dirichlet_boundary(bt.Boundary.Right, 0.0)
+            >>> solver.solve(dt=0.1, num_steps=100)  # No CFL restriction
+        )")
+        .def(py::init<const StructuredMesh&, double>(), py::arg("mesh"), py::arg("diffusivity"),
+             "Create a 2D ADI diffusion solver")
+        .def("set_initial_condition", &ADIDiffusion2D::setInitialCondition, py::arg("values"),
+             "Set the initial condition")
+        .def("set_dirichlet_boundary", &ADIDiffusion2D::setDirichletBoundary, py::arg("boundary"),
+             py::arg("value"), "Set a Dirichlet boundary condition")
+        .def("set_neumann_boundary", &ADIDiffusion2D::setNeumannBoundary, py::arg("boundary"),
+             py::arg("flux"), "Set a Neumann boundary condition")
+        .def("step", &ADIDiffusion2D::step, py::arg("dt"),
+             "Advance solution by one time step, returns ADISolveResult")
+        .def("solve", &ADIDiffusion2D::solve, py::arg("dt"), py::arg("num_steps"),
+             "Run solver for specified number of steps")
+        .def(
+            "solution",
+            [](const ADIDiffusion2D& solver) {
+                return to_numpy_with_base(solver.solution(), py::cast(&solver));
+            },
+            "Get the current solution as numpy array")
+        .def("time", &ADIDiffusion2D::time, "Get current simulation time")
+        .def_property_readonly("diffusivity", &ADIDiffusion2D::diffusivity,
+                               "Diffusion coefficient");
+
+    py::class_<ADIDiffusion3D>(m, "ADIDiffusion3D",
+                               R"(3D ADI solver using Douglas-Gunn splitting.
+
+        Solves the 3D diffusion equation using the Douglas-Gunn ADI method.
+        Unconditionally stable and second-order accurate in space and time.
+        Uses O(N) Thomas algorithm sweeps - scales efficiently to large 3D problems.
+
+        Example:
+            >>> mesh = bt.StructuredMesh3D(1.0, 1.0, 1.0, 20, 20, 20)
+            >>> solver = bt.ADIDiffusion3D(mesh, 1e-5)
+            >>> solver.set_initial_condition(u0)
+            >>> solver.set_dirichlet_boundary(bt.Boundary3D.XMin, 100.0)
+            >>> solver.set_dirichlet_boundary(bt.Boundary3D.XMax, 0.0)
+            >>> solver.solve(dt=0.1, num_steps=100)
+        )")
+        .def(py::init<const StructuredMesh3D&, double>(), py::arg("mesh"), py::arg("diffusivity"),
+             "Create a 3D ADI diffusion solver")
+        .def("set_initial_condition", &ADIDiffusion3D::setInitialCondition, py::arg("values"),
+             "Set the initial condition")
+        .def("set_dirichlet_boundary",
+             py::overload_cast<Boundary3D, double>(&ADIDiffusion3D::setDirichletBoundary),
+             py::arg("boundary"), py::arg("value"), "Set a Dirichlet boundary condition")
+        .def("set_dirichlet_boundary",
+             py::overload_cast<int, double>(&ADIDiffusion3D::setDirichletBoundary),
+             py::arg("boundary_id"), py::arg("value"), "Set a Dirichlet BC by integer ID")
+        .def("set_neumann_boundary",
+             py::overload_cast<Boundary3D, double>(&ADIDiffusion3D::setNeumannBoundary),
+             py::arg("boundary"), py::arg("flux"), "Set a Neumann boundary condition")
+        .def("set_neumann_boundary",
+             py::overload_cast<int, double>(&ADIDiffusion3D::setNeumannBoundary),
+             py::arg("boundary_id"), py::arg("flux"), "Set a Neumann BC by integer ID")
+        .def("step", &ADIDiffusion3D::step, py::arg("dt"),
+             "Advance solution by one time step, returns ADISolveResult")
+        .def("solve", &ADIDiffusion3D::solve, py::arg("dt"), py::arg("num_steps"),
+             "Run solver for specified number of steps")
+        .def(
+            "solution",
+            [](const ADIDiffusion3D& solver) {
+                return to_numpy_with_base(solver.solution(), py::cast(&solver));
+            },
+            "Get the current solution as numpy array")
+        .def("time", &ADIDiffusion3D::time, "Get current simulation time")
+        .def_property_readonly("diffusivity", &ADIDiffusion3D::diffusivity,
                                "Diffusion coefficient");
 
     // =========================================================================
