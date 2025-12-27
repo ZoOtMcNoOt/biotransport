@@ -242,7 +242,76 @@ plt.tight_layout()
 plt.savefig(bt.get_result_path("3d_diffusion_slices.png", "3d_diffusion"), dpi=150)
 plt.show()
 
+# =============================================================================
+# 3D Isosurface / Scatter Plot
+# =============================================================================
+
+fig_3d = plt.figure(figsize=(12, 5))
+
+# Prepare 3D coordinates and values
+X, Y, Z, T = [], [], [], []
+for k in range(nz + 1):
+    for j in range(ny + 1):
+        for i in range(nx + 1):
+            idx = mesh.index(i, j, k)
+            X.append(mesh.x(i) * 1000)
+            Y.append(mesh.y(j) * 1000)
+            Z.append(mesh.z(k) * 1000)
+            T.append(solution[idx])
+
+X, Y, Z, T = np.array(X), np.array(Y), np.array(Z), np.array(T)
+
+# Left plot: 3D scatter of hot region only (T > threshold)
+ax3d_1 = fig_3d.add_subplot(121, projection="3d")
+threshold = 10.0  # Only show points above 10°C
+mask = T > threshold
+sc1 = ax3d_1.scatter(
+    X[mask],
+    Y[mask],
+    Z[mask],
+    c=T[mask],
+    cmap="hot",
+    s=20,
+    alpha=0.7,
+    vmin=0,
+    vmax=T.max(),
+)
+ax3d_1.set_xlabel("x (mm)")
+ax3d_1.set_ylabel("y (mm)")
+ax3d_1.set_zlabel("z (mm)")
+ax3d_1.set_title(f"Final Temperature (T > {threshold}°C)")
+plt.colorbar(sc1, ax=ax3d_1, label="Temperature (°C)", shrink=0.6)
+
+# Right plot: Initial condition for comparison
+X0, Y0, Z0, T0 = [], [], [], []
+for k in range(nz + 1):
+    for j in range(ny + 1):
+        for i in range(nx + 1):
+            idx = mesh.index(i, j, k)
+            if u0[idx] > threshold:
+                X0.append(mesh.x(i) * 1000)
+                Y0.append(mesh.y(j) * 1000)
+                Z0.append(mesh.z(k) * 1000)
+                T0.append(u0[idx])
+
+ax3d_2 = fig_3d.add_subplot(122, projection="3d")
+sc2 = ax3d_2.scatter(X0, Y0, Z0, c=T0, cmap="hot", s=20, alpha=0.7, vmin=0, vmax=100)
+ax3d_2.set_xlabel("x (mm)")
+ax3d_2.set_ylabel("y (mm)")
+ax3d_2.set_zlabel("z (mm)")
+ax3d_2.set_title("Initial Hot Sphere (T = 100°C)")
+ax3d_2.set_xlim(ax3d_1.get_xlim())
+ax3d_2.set_ylim(ax3d_1.get_ylim())
+ax3d_2.set_zlim(ax3d_1.get_zlim())
+plt.colorbar(sc2, ax=ax3d_2, label="Temperature (°C)", shrink=0.6)
+
+plt.suptitle("3D Temperature Distribution", fontsize=14, fontweight="bold")
+plt.tight_layout()
+plt.savefig(bt.get_result_path("3d_diffusion_volume.png", "3d_diffusion"), dpi=150)
+plt.show()
+
 print("\n✅ 3D diffusion example completed successfully!")
 print(
-    f"   Plot saved to: {bt.get_result_path('3d_diffusion_slices.png', '3d_diffusion')}"
+    f"   Slice plots: {bt.get_result_path('3d_diffusion_slices.png', '3d_diffusion')}"
 )
+print(f"   3D plots: {bt.get_result_path('3d_diffusion_volume.png', '3d_diffusion')}")
