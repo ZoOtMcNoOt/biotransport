@@ -1,0 +1,81 @@
+# C++ tests for biotransport
+
+add_executable(test_mesh core/test_mesh.cpp)
+target_link_libraries(test_mesh PRIVATE biotransport)
+
+add_executable(test_dimensionless core/test_dimensionless.cpp)
+target_link_libraries(test_dimensionless PRIVATE biotransport)
+
+add_executable(test_analytical core/test_analytical.cpp)
+target_link_libraries(test_analytical PRIVATE biotransport)
+
+add_executable(test_diffusion physics/test_diffusion.cpp)
+target_link_libraries(test_diffusion PRIVATE biotransport)
+
+add_executable(test_diffusion_2d physics/test_diffusion_2d.cpp)
+target_link_libraries(test_diffusion_2d PRIVATE biotransport)
+
+add_executable(test_logistic_reaction_diffusion physics/test_logistic_reaction_diffusion.cpp)
+target_link_libraries(test_logistic_reaction_diffusion PRIVATE biotransport)
+
+add_executable(test_diffusion_1d_neumann physics/test_diffusion_1d_neumann.cpp)
+target_link_libraries(test_diffusion_1d_neumann PRIVATE biotransport)
+
+add_executable(test_linear_reaction_diffusion physics/test_linear_reaction_diffusion.cpp)
+target_link_libraries(test_linear_reaction_diffusion PRIVATE biotransport)
+
+add_executable(test_boundary_corners physics/test_boundary_corners.cpp)
+target_link_libraries(test_boundary_corners PRIVATE biotransport)
+
+add_executable(test_michaelis_menten_reaction_diffusion physics/test_michaelis_menten_reaction_diffusion.cpp)
+target_link_libraries(test_michaelis_menten_reaction_diffusion PRIVATE biotransport)
+
+add_executable(test_constant_source_reaction_diffusion physics/test_constant_source_reaction_diffusion.cpp)
+target_link_libraries(test_constant_source_reaction_diffusion PRIVATE biotransport)
+
+add_executable(test_explicit_fd_run physics/test_explicit_fd_run.cpp)
+target_link_libraries(test_explicit_fd_run PRIVATE biotransport)
+
+add_executable(test_explicit_fd_run_constant_source physics/test_explicit_fd_run_constant_source.cpp)
+target_link_libraries(test_explicit_fd_run_constant_source PRIVATE biotransport)
+
+add_executable(test_explicit_fd_run_michaelis_menten physics/test_explicit_fd_run_michaelis_menten.cpp)
+target_link_libraries(test_explicit_fd_run_michaelis_menten PRIVATE biotransport)
+
+add_executable(test_explicit_fd_run_logistic physics/test_explicit_fd_run_logistic.cpp)
+target_link_libraries(test_explicit_fd_run_logistic PRIVATE biotransport)
+
+add_executable(test_advection_diffusion physics/test_advection_diffusion.cpp)
+target_link_libraries(test_advection_diffusion PRIVATE biotransport)
+
+add_executable(test_stokes physics/test_stokes.cpp)
+target_link_libraries(test_stokes PRIVATE biotransport)
+
+add_executable(test_navier_stokes physics/test_navier_stokes.cpp)
+target_link_libraries(test_navier_stokes PRIVATE biotransport)
+
+add_test(NAME biotransport.test_mesh COMMAND test_mesh)
+add_test(NAME biotransport.test_dimensionless COMMAND test_dimensionless)
+add_test(NAME biotransport.test_analytical COMMAND test_analytical)
+add_test(NAME biotransport.test_diffusion COMMAND test_diffusion)
+add_test(NAME biotransport.test_diffusion_2d COMMAND test_diffusion_2d)
+add_test(NAME biotransport.test_logistic_reaction_diffusion COMMAND test_logistic_reaction_diffusion)
+
+add_test(NAME biotransport.test_diffusion_1d_neumann COMMAND test_diffusion_1d_neumann)
+add_test(NAME biotransport.test_linear_reaction_diffusion COMMAND test_linear_reaction_diffusion)
+add_test(NAME biotransport.test_boundary_corners COMMAND test_boundary_corners)
+add_test(NAME biotransport.test_michaelis_menten_reaction_diffusion COMMAND test_michaelis_menten_reaction_diffusion)
+add_test(NAME biotransport.test_constant_source_reaction_diffusion COMMAND test_constant_source_reaction_diffusion)
+add_test(NAME biotransport.test_explicit_fd_run COMMAND test_explicit_fd_run)
+
+add_test(NAME biotransport.test_explicit_fd_run_constant_source COMMAND test_explicit_fd_run_constant_source)
+
+add_test(NAME biotransport.test_explicit_fd_run_michaelis_menten COMMAND test_explicit_fd_run_michaelis_menten)
+
+add_test(NAME biotransport.test_explicit_fd_run_logistic COMMAND test_explicit_fd_run_logistic)
+
+add_test(NAME biotransport.test_advection_diffusion COMMAND test_advection_diffusion)
+
+add_test(NAME biotransport.test_stokes COMMAND test_stokes)
+
+add_test(NAME biotransport.test_navier_stokes COMMAND test_navier_stokes)
