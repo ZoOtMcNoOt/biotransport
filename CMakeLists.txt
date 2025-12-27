@@ -16,6 +16,15 @@ option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
 option(BUILD_BENCHMARKS "Build performance benchmarks" OFF)
 option(BIOTRANSPORT_OPENMP "Enable OpenMP parallelization" OFF)
 
+# OpenMP configuration
+if(BIOTRANSPORT_OPENMP)
+  find_package(OpenMP REQUIRED)
+  if(OpenMP_CXX_FOUND)
+    message(STATUS "OpenMP found: version ${OpenMP_CXX_VERSION}")
+    add_compile_definitions(BIOTRANSPORT_ENABLE_OPENMP)
+  endif()
+endif()
+
 # Prefer the active virtual environment when present (but do not require one)
 set(Python_FIND_VIRTUALENV FIRST)
 

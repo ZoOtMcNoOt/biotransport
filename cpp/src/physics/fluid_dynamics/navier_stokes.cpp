@@ -8,6 +8,9 @@
 #include <biotransport/physics/fluid_dynamics/velocity_bc_applicator.hpp>
 #include <cmath>
 
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#include <omp.h>
+#endif
 namespace biotransport {
 
 // =============================================================================
@@ -149,6 +152,9 @@ void NavierStokesSolver::computeConvection(const std::vector<double>& u,
     conv_u.assign(u.size(), 0.0);
     conv_v.assign(v.size(), 0.0);
 
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (int j = 1; j < ny; ++j) {
         for (int i = 1; i < nx; ++i) {
             int idx = j * stride + i;
@@ -209,6 +215,9 @@ void NavierStokesSolver::computeDiffusion(const std::vector<double>& u,
     diff_u.assign(u.size(), 0.0);
     diff_v.assign(v.size(), 0.0);
 
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (int j = 1; j < ny; ++j) {
         for (int i = 1; i < nx; ++i) {
             int idx = j * stride + i;

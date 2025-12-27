@@ -8,11 +8,18 @@
  * Provides abstractions to eliminate duplicated 1D/2D branching logic
  * throughout the solver codebase. All iterators work transparently
  * for both 1D and 2D meshes.
+ *
+ * When compiled with BIOTRANSPORT_ENABLE_OPENMP, the parallel versions
+ * of the iterators use OpenMP for multi-threaded execution.
  */
 
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <functional>
 #include <vector>
+
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#include <omp.h>
+#endif
 
 namespace biotransport {
 
@@ -60,6 +67,10 @@ public:
      * @brief Iterate over interior nodes (excludes boundaries).
      *
      * @param callback Function called for each interior node with (idx, i, j)
+     *
+     * When BIOTRANSPORT_ENABLE_OPENMP is defined, the 2D loop is parallelized
+     * using OpenMP with static scheduling. The 1D case is not parallelized
+     * due to low overhead.
      */
     template <typename Func>
     void forEachInterior(Func&& callback) const {
@@ -71,6 +82,9 @@ public:
                 callback(i, i, 0);
             }
         } else {
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
             for (int j = 1; j < ny; ++j) {
                 const int row = j * stride_;
                 for (int i = 1; i < nx; ++i) {
@@ -84,6 +98,8 @@ public:
      * @brief Iterate over interior nodes with full node info.
      *
      * @param callback Function called for each interior node with NodeInfo
+     *
+     * When BIOTRANSPORT_ENABLE_OPENMP is defined, the 2D loop is parallelized.
      */
     template <typename Func>
     void forEachInteriorWithCoords(Func&& callback) const {
@@ -96,6 +112,9 @@ public:
                 callback(info);
             }
         } else {
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
             for (int j = 1; j < ny; ++j) {
                 const double y = mesh_.y(0, j);
                 const int row = j * stride_;
@@ -111,6 +130,8 @@ public:
      * @brief Iterate over all nodes (including boundaries).
      *
      * @param callback Function called for each node with (idx, i, j)
+     *
+     * When BIOTRANSPORT_ENABLE_OPENMP is defined, the 2D loop is parallelized.
      */
     template <typename Func>
     void forEachNode(Func&& callback) const {
@@ -122,6 +143,9 @@ public:
                 callback(i, i, 0);
             }
         } else {
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
             for (int j = 0; j <= ny; ++j) {
                 const int row = j * stride_;
                 for (int i = 0; i <= nx; ++i) {
