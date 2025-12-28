@@ -13,13 +13,80 @@ This analysis identifies capabilities needed across the full academic spectrum:
 
 ---
 
-## Gap Categories
+## Current Capabilities (Implemented Features)
+
+### Mass Transport & Diffusion
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **1D/2D/3D Diffusion** | ✅ Complete | `DiffusionSolver`, `DiffusionSolver3D` |
+| **Advection-Diffusion** | ✅ Complete | `AdvectionDiffusionSolver` with upwind/central schemes |
+| **Reaction-Diffusion** | ✅ Complete | Linear, logistic, Michaelis-Menten kinetics |
+| **Multi-Species (N>2)** | ✅ Complete | `MultiSpeciesSolver` with Lotka-Volterra, SIR/SEIR, Brusselator |
+| **Membrane Diffusion** | ✅ Complete | `MembraneDiffusion1DSolver`, `MultiLayerMembraneSolver` |
+| **Gray-Scott Patterns** | ✅ Complete | `GrayScottSolver` for reaction-diffusion patterns |
+| **Nernst-Planck Transport** | ✅ Complete | `NernstPlanckSolver`, `MultiIonSolver` with GHK utilities |
+
+### Fluid Dynamics
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **Stokes Flow** | ✅ Complete | `StokesSolver` for creeping flow (Re << 1) |
+| **Navier-Stokes** | ✅ Complete | `NavierStokesSolver` with convection schemes |
+| **Darcy Flow** | ✅ Complete | `DarcyFlowSolver` for porous media |
+| **Non-Newtonian Fluids** | ✅ Complete | 8 models: Power Law, Carreau, Casson, Bingham, etc. |
+| **Blood Rheology** | ✅ Complete | `blood_casson_model`, `blood_carreau_model` utilities |
+
+### Heat Transfer & Thermal
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **Heat Conduction** | ✅ Complete | Diffusion solver with thermal properties |
+| **Bioheat Equation** | ✅ Complete | `BioheatCryotherapySolver` (Pennes equation) |
+
+### Biomedical Applications
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **Tumor Drug Delivery** | ✅ Complete | `TumorDrugDeliverySolver` with coupled transport |
+| **Cryotherapy Simulation** | ✅ Complete | `BioheatCryotherapySolver` with freezing |
+| **Oxygen Diffusion** | ✅ Complete | Tissue oxygenation examples |
+
+### Mesh & Geometry
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **1D Structured Mesh** | ✅ Complete | `StructuredMesh` |
+| **2D Structured Mesh** | ✅ Complete | `StructuredMesh` |
+| **3D Structured Mesh** | ✅ Complete | `StructuredMesh3D` |
+| **Cylindrical Mesh** | ✅ Complete | `CylindricalMesh` for axisymmetric problems |
+
+### Numerical Methods
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **Explicit Time Integration** | ✅ Complete | Forward Euler (`ExplicitFD`) |
+| **Crank-Nicolson** | ✅ Complete | `CrankNicolsonDiffusion` (2nd-order implicit) |
+| **ADI Method** | ✅ Complete | `ADIDiffusion2D`, `ADIDiffusion3D` |
+| **Sparse Matrix Solvers** | ✅ Complete | 5 backends: SparseLU, LLT, LDLT, CG, BiCGSTAB |
+| **Adaptive Time-Stepping** | ✅ Complete | `AdaptiveTimeStepper` with error control |
+
+### Verification & Validation
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **Grid Convergence** | ✅ Complete | `GridConvergenceStudy` with Richardson extrapolation |
+| **Analytical Solutions** | ✅ Complete | `bt.analytical` module for verification |
+| **Dimensionless Numbers** | ✅ Complete | `bt.dimensionless` (Peclet, Biot, etc.) |
+
+### I/O & Visualization
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **VTK Export** | ✅ Complete | `write_vtk`, `write_vtk_series` for ParaView |
+| **Matplotlib Plots** | ✅ Complete | `plot_1d`, `plot_2d`, `plot_field` |
+
+---
+
+## Gap Categories (Remaining Work)
 
 ### 1. NUMERICAL METHODS (Performance & Accuracy)
 
 | Gap | Current State | Priority | Benefit |
 |-----|--------------|----------|---------|
-| **Implicit Time Integration** | 🟡 Crank-Nicolson only | High | Stiff problems, larger timesteps |
+| **Implicit Time Integration** | ✅ Crank-Nicolson + ADI | High | Stiff problems, larger timesteps |
 | **ADI (Alternating Direction Implicit)** | ✅ Complete | High | Fast 2D/3D implicit without full matrix |
 | **Multigrid Solvers** | ❌ Not implemented | Medium | O(n) complexity for elliptic PDEs |
 | **Sparse Matrix Support** | ✅ Eigen integration | High | Implicit methods, eigenvalue problems |
@@ -34,6 +101,7 @@ This analysis identifies capabilities needed across the full academic spectrum:
 | Gap | Current State | Priority | Benefit |
 |-----|--------------|----------|---------|
 | **3D Cartesian Mesh** | ✅ Implemented | High | 3D diffusion, organ-scale modeling |
+| **Cylindrical Coordinates** | ✅ Implemented | Medium | Axisymmetric problems (pipes, vessels) |
 | **Unstructured Meshes** | ❌ Only structured | High | Complex anatomical geometries |
 | **Tetrahedral Meshes** | ❌ Not supported | Medium | FEM for 3D anatomy |
 | **Mesh Refinement (AMR)** | ❌ Not supported | Medium | Adaptive resolution near boundaries |
@@ -45,15 +113,20 @@ This analysis identifies capabilities needed across the full academic spectrum:
 
 | Gap | Current State | Priority | Benefit |
 |-----|--------------|----------|---------|
+| **Stokes Flow** | ✅ Complete | High | Creeping flow, microfluidics |
+| **Navier-Stokes** | ✅ Complete | High | Full fluid dynamics |
+| **Darcy Flow** | ✅ Complete | Medium | Porous media, tissue perfusion |
+| **Non-Newtonian Fluids** | ✅ Complete | Medium | Blood rheology (8 models) |
 | **Fluid-Structure Interaction (FSI)** | ❌ Not implemented | Medium | Blood vessel mechanics |
 | **Poroelasticity** | ❌ Not implemented | Medium | Soft tissue deformation + flow |
 | **Electrochemical Transport** | ✅ Complete | Medium | Ion channels, Nernst-Planck |
 | **Pulsatile Boundary Conditions** | 🟡 Manual | Low | Cardiac cycle BCs |
 | **Moving Boundaries / ALE** | ❌ Not implemented | Low | Growing tumors, wound healing |
 | **Multi-Species Systems (N>2)** | ✅ Complete | Medium | Complex reaction networks |
-| **Pharmacokinetic Models** | 🟡 Basic in tumor solver | Medium | PBPK, compartment models |
+| **Pharmacokinetic Models** | ✅ Tumor solver | Medium | Drug delivery modeling |
+| **Bioheat (Pennes Equation)** | ✅ Complete | Medium | Thermal therapy, cryotherapy |
 | **Electrophysiology** | ❌ Not implemented | Low | Action potential propagation |
-| **Radiotherapy Dose (Radiation Transport)** | ❌ Not implemented | Low | Treatment planning |
+| **Radiotherapy Dose** | ❌ Not implemented | Low | Treatment planning |
 
 ### 4. PARALLELISM & PERFORMANCE
 
@@ -195,25 +268,60 @@ These enable cutting-edge/niche research:
 
 ## Conclusion
 
-The biotransport library is **fully production-ready for undergraduate coursework** and **100% ready for MS thesis work** with all critical features now complete. **Tier 2 (PhD-level) is now complete** with the addition of Nernst-Planck ion transport. Recent additions include:
+The biotransport library is **fully production-ready for undergraduate coursework** and **100% ready for MS thesis work** with all critical features now complete. **Tier 2 (PhD-level) is now complete** with the addition of Nernst-Planck ion transport.
 
-- ✅ **Nernst-Planck transport** — Single-ion and multi-ion electrochemical transport with GHK utilities
-- ✅ **Sparse matrix interface** — Eigen 3.4 integration with 5 solver backends (SparseLU, SimplicialLLT/LDLT, CG, BiCGSTAB)
-- ✅ **Multi-species framework** — N-species reaction-diffusion with Lotka-Volterra, SIR/SEIR, Brusselator, enzyme cascade models
-- ✅ **ADI solvers** — `ADIDiffusion2D` and `ADIDiffusion3D` for efficient implicit time integration
-- ✅ **Adaptive time-stepping** — `AdaptiveTimeStepper` with error control via step-doubling (Richardson extrapolation)
-- ✅ **3D Cartesian mesh** — `StructuredMesh3D` with `DiffusionSolver3D` and `LinearReactionDiffusionSolver3D`
-- ✅ **Crank-Nicolson implicit solver** — Unconditionally stable, 2nd-order accurate time integration
-- ✅ **OpenMP parallelization** — Multi-core acceleration of computational kernels
-- ✅ **VTK file export** — ParaView-compatible visualization
-- ✅ **Doxygen API documentation** — Complete API reference
+### Complete Feature List
 
-For PhD-level research, **all Tier 2 items are now complete**. The remaining gaps for advanced research are:
-- Unstructured meshes (Tier 3)
-- GPU acceleration (Tier 3)
-- Poroelasticity coupling (Tier 3)
+**Mass Transport & Diffusion:**
+- ✅ 1D/2D/3D Diffusion solvers
+- ✅ Advection-diffusion with multiple schemes
+- ✅ Reaction-diffusion (linear, logistic, Michaelis-Menten)
+- ✅ Multi-species reaction-diffusion (N species)
+- ✅ Membrane diffusion (single & multi-layer)
+- ✅ Gray-Scott pattern formation
+- ✅ Nernst-Planck electrochemical transport
 
-For postdoctoral/publication-quality work, significant infrastructure additions (GPU, FSI, UQ) would be needed. The library now provides a **complete foundation for PhD-level dissertation research** with all Tier 2 features implemented.
+**Fluid Dynamics:**
+- ✅ Stokes flow (creeping flow)
+- ✅ Navier-Stokes (full inertial flow)
+- ✅ Darcy flow (porous media)
+- ✅ Non-Newtonian fluids (8 rheology models)
+- ✅ Blood rheology utilities (Casson, Carreau)
+
+**Heat Transfer:**
+- ✅ Heat conduction
+- ✅ Bioheat equation (Pennes)
+- ✅ Cryotherapy simulation
+
+**Biomedical Applications:**
+- ✅ Tumor drug delivery
+- ✅ Oxygen diffusion in tissue
+- ✅ Ion channel transport (GHK equation)
+
+**Numerical Methods:**
+- ✅ Explicit time integration
+- ✅ Crank-Nicolson implicit
+- ✅ ADI (Alternating Direction Implicit)
+- ✅ Sparse matrix solvers (5 backends)
+- ✅ Adaptive time-stepping
+
+**Mesh & Geometry:**
+- ✅ 1D/2D/3D structured meshes
+- ✅ Cylindrical coordinates
+
+**Verification & I/O:**
+- ✅ Grid convergence studies (Richardson extrapolation)
+- ✅ VTK export for ParaView
+- ✅ Doxygen API documentation
+
+### Remaining Gaps (Tier 3 / Postdoc)
+- Unstructured meshes
+- GPU acceleration (CUDA)
+- Poroelasticity coupling
+- Fluid-structure interaction
+- Uncertainty quantification
+
+The library now provides a **complete foundation for PhD-level dissertation research** with all Tier 2 features implemented.
 
 ---
 
