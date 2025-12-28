@@ -85,8 +85,11 @@ for solver_type, name in solver_types:
     )
     print(f"  Steps: {result.steps}")
     print(f"  Wall time: {elapsed:.3f} s")
-    print(f"  Time per step: {1000 * elapsed / result.steps:.2f} ms")
+    if result.steps > 0:
+        print(f"  Time per step: {1000 * elapsed / result.steps:.2f} ms")
     print(f"  Success: {result.success}")
+    if not result.success:
+        print("  Note: Iterative solver may need more iterations for larger grids")
 
 # =============================================================================
 # Method 2: ADI Method (for comparison)

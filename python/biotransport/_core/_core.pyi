@@ -998,7 +998,27 @@ class ReactionDiffusionSolver:
         """Set initial concentration field."""
         ...
 
-    def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None:
+    @overload
+    def set_dirichlet_boundary(self, boundary_id: int, value: float) -> None:
+        """Set Dirichlet BC using boundary index (0=left, 1=right, 2=bottom, 3=top)."""
+        ...
+
+    @overload
+    def set_dirichlet_boundary(self, boundary: Boundary, value: float) -> None:
+        """Set Dirichlet BC using Boundary enum."""
+        ...
+
+    @overload
+    def set_neumann_boundary(self, boundary_id: int, flux: float) -> None:
+        """Set Neumann BC using boundary index."""
+        ...
+
+    @overload
+    def set_neumann_boundary(self, boundary: Boundary, flux: float) -> None:
+        """Set Neumann BC using Boundary enum."""
+        ...
+
+    def set_boundary(self, boundary: Boundary | int, bc: BoundaryCondition) -> None:
         """Set boundary condition."""
         ...
 
