@@ -151,6 +151,17 @@ from .config import (
 # Adaptive time-stepping
 from .adaptive import AdaptiveTimeStepper, AdaptiveResult, solve_adaptive
 
+# Higher-order time integration (RK4, Heun)
+from .time_integrators import (
+    RK4Integrator,
+    HeunIntegrator,
+    IntegrationResult,
+    integrate,
+    rk4_step,
+    heun_step,
+    euler_step,
+)
+
 # Grid convergence studies (verification)
 from .convergence import (
     GridConvergenceStudy,
@@ -209,6 +220,14 @@ __all__ = [
     "AdaptiveTimeStepper",
     "AdaptiveResult",
     "solve_adaptive",
+    # ========== Higher-order time integration ==========
+    "RK4Integrator",
+    "HeunIntegrator",
+    "IntegrationResult",
+    "integrate",
+    "rk4_step",
+    "heun_step",
+    "euler_step",
     # ========== Grid convergence (verification) ==========
     "GridConvergenceStudy",
     "ConvergenceResult",

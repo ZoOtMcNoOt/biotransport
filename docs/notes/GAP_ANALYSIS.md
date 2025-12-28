@@ -92,7 +92,7 @@ This analysis identifies capabilities needed across the full academic spectrum:
 | **Sparse Matrix Support** | ✅ Eigen integration | High | Implicit methods, eigenvalue problems |
 | **Higher-Order Schemes** | ❌ Only 2nd-order central | Medium | 4th-order for research accuracy |
 | **Crank-Nicolson** | ✅ Implemented | High | Unconditionally stable, 2nd-order |
-| **Runge-Kutta (RK4)** | ❌ Not implemented | Medium | Better time accuracy |
+| **Runge-Kutta (RK4)** | ✅ Implemented | Medium | 4th-order time accuracy, Heun (RK2) also available |
 | **Adaptive Time-Stepping** | ✅ Implemented | High | Error-controlled integration |
 | **Newton-Raphson Iteration** | ❌ Not implemented | Medium | Nonlinear steady-state problems |
 
@@ -203,8 +203,8 @@ These gaps enable novel research contributions:
 **Remaining (Tier 3):**
 1. **Unstructured Meshes** — Complex anatomy (vessels, organs)
 2. **Tetrahedral Meshes** — FEM for 3D anatomy
-3. **Higher-Order Schemes** — 4th-order for research accuracy
-4. **Runge-Kutta (RK4)** — Better time accuracy
+3. **Higher-Order Schemes** — 4th-order spatial accuracy
+4. ✅ **Runge-Kutta (RK4)** — 4th-order time accuracy *(Complete - `bt.integrate()`, `bt.RK4Integrator`)*
 5. **Multigrid Solvers** — O(n) complexity for elliptic PDEs
 6. **Newton-Raphson Iteration** — Nonlinear steady-state problems
 7. **Poroelasticity** — Tissue mechanics coupling
@@ -280,7 +280,7 @@ These enable cutting-edge/niche research:
 | Unstructured mesh (triangles) | ❌ Not started | 4-6 weeks | Complex geometry |
 | Tetrahedral meshes (FEM) | ❌ Not started | 6-8 weeks | 3D anatomy |
 | Higher-order schemes (4th) | ❌ Not started | 2-3 weeks | Research accuracy |
-| Runge-Kutta (RK4) | ❌ Not started | 1-2 weeks | Better time accuracy |
+| Runge-Kutta (RK4) | ✅ Complete | - | 4th-order time accuracy |
 | Multigrid solvers | ❌ Not started | 4-6 weeks | O(n) complexity |
 | Newton-Raphson iteration | ❌ Not started | 2-3 weeks | Nonlinear steady-state |
 | Poroelasticity coupling | ❌ Not started | 4-6 weeks | Tissue mechanics |
