@@ -8,7 +8,7 @@ This analysis identifies capabilities needed across the full academic spectrum:
 |-------|------------------|-------------------|
 | **Undergraduate (Jr/Sr)** | BMEN 341 coursework, intro research | ✅ **Fully Covered** |
 | **Graduate (MS)** | Thesis research, basic modeling | ✅ **Fully Covered (100%)** |
-| **Graduate (PhD)** | Dissertation, novel methods | 🟡 **Partial Coverage** |
+| **Graduate (PhD)** | Dissertation, novel methods | ✅ **Tier 2 Complete (72%)** |
 | **Postdoctoral** | Publication-quality, cutting-edge | 🟠 **Significant Gaps** |
 
 ---
@@ -81,7 +81,7 @@ This analysis identifies capabilities needed across the full academic spectrum:
 |-----|--------------|----------|---------|
 | **Data Export (VTK, XDMF)** | ✅ VTK export available | High | ParaView visualization |
 | **Data Import (Medical Images)** | ❌ Not implemented | Medium | DICOM, NIfTI support |
-| **Unit System / Physical Constants** | ❌ Manual | Low | SI unit enforcement |
+| **Unit System / Physical Constants** | ✅ `bt.constants` submodule | Low | SI unit enforcement |
 
 ### 7. DOCUMENTATION & COMMUNITY
 
@@ -145,7 +145,7 @@ These enable cutting-edge/niche research:
 | 3D Cartesian `StructuredMesh3D` | ✅ Complete | 2-3 weeks | Unlocks organ-scale problems |
 | Adaptive time-stepping | ✅ Complete | 1 week | Error-controlled integration |
 
-### Tier 2: Early PhD Readiness
+### Tier 2: Early PhD Readiness ✅ COMPLETE
 
 | Item | Status | Effort | Impact |
 |------|--------|--------|--------|
