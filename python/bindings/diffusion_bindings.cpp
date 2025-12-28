@@ -25,6 +25,7 @@
 #include <biotransport/solvers/diffusion_solver_3d.hpp>
 #include <biotransport/solvers/diffusion_solvers.hpp>
 #include <biotransport/solvers/explicit_fd.hpp>
+#include <biotransport/solvers/multi_species_solver.hpp>
 
 namespace biotransport {
 namespace bindings {
@@ -700,6 +701,291 @@ void register_diffusion_bindings(py::module_& m) {
              })
         .def("mesh", &LinearReactionDiffusionSolver3D::mesh,
              py::return_value_policy::reference_internal);
+
+    // =========================================================================
+    // Multi-Species Reaction-Diffusion Solver
+    // =========================================================================
+    py::class_<MultiSpeciesSolver>(m, "MultiSpeciesSolver",
+                                   R"(Generic N-species reaction-diffusion solver.
+
+        Solves the coupled system:
+            ∂u_i/∂t = D_i ∇²u_i + R_i(u_1, ..., u_N, x, y, t)
+
+        for i = 1, ..., N species with individual diffusion coefficients and
+        user-defined reaction kinetics.
+
+        Example (Lotka-Volterra predator-prey):
+            >>> mesh = bt.StructuredMesh(1.0, 1.0, 50, 50)
+            >>> solver = bt.MultiSpeciesSolver(mesh, [D_prey, D_pred])
+            >>> solver.set_reaction_model(bt.LotkaVolterraReaction(alpha, beta, gamma, delta))
+            >>> solver.set_initial_condition(0, prey_ic)   # Species 0: prey
+            >>> solver.set_initial_condition(1, pred_ic)   # Species 1: predator
+            >>> solver.solve(dt, num_steps)
+            >>> prey = solver.solution(0)
+            >>> pred = solver.solution(1)
+
+        Example (SIR epidemiological model):
+            >>> solver = bt.MultiSpeciesSolver(mesh, [D_S, D_I, D_R])
+            >>> solver.set_reaction_model(bt.SIRReaction(beta=0.3, gamma=0.1, N=1000))
+            >>> solver.set_initial_condition(0, S0)  # Susceptible
+            >>> solver.set_initial_condition(1, I0)  # Infected
+            >>> solver.set_initial_condition(2, R0)  # Recovered
+        )")
+        .def(py::init<const StructuredMesh&, const std::vector<double>&, size_t>(), py::arg("mesh"),
+             py::arg("diffusivities"), py::arg("num_species") = 0,
+             "Create a multi-species solver with specified diffusivities")
+        .def(
+            "set_reaction_function",
+            [](MultiSpeciesSolver& solver,
+               std::function<void(std::vector<double>&, const std::vector<double>&, double, double,
+                                  double)>
+                   func) { solver.setReactionFunction(std::move(func)); },
+            py::arg("reaction"),
+            "Set a custom reaction function: f(rates, concentrations, x, y, t)")
+        .def(
+            "set_reaction_model",
+            [](MultiSpeciesSolver& solver, const LotkaVolterraReaction& model) {
+                solver.setReactionModel(model);
+            },
+            py::arg("model"), "Set a Lotka-Volterra reaction model")
+        .def(
+            "set_reaction_model",
+            [](MultiSpeciesSolver& solver, const SIRReaction& model) {
+                solver.setReactionModel(model);
+            },
+            py::arg("model"), "Set an SIR epidemiological model")
+        .def(
+            "set_reaction_model",
+            [](MultiSpeciesSolver& solver, const SEIRReaction& model) {
+                solver.setReactionModel(model);
+            },
+            py::arg("model"), "Set an SEIR epidemiological model")
+        .def(
+            "set_reaction_model",
+            [](MultiSpeciesSolver& solver, const BrusselatorReaction& model) {
+                solver.setReactionModel(model);
+            },
+            py::arg("model"), "Set a Brusselator oscillator model")
+        .def(
+            "set_reaction_model",
+            [](MultiSpeciesSolver& solver, const CompetitiveInhibitionReaction& model) {
+                solver.setReactionModel(model);
+            },
+            py::arg("model"), "Set a competitive inhibition model")
+        .def(
+            "set_reaction_model",
+            [](MultiSpeciesSolver& solver, const EnzymeCascadeReaction& model) {
+                solver.setReactionModel(model);
+            },
+            py::arg("model"), "Set an enzyme cascade model")
+        .def("set_initial_condition", &MultiSpeciesSolver::setInitialCondition,
+             py::arg("species_idx"), py::arg("values"),
+             "Set initial condition for a specific species")
+        .def("set_uniform_initial_condition", &MultiSpeciesSolver::setUniformInitialCondition,
+             py::arg("species_idx"), py::arg("value"),
+             "Set uniform initial condition for a species")
+        .def("set_dirichlet_boundary",
+             py::overload_cast<size_t, Boundary, double>(&MultiSpeciesSolver::setDirichletBoundary),
+             py::arg("species_idx"), py::arg("boundary"), py::arg("value"),
+             "Set Dirichlet boundary for a specific species")
+        .def("set_dirichlet_boundary",
+             py::overload_cast<size_t, int, double>(&MultiSpeciesSolver::setDirichletBoundary),
+             py::arg("species_idx"), py::arg("boundary_id"), py::arg("value"),
+             "Set Dirichlet boundary for a specific species (by ID)")
+        .def("set_neumann_boundary",
+             py::overload_cast<size_t, Boundary, double>(&MultiSpeciesSolver::setNeumannBoundary),
+             py::arg("species_idx"), py::arg("boundary"), py::arg("flux"),
+             "Set Neumann boundary for a specific species")
+        .def("set_neumann_boundary",
+             py::overload_cast<size_t, int, double>(&MultiSpeciesSolver::setNeumannBoundary),
+             py::arg("species_idx"), py::arg("boundary_id"), py::arg("flux"),
+             "Set Neumann boundary for a specific species (by ID)")
+        .def("set_all_species_dirichlet", &MultiSpeciesSolver::setAllSpeciesDirichlet,
+             py::arg("boundary"), py::arg("value"), "Set same Dirichlet boundary for all species")
+        .def("set_all_species_neumann", &MultiSpeciesSolver::setAllSpeciesNeumann,
+             py::arg("boundary"), py::arg("flux"), "Set same Neumann boundary for all species")
+        .def("check_stability", &MultiSpeciesSolver::checkStability, py::arg("dt"),
+             "Check CFL stability condition for given time step")
+        .def("max_stable_time_step", &MultiSpeciesSolver::maxStableTimeStep,
+             "Get maximum stable time step (with safety factor)")
+        .def("solve", &MultiSpeciesSolver::solve, py::arg("dt"), py::arg("num_steps"),
+             "Run solver for specified number of time steps")
+        .def(
+            "solution",
+            [](const MultiSpeciesSolver& solver, size_t species_idx) {
+                return to_numpy_with_base(solver.solution(species_idx), py::cast(&solver));
+            },
+            py::arg("species_idx"), "Get solution for a specific species as numpy array")
+        .def(
+            "all_solutions",
+            [](const MultiSpeciesSolver& solver) {
+                py::list result;
+                for (size_t s = 0; s < solver.numSpecies(); ++s) {
+                    result.append(to_numpy_with_base(solver.solution(s), py::cast(&solver)));
+                }
+                return result;
+            },
+            "Get list of solutions for all species")
+        .def("mesh", &MultiSpeciesSolver::mesh, py::return_value_policy::reference_internal)
+        .def("num_species", &MultiSpeciesSolver::numSpecies, "Get number of species")
+        .def("diffusivity", &MultiSpeciesSolver::diffusivity, py::arg("species_idx"),
+             "Get diffusivity for a species")
+        .def("time", &MultiSpeciesSolver::time, "Get current simulation time")
+        .def("reset_time", &MultiSpeciesSolver::resetTime, "Reset time to zero")
+        .def("total_concentration", &MultiSpeciesSolver::totalConcentration, py::arg("node_idx"),
+             "Get total concentration across all species at a node")
+        .def("concentration", &MultiSpeciesSolver::concentration, py::arg("species_idx"),
+             py::arg("node_idx"), "Get concentration of a species at a node")
+        .def("solution_norm", &MultiSpeciesSolver::solutionNorm, py::arg("species_idx"),
+             "Compute L2 norm of a species solution")
+        .def("total_mass", &MultiSpeciesSolver::totalMass, py::arg("species_idx"),
+             "Compute total mass (integral) of a species");
+
+    // =========================================================================
+    // Reaction Models (for use with MultiSpeciesSolver)
+    // =========================================================================
+    py::class_<LotkaVolterraReaction>(m, "LotkaVolterraReaction",
+                                      R"(Lotka-Volterra predator-prey with carrying capacity.
+
+        For 2 species (prey u, predator v):
+            du/dt = α·u·(1 - u/K) - β·u·v   (logistic prey growth)
+            dv/dt = δ·u·v - γ·v             (predator dynamics)
+
+        The carrying capacity K prevents unbounded prey growth.
+
+        Parameters:
+            alpha: prey growth rate
+            beta: predation rate
+            gamma: predator death rate
+            delta: predator reproduction rate from prey
+            carrying_capacity: maximum prey population (default=100)
+
+        Example:
+            >>> model = bt.LotkaVolterraReaction(alpha=1.0, beta=0.1, gamma=1.0, delta=0.1, carrying_capacity=50)
+            >>> solver.set_reaction_model(model)
+        )")
+        .def(py::init<double, double, double, double, double>(), py::arg("alpha"), py::arg("beta"),
+             py::arg("gamma"), py::arg("delta"), py::arg("carrying_capacity") = 100.0)
+        .def_property_readonly("alpha", &LotkaVolterraReaction::alpha)
+        .def_property_readonly("beta", &LotkaVolterraReaction::beta)
+        .def_property_readonly("gamma", &LotkaVolterraReaction::gamma)
+        .def_property_readonly("delta", &LotkaVolterraReaction::delta)
+        .def_property_readonly("carrying_capacity", &LotkaVolterraReaction::carrying_capacity);
+
+    py::class_<SIRReaction>(m, "SIRReaction",
+                            R"(SIR epidemiological model.
+
+        For 3 species (S, I, R):
+            dS/dt = -β·S·I / N         (susceptible become infected)
+            dI/dt = β·S·I / N - γ·I    (infected from S, recover)
+            dR/dt = γ·I                (recovered from infected)
+
+        Parameters:
+            beta: transmission rate
+            gamma: recovery rate
+            total_population: N, for normalization
+
+        The basic reproduction number R₀ = β/γ.
+
+        Example:
+            >>> model = bt.SIRReaction(beta=0.3, gamma=0.1, total_population=1000)
+            >>> print(f"R0 = {model.R0}")  # 3.0
+        )")
+        .def(py::init<double, double, double>(), py::arg("beta"), py::arg("gamma"),
+             py::arg("total_population"))
+        .def_property_readonly("beta", &SIRReaction::beta)
+        .def_property_readonly("gamma", &SIRReaction::gamma)
+        .def_property_readonly("N", &SIRReaction::N)
+        .def_property_readonly("R0", &SIRReaction::R0, "Basic reproduction number");
+
+    py::class_<SEIRReaction>(m, "SEIRReaction",
+                             R"(SEIR epidemiological model with exposed (latent) period.
+
+        For 4 species (S, E, I, R):
+            dS/dt = -β·S·I / N
+            dE/dt = β·S·I / N - σ·E    (exposed become infectious after incubation)
+            dI/dt = σ·E - γ·I
+            dR/dt = γ·I
+
+        Parameters:
+            beta: transmission rate
+            sigma: rate of becoming infectious (1/incubation period)
+            gamma: recovery rate
+            total_population: N
+
+        Example:
+            >>> model = bt.SEIRReaction(beta=0.5, sigma=0.2, gamma=0.1, total_population=1e6)
+        )")
+        .def(py::init<double, double, double, double>(), py::arg("beta"), py::arg("sigma"),
+             py::arg("gamma"), py::arg("total_population"))
+        .def_property_readonly("beta", &SEIRReaction::beta)
+        .def_property_readonly("sigma", &SEIRReaction::sigma)
+        .def_property_readonly("gamma", &SEIRReaction::gamma)
+        .def_property_readonly("N", &SEIRReaction::N);
+
+    py::class_<BrusselatorReaction>(m, "BrusselatorReaction",
+                                    R"(Brusselator chemical oscillator model.
+
+        Classic 2-species autocatalytic system exhibiting limit cycle oscillations:
+            dX/dt = A - (B+1)·X + X²·Y
+            dY/dt = B·X - X²·Y
+
+        For B > 1 + A², the system exhibits sustained oscillations.
+
+        Example:
+            >>> model = bt.BrusselatorReaction(A=1.0, B=3.0)
+            >>> print(f"Oscillatory: {model.is_oscillatory}")  # True
+        )")
+        .def(py::init<double, double>(), py::arg("A"), py::arg("B"))
+        .def_property_readonly("A", &BrusselatorReaction::A)
+        .def_property_readonly("B", &BrusselatorReaction::B)
+        .def_property_readonly("is_oscillatory", &BrusselatorReaction::isOscillatory,
+                               "Check if parameters lead to oscillatory behavior");
+
+    py::class_<CompetitiveInhibitionReaction>(m, "CompetitiveInhibitionReaction",
+                                              R"(Competitive enzyme inhibition model.
+
+        Models substrate (S) competing with inhibitor (I) for enzyme:
+            dS/dt = -Vmax · S / (Km · (1 + I/Ki) + S)
+            dI/dt = -k_decay · I  (optional inhibitor decay)
+            dP/dt = Vmax · S / (Km · (1 + I/Ki) + S)
+
+        For 3 species: [Substrate, Inhibitor, Product]
+
+        Example:
+            >>> model = bt.CompetitiveInhibitionReaction(vmax=10.0, km=5.0, ki=2.0)
+        )")
+        .def(py::init<double, double, double, double>(), py::arg("vmax"), py::arg("km"),
+             py::arg("ki"), py::arg("inhibitor_decay") = 0.0)
+        .def_property_readonly("vmax", &CompetitiveInhibitionReaction::vmax)
+        .def_property_readonly("km", &CompetitiveInhibitionReaction::km)
+        .def_property_readonly("ki", &CompetitiveInhibitionReaction::ki);
+
+    py::class_<EnzymeCascadeReaction>(m, "EnzymeCascadeReaction",
+                                      R"(Linear enzyme cascade reaction kinetics.
+
+        Models a cascade of enzyme activations with Michaelis-Menten kinetics:
+            E₀ → E₁ → E₂ → ... → Eₙ
+
+        Each enzyme is activated by the previous one:
+            dE_i/dt = (Vmax,i · E_{i-1}) / (Km,i + E_{i-1}) - k_deg,i · E_i
+
+        Parameters:
+            vmax_values: maximum reaction rates (N-1 values)
+            km_values: Michaelis constants (N-1 values)
+            kdeg_values: degradation rates (N values)
+
+        Example (3-enzyme cascade):
+            >>> model = bt.EnzymeCascadeReaction(
+            ...     vmax_values=[10.0, 20.0],
+            ...     km_values=[1.0, 2.0],
+            ...     kdeg_values=[0.1, 0.05, 0.02]
+            ... )
+        )")
+        .def(py::init<const std::vector<double>&, const std::vector<double>&,
+                      const std::vector<double>&>(),
+             py::arg("vmax_values"), py::arg("km_values"), py::arg("kdeg_values"))
+        .def_property_readonly("num_enzymes", &EnzymeCascadeReaction::numEnzymes);
 }
 
 }  // namespace bindings

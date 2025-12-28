@@ -89,6 +89,14 @@ from ._core import (
     write_vtk,
     write_vtk_series,
     write_vtk_series_with_metadata,
+    # Multi-species reaction-diffusion
+    MultiSpeciesSolver,
+    LotkaVolterraReaction,
+    SIRReaction,
+    SEIRReaction,
+    BrusselatorReaction,
+    CompetitiveInhibitionReaction,
+    EnzymeCascadeReaction,
 )
 
 # Expose utility functions
@@ -296,5 +304,13 @@ __all__ = [
     "DiffusionProblem",
     "LinearReactionDiffusionProblem",
     "AdvectionDiffusionProblem",
+    # ========== Multi-species reaction-diffusion ==========
+    "MultiSpeciesSolver",
+    "LotkaVolterraReaction",
+    "SIRReaction",
+    "SEIRReaction",
+    "BrusselatorReaction",
+    "CompetitiveInhibitionReaction",
+    "EnzymeCascadeReaction",
     "__version__",
 ]

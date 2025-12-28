@@ -1,7 +1,7 @@
 /**
  * @file diffusion_bindings.hpp
  * @brief Python bindings for diffusion and reaction-diffusion solvers
- * 
+ *
  * This module provides bindings for:
  * - DiffusionSolver (base class)
  * - VariableDiffusionSolver
@@ -17,6 +17,14 @@
  * - MembraneDiffusion1DSolver, MultiLayerMembraneSolver
  * - AdvectionDiffusionSolver
  * - ExplicitFD facade and Problem classes
+ *
+ * Multi-Species Framework:
+ * - MultiSpeciesSolver (N-species reaction-diffusion)
+ * - LotkaVolterraReaction (predator-prey)
+ * - SIRReaction, SEIRReaction (epidemiological models)
+ * - BrusselatorReaction (chemical oscillator)
+ * - CompetitiveInhibitionReaction (enzyme inhibition)
+ * - EnzymeCascadeReaction (enzyme cascade)
  */
 
 #pragma once
@@ -34,5 +42,5 @@ namespace bindings {
  */
 void register_diffusion_bindings(py::module_& m);
 
-} // namespace bindings
-} // namespace biotransport
+}  // namespace bindings
+}  // namespace biotransport
