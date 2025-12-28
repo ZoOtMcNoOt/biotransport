@@ -100,6 +100,14 @@ from ._core import (
     BrusselatorReaction,
     CompetitiveInhibitionReaction,
     EnzymeCascadeReaction,
+    # Nernst-Planck electrochemical transport
+    IonSpecies,
+    NernstPlanckSolver,
+    MultiIonSolver,
+    # Nernst-Planck submodules
+    constants,
+    ions,
+    ghk,
 )
 
 __all__ = [
@@ -193,4 +201,11 @@ __all__ = [
     "BrusselatorReaction",
     "CompetitiveInhibitionReaction",
     "EnzymeCascadeReaction",
+    # Nernst-Planck electrochemical transport
+    "IonSpecies",
+    "NernstPlanckSolver",
+    "MultiIonSolver",
+    "constants",
+    "ions",
+    "ghk",
 ]

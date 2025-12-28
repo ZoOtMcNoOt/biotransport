@@ -26,6 +26,7 @@
 #include <biotransport/solvers/diffusion_solvers.hpp>
 #include <biotransport/solvers/explicit_fd.hpp>
 #include <biotransport/solvers/multi_species_solver.hpp>
+#include <biotransport/solvers/nernst_planck_solver.hpp>
 
 namespace biotransport {
 namespace bindings {
@@ -986,6 +987,239 @@ void register_diffusion_bindings(py::module_& m) {
                       const std::vector<double>&>(),
              py::arg("vmax_values"), py::arg("km_values"), py::arg("kdeg_values"))
         .def_property_readonly("num_enzymes", &EnzymeCascadeReaction::numEnzymes);
+
+    // =========================================================================
+    // Nernst-Planck Electrochemical Transport
+    // =========================================================================
+
+    // Physical constants submodule
+    auto constants_mod = m.def_submodule("constants", "Physical constants for electrochemistry");
+    constants_mod.attr("FARADAY") = constants::FARADAY;
+    constants_mod.attr("GAS_CONSTANT") = constants::GAS_CONSTANT;
+    constants_mod.attr("BOLTZMANN") = constants::BOLTZMANN;
+    constants_mod.attr("ELEMENTARY_CHARGE") = constants::ELEMENTARY_CHARGE;
+    constants_mod.attr("VACUUM_PERMITTIVITY") = constants::VACUUM_PERMITTIVITY;
+
+    // Ion species
+    py::class_<IonSpecies>(m, "IonSpecies",
+                           R"(Represents an ion species with transport properties.
+
+        Automatically computes electrical mobility from diffusion coefficient
+        using the Einstein relation: μ = |z|FD/(RT)
+
+        Example:
+            >>> Na = bt.IonSpecies("Na+", valence=1, diffusivity=1.33e-9)
+            >>> K = bt.IonSpecies("K+", 1, 1.96e-9)
+            >>> Cl = bt.IonSpecies("Cl-", -1, 2.03e-9)
+        )")
+        .def(py::init<const std::string&, int, double, double>(), py::arg("name"),
+             py::arg("valence"), py::arg("diffusivity"), py::arg("temperature") = 310.0)
+        .def_readonly("name", &IonSpecies::name, "Species name (e.g., 'Na+', 'K+', 'Cl-')")
+        .def_readonly("valence", &IonSpecies::valence, "Ion charge number (z)")
+        .def_readonly("diffusivity", &IonSpecies::diffusivity, "Diffusion coefficient [m²/s]")
+        .def_readonly("mobility", &IonSpecies::mobility, "Electrical mobility [m²/(V·s)]")
+        .def_static("thermal_voltage", &IonSpecies::thermalVoltage, py::arg("temperature") = 310.0,
+                    "Get thermal voltage V_T = RT/F at given temperature");
+
+    // Common ions submodule
+    auto ions_mod = m.def_submodule("ions", "Common physiological ion species");
+    ions_mod.def("sodium", &ions::sodium, "Na+ ion (D=1.33e-9 m²/s at 37°C)");
+    ions_mod.def("potassium", &ions::potassium, "K+ ion (D=1.96e-9 m²/s at 37°C)");
+    ions_mod.def("chloride", &ions::chloride, "Cl- ion (D=2.03e-9 m²/s at 37°C)");
+    ions_mod.def("calcium", &ions::calcium, "Ca2+ ion (D=0.79e-9 m²/s at 37°C)");
+    ions_mod.def("magnesium", &ions::magnesium, "Mg2+ ion (D=0.71e-9 m²/s at 37°C)");
+    ions_mod.def("hydrogen", &ions::hydrogen, "H+ ion (D=9.31e-9 m²/s at 37°C)");
+    ions_mod.def("hydroxide", &ions::hydroxide, "OH- ion (D=5.27e-9 m²/s at 37°C)");
+    ions_mod.def("bicarbonate", &ions::bicarbonate, "HCO3- ion (D=1.18e-9 m²/s at 37°C)");
+
+    // Single-ion Nernst-Planck solver
+    py::class_<NernstPlanckSolver>(m, "NernstPlanckSolver",
+                                   R"(Solver for single-ion Nernst-Planck transport.
+
+        Solves the equation:
+            ∂c/∂t = D∇²c + (zFD/RT) ∇·(c ∇φ)
+
+        where:
+            c = ion concentration [mol/m³]
+            D = diffusion coefficient [m²/s]
+            z = ion valence
+            F = Faraday constant (96485 C/mol)
+            R = gas constant (8.314 J/(mol·K))
+            T = temperature [K]
+            φ = electric potential [V]
+
+        Applications:
+            - Ion channels and membrane transport
+            - Neural action potentials
+            - Battery electrolytes
+            - Electrophoresis
+            - Drug iontophoresis
+
+        Example (ion transport in uniform electric field):
+            >>> mesh = bt.StructuredMesh(100, 0.0, 1e-3)  # 1mm domain
+            >>> Na = bt.ions.sodium()
+            >>> solver = bt.NernstPlanckSolver(mesh, Na, temperature=310.0)
+            >>> solver.set_initial_condition(c0)
+            >>> solver.set_uniform_field(Ex=1000.0)  # 1 kV/m field
+            >>> solver.set_dirichlet_boundary(bt.Boundary.Left, 100.0)  # 100 mM
+            >>> solver.set_dirichlet_boundary(bt.Boundary.Right, 0.0)
+            >>> solver.solve(dt, num_steps)
+        )")
+        .def(py::init<const StructuredMesh&, const IonSpecies&, double>(), py::arg("mesh"),
+             py::arg("ion"), py::arg("temperature") = 310.0, "Create solver for single ion species")
+        .def("set_initial_condition", &NernstPlanckSolver::setInitialCondition, py::arg("values"),
+             "Set initial concentration field")
+        .def("set_potential_field",
+             py::overload_cast<const std::vector<double>&>(&NernstPlanckSolver::setPotentialField),
+             py::arg("phi"), "Set electric potential field (static array)")
+        .def("set_uniform_field", &NernstPlanckSolver::setUniformField, py::arg("Ex"),
+             py::arg("Ey") = 0.0, "Set uniform electric field [V/m]")
+        .def("set_dirichlet_boundary",
+             py::overload_cast<Boundary, double>(&NernstPlanckSolver::setDirichletBoundary),
+             py::arg("boundary"), py::arg("value"), "Set fixed concentration boundary")
+        .def("set_dirichlet_boundary",
+             py::overload_cast<int, double>(&NernstPlanckSolver::setDirichletBoundary),
+             py::arg("boundary_id"), py::arg("value"))
+        .def("set_neumann_boundary",
+             py::overload_cast<Boundary, double>(&NernstPlanckSolver::setNeumannBoundary),
+             py::arg("boundary"), py::arg("flux"), "Set flux boundary condition")
+        .def("set_neumann_boundary",
+             py::overload_cast<int, double>(&NernstPlanckSolver::setNeumannBoundary),
+             py::arg("boundary_id"), py::arg("flux"))
+        .def("check_stability", &NernstPlanckSolver::checkStability, py::arg("dt"),
+             "Check CFL stability for diffusion and drift")
+        .def("solve", &NernstPlanckSolver::solve, py::arg("dt"), py::arg("num_steps"),
+             "Run simulation for specified time steps")
+        .def(
+            "solution",
+            [](const NernstPlanckSolver& solver) {
+                return to_numpy_with_base(solver.solution(), py::cast(&solver));
+            },
+            "Get current concentration field")
+        .def(
+            "potential",
+            [](const NernstPlanckSolver& solver) {
+                return to_numpy_with_base(solver.potential(), py::cast(&solver));
+            },
+            "Get current electric potential field")
+        .def("time", &NernstPlanckSolver::time, "Get current simulation time")
+        .def("ion", &NernstPlanckSolver::ion, py::return_value_policy::reference_internal,
+             "Get ion species parameters")
+        .def("thermal_voltage", &NernstPlanckSolver::thermalVoltage,
+             "Get thermal voltage V_T = RT/F")
+        .def("mesh", &NernstPlanckSolver::mesh, py::return_value_policy::reference_internal);
+
+    // Multi-ion solver
+    py::class_<MultiIonSolver>(m, "MultiIonSolver",
+                               R"(Solver for multiple ion species with coupling.
+
+        Handles N ion species simultaneously with options for:
+        - Prescribed potential field (decoupled)
+        - Electroneutrality constraint (local charge balance)
+
+        Example (Na+, K+, Cl- transport):
+            >>> mesh = bt.StructuredMesh(100, 0.0, 1e-3)
+            >>> ions = [bt.ions.sodium(), bt.ions.potassium(), bt.ions.chloride()]
+            >>> solver = bt.MultiIonSolver(mesh, ions)
+            >>> solver.set_initial_condition(0, Na_ic)  # Na+
+            >>> solver.set_initial_condition(1, K_ic)   # K+
+            >>> solver.set_initial_condition(2, Cl_ic)  # Cl-
+            >>> solver.set_uniform_field(Ex=500.0)
+            >>> solver.solve(dt, num_steps)
+        )")
+        .def(py::init<const StructuredMesh&, std::vector<IonSpecies>, double>(), py::arg("mesh"),
+             py::arg("ions"), py::arg("temperature") = 310.0, "Create multi-ion solver")
+        .def("set_initial_condition", &MultiIonSolver::setInitialCondition, py::arg("species"),
+             py::arg("values"), "Set initial concentration for a species")
+        .def("set_dirichlet_boundary",
+             py::overload_cast<size_t, Boundary, double>(&MultiIonSolver::setDirichletBoundary),
+             py::arg("species"), py::arg("boundary"), py::arg("value"),
+             "Set Dirichlet boundary for a species")
+        .def("set_dirichlet_boundary",
+             py::overload_cast<size_t, int, double>(&MultiIonSolver::setDirichletBoundary),
+             py::arg("species"), py::arg("boundary_id"), py::arg("value"))
+        .def("set_neumann_boundary",
+             py::overload_cast<size_t, Boundary, double>(&MultiIonSolver::setNeumannBoundary),
+             py::arg("species"), py::arg("boundary"), py::arg("flux"),
+             "Set Neumann boundary for a species")
+        .def("set_potential_field", &MultiIonSolver::setPotentialField, py::arg("phi"),
+             "Set electric potential field")
+        .def("set_uniform_field", &MultiIonSolver::setUniformField, py::arg("Ex"),
+             py::arg("Ey") = 0.0, "Set uniform electric field")
+        .def("set_electroneutrality_mode", &MultiIonSolver::setElectroneutralityMode,
+             py::arg("enable"), py::arg("background_charge") = 0.0,
+             "Enable/disable electroneutrality constraint")
+        .def("solve", &MultiIonSolver::solve, py::arg("dt"), py::arg("num_steps"), "Run simulation")
+        .def(
+            "concentration",
+            [](const MultiIonSolver& solver, size_t species) {
+                return to_numpy_with_base(solver.concentration(species), py::cast(&solver));
+            },
+            py::arg("species"), "Get concentration for a species")
+        .def(
+            "potential",
+            [](const MultiIonSolver& solver) {
+                return to_numpy_with_base(solver.potential(), py::cast(&solver));
+            },
+            "Get electric potential field")
+        .def(
+            "charge_density",
+            [](const MultiIonSolver& solver) { return to_numpy(solver.chargeDensity()); },
+            "Compute total charge density [C/m³]")
+        .def("time", &MultiIonSolver::time, "Get current simulation time")
+        .def("num_species", &MultiIonSolver::numSpecies, "Get number of ion species")
+        .def("ion", &MultiIonSolver::ion, py::arg("index"),
+             py::return_value_policy::reference_internal, "Get ion species by index")
+        .def("mesh", &MultiIonSolver::mesh, py::return_value_policy::reference_internal);
+
+    // GHK utilities submodule
+    auto ghk_mod = m.def_submodule("ghk", "Goldman-Hodgkin-Katz utilities");
+    ghk_mod.def("nernst_potential", &ghk::nernstPotential, py::arg("z"), py::arg("c_in"),
+                py::arg("c_out"), py::arg("temperature") = 310.0,
+                R"(Compute Nernst equilibrium potential for an ion.
+
+        E = (RT/zF) * ln(c_out / c_in)
+
+        Args:
+            z: Ion valence
+            c_in: Intracellular concentration [mol/m³]
+            c_out: Extracellular concentration [mol/m³]
+            temperature: Temperature [K] (default 310K = body temp)
+
+        Returns:
+            Equilibrium potential [V]
+
+        Example:
+            >>> E_K = bt.ghk.nernst_potential(z=1, c_in=140e-3, c_out=5e-3)
+            >>> print(f"E_K = {E_K*1000:.1f} mV")  # ~-90 mV
+        )");
+
+    ghk_mod.def("ghk_voltage", &ghk::ghkVoltage, py::arg("P_K"), py::arg("K_in"), py::arg("K_out"),
+                py::arg("P_Na"), py::arg("Na_in"), py::arg("Na_out"), py::arg("P_Cl"),
+                py::arg("Cl_in"), py::arg("Cl_out"), py::arg("temperature") = 310.0,
+                R"(Goldman-Hodgkin-Katz voltage equation for membrane potential.
+
+        V_m = (RT/F) * ln((P_K[K]_o + P_Na[Na]_o + P_Cl[Cl]_i) /
+                          (P_K[K]_i + P_Na[Na]_i + P_Cl[Cl]_o))
+
+        Args:
+            P_K, P_Na, P_Cl: Relative permeabilities
+            K_in, K_out: Potassium concentrations [mol/m³]
+            Na_in, Na_out: Sodium concentrations [mol/m³]
+            Cl_in, Cl_out: Chloride concentrations [mol/m³]
+            temperature: Temperature [K]
+
+        Returns:
+            Membrane potential [V]
+
+        Example (resting potential):
+            >>> V_m = bt.ghk.ghk_voltage(
+            ...     P_K=1.0, K_in=140e-3, K_out=5e-3,
+            ...     P_Na=0.04, Na_in=14e-3, Na_out=140e-3,
+            ...     P_Cl=0.45, Cl_in=4e-3, Cl_out=120e-3
+            ... )
+            >>> print(f"Resting potential: {V_m*1000:.1f} mV")  # ~-70 mV
+        )");
 }
 
 }  // namespace bindings

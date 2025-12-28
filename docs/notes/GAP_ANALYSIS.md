@@ -47,7 +47,7 @@ This analysis identifies capabilities needed across the full academic spectrum:
 |-----|--------------|----------|---------|
 | **Fluid-Structure Interaction (FSI)** | ❌ Not implemented | Medium | Blood vessel mechanics |
 | **Poroelasticity** | ❌ Not implemented | Medium | Soft tissue deformation + flow |
-| **Electrochemical Transport** | ❌ Not implemented | Medium | Ion channels, Nernst-Planck |
+| **Electrochemical Transport** | ✅ Complete | Medium | Ion channels, Nernst-Planck |
 | **Pulsatile Boundary Conditions** | 🟡 Manual | Low | Cardiac cycle BCs |
 | **Moving Boundaries / ALE** | ❌ Not implemented | Low | Growing tumors, wound healing |
 | **Multi-Species Systems (N>2)** | ✅ Complete | Medium | Complex reaction networks |
@@ -153,7 +153,7 @@ These enable cutting-edge/niche research:
 | Sparse matrix interface (Eigen) | ✅ Complete | 2-3 weeks | Implicit at scale |
 | Grid convergence utility | ✅ Complete | 1 week | Verification |
 | Multi-species framework (N>2) | ✅ Complete | 2-3 weeks | Complex chemistry |
-| Nernst-Planck transport | ❌ Pending | 2-3 weeks | Ion transport |
+| Nernst-Planck transport | ✅ Complete | 2-3 weeks | Ion transport |
 
 ### Tier 3: Late PhD / Postdoc
 
@@ -172,8 +172,8 @@ These enable cutting-edge/niche research:
 |----------------|-----------------|-------------------|-------------|--------------|---------|
 | **Undergrad** | ✅ 100% | ✅ Sufficient | ✅ OK | ✅ Matplotlib | ✅ Ready |
 | **MS Thesis** | ✅ 100% | ✅ 100% (CN + 3D + Adaptive) | ✅ 100% (OpenMP) | ✅ 100% (VTK) | ✅ 100% |
-| **PhD Dissertation** | 🟡 75% | 🟡 65% | 🟡 60% | ✅ 70% | 🟡 68% |
-| **Postdoc** | 🟠 55% | 🟠 45% | 🟠 40% | 🟡 60% | 🟠 50% |
+| **PhD Dissertation** | ✅ 85% | 🟡 70% | 🟡 60% | ✅ 70% | 🟡 72% |
+| **Postdoc** | 🟠 60% | 🟠 50% | 🟠 40% | 🟡 60% | 🟠 53% |
 
 ---
 
@@ -189,13 +189,15 @@ These enable cutting-edge/niche research:
 8. ✅ **ADI solver** — `ADIDiffusion2D` and `ADIDiffusion3D` for fast implicit *(Completed)*
 9. ✅ **Sparse matrix interface** — Eigen integration, 5 solver backends *(Completed)*
 10. ✅ **Multi-species framework** — N-species reaction-diffusion with built-in models *(Completed)*
+11. ✅ **Nernst-Planck transport** — Single and multi-ion electrochemical transport *(Completed)*
 
 ---
 
 ## Conclusion
 
-The biotransport library is **fully production-ready for undergraduate coursework** and **100% ready for MS thesis work** with all 6 critical features now complete. Recent additions include:
+The biotransport library is **fully production-ready for undergraduate coursework** and **100% ready for MS thesis work** with all critical features now complete. **Tier 2 (PhD-level) is now complete** with the addition of Nernst-Planck ion transport. Recent additions include:
 
+- ✅ **Nernst-Planck transport** — Single-ion and multi-ion electrochemical transport with GHK utilities
 - ✅ **Sparse matrix interface** — Eigen 3.4 integration with 5 solver backends (SparseLU, SimplicialLLT/LDLT, CG, BiCGSTAB)
 - ✅ **Multi-species framework** — N-species reaction-diffusion with Lotka-Volterra, SIR/SEIR, Brusselator, enzyme cascade models
 - ✅ **ADI solvers** — `ADIDiffusion2D` and `ADIDiffusion3D` for efficient implicit time integration
@@ -206,11 +208,12 @@ The biotransport library is **fully production-ready for undergraduate coursewor
 - ✅ **VTK file export** — ParaView-compatible visualization
 - ✅ **Doxygen API documentation** — Complete API reference
 
-For PhD-level research, the main remaining gaps are:
-- Unstructured meshes
-- Nernst-Planck transport
+For PhD-level research, **all Tier 2 items are now complete**. The remaining gaps for advanced research are:
+- Unstructured meshes (Tier 3)
+- GPU acceleration (Tier 3)
+- Poroelasticity coupling (Tier 3)
 
-For postdoctoral/publication-quality work, significant infrastructure additions (GPU, FSI, UQ) would be needed. The library now provides a **complete foundation for MS-level thesis research** with all critical features implemented.
+For postdoctoral/publication-quality work, significant infrastructure additions (GPU, FSI, UQ) would be needed. The library now provides a **complete foundation for PhD-level dissertation research** with all Tier 2 features implemented.
 
 ---
 
