@@ -222,6 +222,18 @@ void register_diffusion_bindings(py::module_& m) {
              })
         .def("set_initial_condition", &ReactionDiffusionSolver::setInitialCondition,
              py::arg("values"))
+        .def("set_dirichlet_boundary",
+             py::overload_cast<int, double>(&ReactionDiffusionSolver::setDirichletBoundary),
+             py::arg("boundary_id"), py::arg("value"))
+        .def("set_dirichlet_boundary",
+             py::overload_cast<Boundary, double>(&ReactionDiffusionSolver::setDirichletBoundary),
+             py::arg("boundary"), py::arg("value"))
+        .def("set_neumann_boundary",
+             py::overload_cast<int, double>(&ReactionDiffusionSolver::setNeumannBoundary),
+             py::arg("boundary_id"), py::arg("flux"))
+        .def("set_neumann_boundary",
+             py::overload_cast<Boundary, double>(&ReactionDiffusionSolver::setNeumannBoundary),
+             py::arg("boundary"), py::arg("flux"))
         .def("set_boundary",
              py::overload_cast<int, const BoundaryCondition&>(
                  &ReactionDiffusionSolver::setBoundaryCondition),

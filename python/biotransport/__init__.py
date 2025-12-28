@@ -85,9 +85,7 @@ from ._core import (
     blood_casson_model,
     blood_carreau_model,
     pipe_wall_shear_rate,
-    # I/O and visualization
-    write_vtk,
-    write_vtk_series,
+    # I/O and visualization (C++ version - single array API)
     write_vtk_series_with_metadata,
     # Multi-species reaction-diffusion
     MultiSpeciesSolver,
@@ -109,6 +107,9 @@ from ._core import (
 
 # Expose utility functions
 from .utils import get_results_dir, get_result_path
+
+# VTK export (Python wrapper with dict-based API)
+from .vtk_export import write_vtk, write_vtk_series
 
 # Beginner-friendly convenience helpers
 from .mesh_utils import (
