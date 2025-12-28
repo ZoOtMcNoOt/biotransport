@@ -107,7 +107,7 @@ All gaps for MS-level research are now fully addressed:
 4. ✅ **OpenMP Parallelization** — Practical problem sizes *(Complete)*
 5. ✅ **Adaptive Time-Stepping** — Error-controlled integration *(Complete)*
 
-### For Graduate (PhD) Dissertation — MEDIUM PRIORITY
+### For Graduate (PhD) Dissertation — ✅ TIER 2 COMPLETE
 
 These gaps enable novel research contributions:
 
@@ -116,7 +116,7 @@ These gaps enable novel research contributions:
 3. ✅ **ADI Method** — Fast 3D without full matrices *(Complete)*
 4. ✅ **Multi-Species Reaction-Diffusion** — Complex biochemistry *(Complete)*
 5. ✅ **Method of Manufactured Solutions** — Publishable verification *(Complete)*
-6. **Electrochemical (Nernst-Planck)** — Ion transport, neural
+6. ✅ **Electrochemical (Nernst-Planck)** — Ion transport, neural *(Complete)*
 7. **Poroelasticity** — Tissue mechanics coupling
 
 ### For Postdoctoral Research — LOWER PRIORITY (Specialized)
