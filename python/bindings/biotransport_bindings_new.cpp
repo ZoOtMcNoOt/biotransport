@@ -20,6 +20,7 @@
 #include "fluid_bindings.hpp"
 #include "io_bindings.hpp"
 #include "mesh_bindings.hpp"
+#include "sparse_bindings.hpp"
 #include "utilities_bindings.hpp"
 
 namespace py = pybind11;
@@ -31,6 +32,7 @@ PYBIND11_MODULE(_core, m) {
     biotransport::bindings::register_mesh_bindings(m);
     biotransport::bindings::register_diffusion_bindings(m);
     biotransport::bindings::register_fluid_bindings(m);
+    biotransport::bindings::register_sparse_bindings(m);
     biotransport::bindings::register_utilities_bindings(m);
     register_io_bindings(m);
 }

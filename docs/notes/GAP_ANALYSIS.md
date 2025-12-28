@@ -22,7 +22,7 @@ This analysis identifies capabilities needed across the full academic spectrum:
 | **Implicit Time Integration** | 🟡 Crank-Nicolson only | High | Stiff problems, larger timesteps |
 | **ADI (Alternating Direction Implicit)** | ✅ Complete | High | Fast 2D/3D implicit without full matrix |
 | **Multigrid Solvers** | ❌ Not implemented | Medium | O(n) complexity for elliptic PDEs |
-| **Sparse Matrix Support** | ❌ No sparse library | High | Implicit methods, eigenvalue problems |
+| **Sparse Matrix Support** | ✅ Eigen integration | High | Implicit methods, eigenvalue problems |
 | **Higher-Order Schemes** | ❌ Only 2nd-order central | Medium | 4th-order for research accuracy |
 | **Crank-Nicolson** | ✅ Implemented | High | Unconditionally stable, 2nd-order |
 | **Runge-Kutta (RK4)** | ❌ Not implemented | Medium | Better time accuracy |
@@ -112,10 +112,10 @@ All gaps for MS-level research are now fully addressed:
 These gaps enable novel research contributions:
 
 1. **Unstructured Meshes** — Complex anatomy (vessels, organs)
-2. **Sparse Matrix Solvers** — Implicit methods at scale
-3. **ADI Method** — Fast 3D without full matrices
+2. ✅ **Sparse Matrix Solvers** — Implicit methods at scale *(Complete)*
+3. ✅ **ADI Method** — Fast 3D without full matrices *(Complete)*
 4. **Multi-Species Reaction-Diffusion** — Complex biochemistry
-5. **Method of Manufactured Solutions** — Publishable verification
+5. ✅ **Method of Manufactured Solutions** — Publishable verification *(Complete)*
 6. **Electrochemical (Nernst-Planck)** — Ion transport, neural
 7. **Poroelasticity** — Tissue mechanics coupling
 
@@ -150,7 +150,7 @@ These enable cutting-edge/niche research:
 | Item | Status | Effort | Impact |
 |------|--------|--------|--------|
 | ADI for 2D/3D diffusion | ✅ Complete | 2 weeks | Fast implicit |
-| Sparse matrix interface (Eigen) | ❌ Pending | 2-3 weeks | Implicit at scale |
+| Sparse matrix interface (Eigen) | ✅ Complete | 2-3 weeks | Implicit at scale |
 | Grid convergence utility | ✅ Complete | 1 week | Verification |
 | Multi-species framework (N>2) | ❌ Pending | 2-3 weeks | Complex chemistry |
 | Nernst-Planck transport | ❌ Pending | 2-3 weeks | Ion transport |
@@ -186,6 +186,8 @@ These enable cutting-edge/niche research:
 5. ✅ **3D mesh extension** — `StructuredMesh3D` and `DiffusionSolver3D` *(Completed)*
 6. ✅ **Adaptive time-stepping** — `AdaptiveTimeStepper` with error control *(Completed)*
 7. ✅ **Grid convergence helper** — Richardson extrapolation, GCI calculation *(Completed)*
+8. ✅ **ADI solver** — `ADIDiffusion2D` and `ADIDiffusion3D` for fast implicit *(Completed)*
+9. ✅ **Sparse matrix interface** — Eigen integration, 5 solver backends *(Completed)*
 
 ---
 
@@ -193,6 +195,8 @@ These enable cutting-edge/niche research:
 
 The biotransport library is **fully production-ready for undergraduate coursework** and **100% ready for MS thesis work** with all 6 critical features now complete. Recent additions include:
 
+- ✅ **Sparse matrix interface** — Eigen 3.4 integration with 5 solver backends (SparseLU, SimplicialLLT/LDLT, CG, BiCGSTAB)
+- ✅ **ADI solvers** — `ADIDiffusion2D` and `ADIDiffusion3D` for efficient implicit time integration
 - ✅ **Adaptive time-stepping** — `AdaptiveTimeStepper` with error control via step-doubling (Richardson extrapolation)
 - ✅ **3D Cartesian mesh** — `StructuredMesh3D` with `DiffusionSolver3D` and `LinearReactionDiffusionSolver3D`
 - ✅ **Crank-Nicolson implicit solver** — Unconditionally stable, 2nd-order accurate time integration
@@ -202,8 +206,8 @@ The biotransport library is **fully production-ready for undergraduate coursewor
 
 For PhD-level research, the main remaining gaps are:
 - Unstructured meshes
-- Sparse solvers
-- ADI methods
+- Multi-species reaction-diffusion
+- Nernst-Planck transport
 
 For postdoctoral/publication-quality work, significant infrastructure additions (GPU, FSI, UQ) would be needed. The library now provides a **complete foundation for MS-level thesis research** with all critical features implemented.
 

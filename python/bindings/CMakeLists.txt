@@ -1,7 +1,12 @@
 # Modular Python bindings - split into focused modules for maintainability
 set(BINDING_SOURCES
-    biotransport_bindings_new.cpp mesh_bindings.cpp diffusion_bindings.cpp
-    fluid_bindings.cpp utilities_bindings.cpp io_bindings.cpp)
+    biotransport_bindings_new.cpp
+    mesh_bindings.cpp
+    diffusion_bindings.cpp
+    fluid_bindings.cpp
+    utilities_bindings.cpp
+    io_bindings.cpp
+    sparse_bindings.cpp)
 
 pybind11_add_module(_core ${BINDING_SOURCES})
 target_link_libraries(_core PRIVATE biotransport)

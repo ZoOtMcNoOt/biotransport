@@ -24,6 +24,7 @@
 #include <biotransport/core/problems/transport_problem.hpp>
 
 // Numerics
+#include <biotransport/core/numerics/linear_algebra/sparse_matrix.hpp>
 #include <biotransport/core/numerics/linear_algebra/tridiagonal.hpp>
 #include <biotransport/core/numerics/solvers/iterative.hpp>
 #include <biotransport/core/numerics/stability.hpp>
@@ -38,6 +39,7 @@
 #include <biotransport/solvers/advection_diffusion_solver.hpp>
 #include <biotransport/solvers/crank_nicolson.hpp>
 #include <biotransport/solvers/diffusion_solvers.hpp>
+#include <biotransport/solvers/implicit_diffusion.hpp>
 
 // Reactions library
 #include <biotransport/physics/reactions.hpp>

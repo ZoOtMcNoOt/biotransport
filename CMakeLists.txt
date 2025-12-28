@@ -15,6 +15,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
 option(BUILD_BENCHMARKS "Build performance benchmarks" OFF)
 option(BIOTRANSPORT_OPENMP "Enable OpenMP parallelization" ON)
+option(BIOTRANSPORT_EIGEN "Enable Eigen for sparse matrices" ON)
 
 # OpenMP configuration
 if(BIOTRANSPORT_OPENMP)
@@ -23,6 +24,23 @@ if(BIOTRANSPORT_OPENMP)
     message(STATUS "OpenMP found: version ${OpenMP_CXX_VERSION}")
     add_compile_definitions(BIOTRANSPORT_ENABLE_OPENMP)
   endif()
+endif()
+
+# Eigen configuration (header-only library for sparse matrices)
+if(BIOTRANSPORT_EIGEN)
+  include(FetchContent)
+  FetchContent_Declare(
+    eigen
+    GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+    GIT_TAG 3.4.0
+    GIT_SHALLOW TRUE)
+  # Eigen is header-only, just make it available
+  FetchContent_GetProperties(eigen)
+  if(NOT eigen_POPULATED)
+    FetchContent_Populate(eigen)
+  endif()
+  add_compile_definitions(BIOTRANSPORT_ENABLE_EIGEN)
+  message(STATUS "Eigen enabled: ${eigen_SOURCE_DIR}")
 endif()
 
 # Prefer the active virtual environment when present (but do not require one)

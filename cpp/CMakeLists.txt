@@ -31,6 +31,11 @@ if(BIOTRANSPORT_OPENMP AND OpenMP_CXX_FOUND)
   target_link_libraries(biotransport PUBLIC OpenMP::OpenMP_CXX)
 endif()
 
+# Add Eigen include directories if enabled
+if(BIOTRANSPORT_EIGEN)
+  target_include_directories(biotransport PUBLIC ${eigen_SOURCE_DIR})
+endif()
+
 # Add tests if needed
 if(BUILD_TESTING)
   add_subdirectory(tests)
