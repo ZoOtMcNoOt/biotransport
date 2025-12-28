@@ -399,6 +399,22 @@ The biotransport library is **fully production-ready for undergraduate coursewor
 - Fluid-structure interaction
 - Uncertainty quantification
 
+### Future Vision: Real-Time GUI Simulator
+
+**Goal:** Interactive real-time simulator with GUI for all biotransport phenomena.
+
+| Component | Technology Options | Feasibility |
+|-----------|-------------------|-------------|
+| **GUI Framework** | PyQt + PyQtGraph, Dear ImGui, or Web (Streamlit/Dash) | ✅ High |
+| **Real-time Rendering** | 10-60 FPS for 1D/2D on moderate grids (50-200 nodes) | ✅ High |
+| **Interactive Controls** | Sliders for parameters (D, BCs, source terms) | ✅ Easy |
+| **Live Visualization** | 1D plots, 2D heatmaps, time evolution | ✅ Medium |
+| **Pause/Step/Resume** | Simulation control | ✅ Easy |
+
+**Architecture:** C++ core (already fast) + Python GUI layer. The performance-critical solving is already compiled; GUI just calls `solver.step()` and renders.
+
+**Priority:** Capstone feature after all gap analysis items complete.
+
 The library now provides a **complete foundation for PhD-level dissertation research** with all Tier 2 features implemented.
 
 ---
