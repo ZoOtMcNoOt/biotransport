@@ -179,29 +179,68 @@ All gaps for MS-level research are now fully addressed:
 3. ✅ **VTK/ParaView Export** — Publication-quality visualization *(Complete)*
 4. ✅ **OpenMP Parallelization** — Practical problem sizes *(Complete)*
 5. ✅ **Adaptive Time-Stepping** — Error-controlled integration *(Complete)*
+6. ✅ **Stokes Flow** — Creeping flow, microfluidics *(Complete)*
+7. ✅ **Navier-Stokes** — Full fluid dynamics *(Complete)*
+8. ✅ **Cylindrical Coordinates** — Axisymmetric problems *(Complete)*
+9. ✅ **Non-Newtonian Fluids** — Blood rheology (8 models) *(Complete)*
+10. ✅ **Darcy Flow** — Porous media, tissue perfusion *(Complete)*
+11. ✅ **Bioheat (Pennes)** — Thermal therapy, cryotherapy *(Complete)*
+12. ✅ **Pharmacokinetic Models** — Drug delivery modeling *(Complete)*
 
 ### For Graduate (PhD) Dissertation — ✅ TIER 2 COMPLETE
 
 These gaps enable novel research contributions:
 
-1. **Unstructured Meshes** — Complex anatomy (vessels, organs)
-2. ✅ **Sparse Matrix Solvers** — Implicit methods at scale *(Complete)*
-3. ✅ **ADI Method** — Fast 3D without full matrices *(Complete)*
-4. ✅ **Multi-Species Reaction-Diffusion** — Complex biochemistry *(Complete)*
-5. ✅ **Method of Manufactured Solutions** — Publishable verification *(Complete)*
+**Completed:**
+1. ✅ **Sparse Matrix Solvers** — Implicit methods at scale *(Complete)*
+2. ✅ **ADI Method** — Fast 3D without full matrices *(Complete)*
+3. ✅ **Multi-Species Reaction-Diffusion** — Complex biochemistry *(Complete)*
+4. ✅ **Method of Manufactured Solutions** — Publishable verification *(Complete)*
+5. ✅ **Grid Convergence Studies** — Richardson extrapolation *(Complete)*
 6. ✅ **Electrochemical (Nernst-Planck)** — Ion transport, neural *(Complete)*
+7. ✅ **Physical Constants** — `bt.constants` submodule *(Complete)*
+
+**Remaining (Tier 3):**
+1. **Unstructured Meshes** — Complex anatomy (vessels, organs)
+2. **Tetrahedral Meshes** — FEM for 3D anatomy
+3. **Higher-Order Schemes** — 4th-order for research accuracy
+4. **Runge-Kutta (RK4)** — Better time accuracy
+5. **Multigrid Solvers** — O(n) complexity for elliptic PDEs
+6. **Newton-Raphson Iteration** — Nonlinear steady-state problems
 7. **Poroelasticity** — Tissue mechanics coupling
+8. **Benchmark Suite (Published)** — Community trust
 
 ### For Postdoctoral Research — LOWER PRIORITY (Specialized)
 
 These enable cutting-edge/niche research:
 
-1. **GPU/CUDA Acceleration** — Large-scale simulations
+**High Priority:**
+1. **GPU/CUDA Acceleration** — 10-100x speedup for large problems
 2. **Fluid-Structure Interaction** — Blood vessel dynamics
-3. **Uncertainty Quantification** — Statistical rigor
-4. **Moving Boundaries (ALE)** — Growing domains
-5. **Medical Image Import** — Patient-specific modeling
-6. **MPI Distributed Computing** — HPC clusters
+3. **Uncertainty Quantification** — Parameter sensitivity, statistical rigor
+4. **Batch/Ensemble Runs** — Parameter sweeps, UQ studies
+
+**Medium Priority:**
+5. **Moving Boundaries (ALE)** — Growing tumors, wound healing
+6. **Medical Image Import** — DICOM, NIfTI support
+7. **Mesh Refinement (AMR)** — Adaptive resolution near boundaries
+8. **SIMD Vectorization** — 4-8x single-core speedup
+9. **Pulsatile Boundary Conditions** — Cardiac cycle automation
+
+**Lower Priority (Niche):**
+10. **MPI Distributed Computing** — HPC clusters
+11. **Electrophysiology** — Action potential propagation
+12. **Radiotherapy Dose** — Treatment planning
+13. **Spherical Coordinates** — Cell/microsphere problems
+14. **Body-Fitted Coordinates** — Complex vessel geometries
+
+### Documentation & Community — ONGOING
+
+1. 🟡 **Theory Manual** — Mathematical background (partial)
+2. 🟡 **Tutorial Series** — Guided learning path (examples exist)
+3. ❌ **Contribution Guide** — Open-source community
+4. ❌ **Publication/Citation** — JOSS paper for academic credit
+5. 🟡 **Continuous Integration** — Automated quality assurance (basic pytest)
 
 ---
 
@@ -217,6 +256,11 @@ These enable cutting-edge/niche research:
 | Crank-Nicolson integration | ✅ Complete | 1-2 weeks | Stiff problems, stability |
 | 3D Cartesian `StructuredMesh3D` | ✅ Complete | 2-3 weeks | Unlocks organ-scale problems |
 | Adaptive time-stepping | ✅ Complete | 1 week | Error-controlled integration |
+| Stokes & Navier-Stokes | ✅ Complete | 2-3 weeks | Fluid dynamics |
+| Non-Newtonian fluids | ✅ Complete | 1-2 weeks | Blood rheology |
+| Cylindrical mesh | ✅ Complete | 1 week | Axisymmetric problems |
+| Darcy flow | ✅ Complete | 1 week | Porous media |
+| Bioheat solver | ✅ Complete | 1-2 weeks | Thermal therapy |
 
 ### Tier 2: Early PhD Readiness ✅ COMPLETE
 
@@ -227,15 +271,49 @@ These enable cutting-edge/niche research:
 | Grid convergence utility | ✅ Complete | 1 week | Verification |
 | Multi-species framework (N>2) | ✅ Complete | 2-3 weeks | Complex chemistry |
 | Nernst-Planck transport | ✅ Complete | 2-3 weeks | Ion transport |
+| Physical constants module | ✅ Complete | 1 day | SI unit enforcement |
 
-### Tier 3: Late PhD / Postdoc
+### Tier 3: Late PhD / Advanced
 
-| Item | Effort | Impact |
-|------|--------|--------|
-| Unstructured mesh (triangles) | 4-6 weeks | Complex geometry |
-| CUDA kernel port | 4-6 weeks | GPU acceleration |
-| Poroelasticity coupling | 4-6 weeks | Tissue mechanics |
-| UQ framework (MC sampling) | 3-4 weeks | Statistical rigor |
+| Item | Status | Effort | Impact |
+|------|--------|--------|--------|
+| Unstructured mesh (triangles) | ❌ Not started | 4-6 weeks | Complex geometry |
+| Tetrahedral meshes (FEM) | ❌ Not started | 6-8 weeks | 3D anatomy |
+| Higher-order schemes (4th) | ❌ Not started | 2-3 weeks | Research accuracy |
+| Runge-Kutta (RK4) | ❌ Not started | 1-2 weeks | Better time accuracy |
+| Multigrid solvers | ❌ Not started | 4-6 weeks | O(n) complexity |
+| Newton-Raphson iteration | ❌ Not started | 2-3 weeks | Nonlinear steady-state |
+| Poroelasticity coupling | ❌ Not started | 4-6 weeks | Tissue mechanics |
+| Published benchmark suite | 🟡 Internal only | 2-3 weeks | Community trust |
+
+### Tier 4: Postdoctoral / Specialized
+
+| Item | Status | Effort | Impact |
+|------|--------|--------|--------|
+| CUDA kernel port | ❌ Not started | 4-6 weeks | GPU acceleration |
+| Fluid-structure interaction | ❌ Not started | 6-8 weeks | Vessel dynamics |
+| UQ framework (MC sampling) | ❌ Not started | 3-4 weeks | Statistical rigor |
+| Batch/ensemble runs | ❌ Not started | 2-3 weeks | Parameter sweeps |
+| Moving boundaries (ALE) | ❌ Not started | 6-8 weeks | Growing domains |
+| Medical image import | ❌ Not started | 3-4 weeks | DICOM/NIfTI |
+| Mesh refinement (AMR) | ❌ Not started | 4-6 weeks | Adaptive resolution |
+| SIMD vectorization | ❌ Not started | 2-3 weeks | Single-core speedup |
+| Pulsatile BCs | 🟡 Manual | 1-2 weeks | Cardiac automation |
+| MPI distributed | ❌ Not started | 6-8 weeks | Cluster computing |
+| Electrophysiology | ❌ Not started | 4-6 weeks | Action potentials |
+| Radiotherapy dose | ❌ Not started | 4-6 weeks | Treatment planning |
+| Spherical coordinates | ❌ Not started | 2-3 weeks | Cell problems |
+| Body-fitted coordinates | ❌ Not started | 4-6 weeks | Complex geometry |
+
+### Documentation Roadmap
+
+| Item | Status | Effort | Impact |
+|------|--------|--------|--------|
+| Theory manual | 🟡 Partial | 2-4 weeks | Mathematical background |
+| Tutorial series | 🟡 Examples exist | 2-3 weeks | Guided learning |
+| Contribution guide | ❌ Not started | 1 week | Open-source community |
+| JOSS paper | ❌ Not started | 4-6 weeks | Academic citation |
+| CI/CD pipeline | 🟡 Basic pytest | 1-2 weeks | Automated QA |
 
 ---
 
