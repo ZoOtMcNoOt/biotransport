@@ -1,433 +1,569 @@
-# BioTransport Library
+```
+    ____  _       _____                                        _   
+   | __ )(_) ___ |_   _| __ __ _ _ __  ___ _ __   ___  _ __ __| |_ 
+   |  _ \| |/ _ \  | || '__/ _` | '_ \/ __| '_ \ / _ \| '__/ _` __|
+   | |_) | | (_) | | || | | (_| | | | \__ \ |_) | (_) | | | (_| |_ 
+   |____/|_|\___/  |_||_|  \__,_|_| |_|___/ .__/ \___/|_|  \__|\__|
+                                          |_|                       
+```
 
-A high-performance C++ library with Python bindings for modeling biotransport phenomena in biological systems.
+<div align="center">
+
+**High-performance biotransport simulation library**
+
+*C++ core | Python interface | Educational focus*
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![C++17](https://img.shields.io/badge/C++-17-blue.svg)](https://isocpp.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-293%20passing-brightgreen.svg)]()
 
-## Overview
+</div>
 
-BioTransport provides a comprehensive framework for simulating transport processes in biological systems—diffusion, convection, reaction-diffusion, and fluid dynamics. Built with a high-performance C++ core and intuitive Python bindings, it bridges the gap between computational efficiency and ease of use.
+---
 
-## Features
+## What is BioTransport?
 
-### Core Infrastructure
-- **C++ core (C++17)** for high-performance computations
-- **Python bindings** via pybind11 for easy scripting and visualization
-- **Structured meshes** — 1D, 2D Cartesian, and cylindrical coordinate systems
-- **Boundary conditions** — Dirichlet, Neumann, and Robin types
-- **Visualization tools** — Built-in plotting with `plot_field()` for 1D/2D solutions
+BioTransport is a computational library for simulating transport phenomena in biological systems. It combines a high-performance C++ numerical core with an intuitive Python interface, making it ideal for both research applications and educational use in biomedical engineering courses.
 
-### Mass Transport Solvers
-- **Diffusion** — 1D/2D with uniform or spatially-varying coefficients
-- **Reaction-diffusion** — Linear, logistic, Michaelis-Menten kinetics
-- **Advection-diffusion** — Convection-diffusion with velocity fields (upwind scheme)
-- **Membrane diffusion** — Steady-state with partition coefficients and hindered transport (Renkin)
-- **Gray-Scott model** — Pattern formation (Turing patterns)
-
-### Fluid Dynamics Solvers
-- **Stokes flow** — Viscous incompressible creeping flow
-- **Navier-Stokes** — Incompressible viscous flow with inertial effects
-- **Darcy flow** — Porous media pressure/velocity field computation
-- **Non-Newtonian models** — Power-law, Carreau, Casson, Cross models for blood rheology
-
-### Multi-Physics Applications
-- **Tumor drug delivery** — Coupled pressure-concentration with elevated IFP
-- **Bioheat cryotherapy** — Pennes bioheat with phase change and Arrhenius damage
-
-### Educational Utilities (BMEN 341)
-- **Dimensionless numbers** — Reynolds, Schmidt, Péclet, Biot, Fourier, Sherwood, Damköhler
-- **Analytical solutions** — Semi-infinite diffusion, Poiseuille flow, Taylor-Couette flow
-- **Configuration dataclasses** — `TumorDrugDeliveryConfig`, `BioheatCryotherapyConfig` with documented parameters
-- **Verification scripts** — Compare numerical results against analytical solutions
-
-## Prerequisites
-
-- CMake (>= 3.13)
-- C++ compiler with C++17 support
-- Python (>= 3.9)
-- NumPy
-- Matplotlib
-- Docker (recommended for easy setup)
-
-Notes:
-- On Windows, you typically need "Visual Studio Build Tools" with the C++ workload so CMake can build the extension module.
-
-## Getting Started
-
-### Option 1: Using Docker (Recommended)
-
-This is the easiest way to get started with BioTransport:
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/ZoOtMcNoOt/biotransport.git
-   cd biotransport
-   ```
-
-2. **Build and run the Docker container**:
-   ```bash
-   docker build -t biotransport:latest .
-   docker run -it -v $(pwd):/biotransport biotransport:latest
-   ```
-   On Windows PowerShell, use:
-   ```powershell
-   docker build -t biotransport:latest .
-   docker run -it -v ${PWD}:/biotransport biotransport:latest
-   ```
-
-3. **Build and install the library**:
-   ```bash
-   # Inside the Docker container
-   ./dev.sh build
-   ./dev.sh install
-   ```
-
-4. **Run tests**:
-   ```bash
-   ./dev.sh test
-   ```
-
-5. **Run examples**:
-   ```bash
-   ./dev.sh run 1d_diffusion
-   ```
-
-### Option 2: Using Docker Compose
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/ZoOtMcNoOt/biotransport.git
-   cd biotransport
-   ```
-
-2. **Start the container**:
-   ```bash
-   docker-compose up -d
-   docker-compose exec biotransport bash
-   ```
-
-3. **Build and install the library**:
-   ```bash
-   # Inside the Docker container
-   ./dev.sh build
-   ./dev.sh install
-   ```
-
-### Option 3: Local Installation
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/ZoOtMcNoOt/biotransport.git
-   cd biotransport
-   ```
-
-2. **Create and activate a conda environment**:
-   ```bash
-   conda env create -f environment.yml
-   conda activate biotransport
-   ```
-
-3. **Build and install the library**:
-   ```bash
-   ./dev.sh build
-   ./dev.sh install
-   ```
-
-#### Alternative: pip editable install (no conda)
-
-If you already have Python + CMake installed, you can install in editable mode:
-
-```bash
-python -m pip install -U pip
-python -m pip install -e .
-python -m pytest python/tests
+```
+                                    Transport Phenomena
+                                           |
+              +----------------------------+----------------------------+
+              |                            |                            |
+        Mass Transport              Fluid Dynamics               Heat Transfer
+              |                            |                            |
+    +---------+---------+        +---------+---------+                  |
+    |         |         |        |         |         |                  |
+ Diffusion  Advection  Reaction  Stokes  Navier-   Darcy           Bioheat
+    |       Diffusion  Diffusion   |     Stokes    Flow            Equation
+    |                              |         |
+    +--- Membrane Transport        +--- Non-Newtonian Models
+    |                                   (Blood Rheology)
+    +--- Nernst-Planck (Ion Transport)
 ```
 
-## Using with an IDE
+---
 
-### CLion Setup with Docker
-
-1. **Install Docker plugin**:
-    - Go to File → Settings → Plugins
-    - Install the Docker plugin
-
-2. **Configure Docker in CLion**:
-    - Go to File → Settings → Build, Execution, Deployment → Docker
-    - Add Docker server
-
-3. **Set up Docker toolchain**:
-    - Go to File → Settings → Build, Execution, Deployment → Toolchains
-    - Add a Docker toolchain
-    - Select "biotransport:latest" as the image
-
-4. **Configure CMake**:
-    - Go to File → Settings → Build, Execution, Deployment → CMake
-    - Add a profile with the Docker toolchain
-    - Click Apply and reload the CMake project
-
-## Running Examples
-
-The project includes 19 examples organized by complexity:
-
-### Basic Examples
-```bash
-python examples/basic/1d_diffusion.py       # Simple 1D diffusion
-python examples/basic/heat_conduction.py    # 2D heat equation
-```
-
-### Intermediate Examples
-```bash
-python examples/intermediate/membrane_diffusion.py       # Transient membrane transport
-python examples/intermediate/steady_membrane_diffusion.py # Steady-state with partitioning
-python examples/intermediate/oxygen_diffusion.py         # O2 consumption in tissue
-python examples/intermediate/drug_diffusion_2d.py        # 2D drug release
-python examples/intermediate/advection_diffusion.py      # Convection-diffusion
-python examples/intermediate/darcy_flow.py               # Porous media flow
-python examples/intermediate/stokes_flow.py              # Creeping viscous flow
-python examples/intermediate/navier_stokes_flow.py       # Inertial viscous flow
-python examples/intermediate/blood_rheology.py           # Non-Newtonian blood models
-python examples/intermediate/cylindrical_coordinates.py  # Axisymmetric problems
-```
-
-### Advanced Examples
-```bash
-python examples/advanced/tumor_drug_delivery.py   # Multi-physics drug transport
-python examples/advanced/bioheat_cryotherapy.py   # Cryotherapy with tissue damage
-python examples/advanced/turing_patterns.py       # Gray-Scott reaction-diffusion
-```
-
-### Verification Scripts
-```bash
-python examples/verification/verify_diffusion.py       # Against analytical solution
-python examples/verification/verify_poiseuille.py      # Pipe flow validation
-python examples/verification/verify_taylor_couette.py  # Rotating cylinders
-python examples/verification/verify_viscoelastic.py    # Non-Newtonian validation
-```
-
-### Running All Examples
-
-```bash
-python run_examples.py
-```
-
-## API Overview
-
-### C++ “Problem + run” façade (least LoC)
-
-If you're using the C++ library directly, the façade API lets you run a conservative explicit solve without manually picking `dt`.
-
-```cpp
-#include <biotransport/solvers/explicit_fd.hpp>
-#include <biotransport/core/mesh/structured_mesh.hpp>
-
-using namespace biotransport;
-
-StructuredMesh mesh(200, 0.0, 1.0);
-
-std::vector<double> initial(mesh.numNodes(), 0.0);
-
-auto problem = DiffusionProblem(mesh)
-   .diffusivity(1e-2)
-   .initialCondition(initial)
-   .dirichlet(Boundary::Left, 0.0)
-   .dirichlet(Boundary::Right, 0.0);
-
-auto result = ExplicitFD().run(problem, /*t_end=*/0.1);
-
-// result.solution -> final field
-// result.stats.dt, result.stats.steps, result.stats.mass_rel_drift, ...
-```
-
-### Creating a Mesh
+## Quick Start
 
 ```python
-from biotransport import StructuredMesh
-
-# 1D mesh
-mesh_1d = StructuredMesh(100, 0.0, 1.0)  # 100 cells from x=0 to x=1
-
-# 2D mesh
-mesh_2d = StructuredMesh(50, 50, -1.0, 1.0, -1.0, 1.0)  # 50x50 cells
-```
-
-### Setting Up a Diffusion Simulation
-
-```python
-from biotransport import DiffusionSolver, x_nodes
+import biotransport as bt
 import numpy as np
 
-# Create mesh
-mesh = StructuredMesh(100, 0.0, 1.0)
+# Create a mesh
+mesh = bt.mesh_1d(100, x_min=0, x_max=1)
 
-# Set up diffusion solver
-D = 0.01  # diffusion coefficient
-solver = DiffusionSolver(mesh, D)
+# Define the problem
+problem = (
+    bt.Problem(mesh)
+    .diffusivity(0.01)
+    .initial_condition(bt.gaussian(mesh, center=0.5, width=0.05))
+    .dirichlet(bt.Boundary.Left, 0.0)
+    .dirichlet(bt.Boundary.Right, 0.0)
+)
 
-# Initial condition (Gaussian pulse)
-x = x_nodes(mesh)
-initial_condition = np.exp(-100 * (x - 0.5)**2)
-solver.set_initial_condition(initial_condition)
-
-# Set boundary conditions
-solver.set_dirichlet_boundary(0, 0.0)  # left boundary
-solver.set_dirichlet_boundary(1, 0.0)  # right boundary
-
-# Solve
-dt = 0.0001  # time step
-num_steps = 1000
-solver.solve(dt, num_steps)
-
-# Get solution
-solution = solver.solution()
+# Solve and visualize
+result = bt.solve(problem, t_end=0.5)
+bt.plot(mesh, result.solution(), title="Diffusion of a Gaussian Pulse")
 ```
 
-### Visualizing Results
+---
+
+## Installation
+
+### Option 1: pip (Recommended)
+
+```bash
+git clone https://github.com/ZoOtMcNoOt/biotransport.git
+cd biotransport
+pip install -e .
+```
+
+### Option 2: Docker
+
+```bash
+docker build -t biotransport:latest .
+docker run -it -v $(pwd):/biotransport biotransport:latest
+./dev.sh build && ./dev.sh install
+```
+
+### Option 3: Conda
+
+```bash
+conda env create -f environment.yml
+conda activate biotransport
+./dev.sh build && ./dev.sh install
+```
+
+### Prerequisites
+
+| Requirement | Version |
+|-------------|---------|
+| Python      | >= 3.9  |
+| CMake       | >= 3.13 |
+| C++ Compiler| C++17   |
+| NumPy       | any     |
+| Matplotlib  | any     |
+
+> **Windows Users**: Install Visual Studio Build Tools with the C++ workload.
+
+---
+
+## Architecture
+
+```
++===========================================================================+
+|                              PYTHON LAYER                                  |
+|   +-------+  +-------+  +-------+  +-------+  +-------+  +-------+        |
+|   | solve |  | plot  |  |mesh_1d|  |gaussian|  |adaptive|  | RK4  |       |
+|   +-------+  +-------+  +-------+  +-------+  +-------+  +-------+        |
+|                              |                                             |
+|                         pybind11                                           |
++===========================================================================+
+                               |
++===========================================================================+
+|                               C++ CORE                                     |
+|                                                                            |
+|   +-------------------+    +-------------------+    +-------------------+  |
+|   |   StructuredMesh  |    |   ExplicitFD      |    |  TransportProblem |  |
+|   |   CylindricalMesh |    |   CrankNicolson   |    |  (Fluent Builder) |  |
+|   +-------------------+    |   ADI Solvers     |    +-------------------+  |
+|                            |   Implicit        |                           |
+|   +-------------------+    +-------------------+    +-------------------+  |
+|   | Diffusion         |                             | Dimensionless Nos |  |
+|   | Advection-Diff    |    +-------------------+    | Analytical Solns  |  |
+|   | Reaction-Diff     |    | Stokes Flow       |    | Blood Rheology    |  |
+|   | Nernst-Planck     |    | Navier-Stokes     |    +-------------------+  |
+|   +-------------------+    | Darcy Flow        |                           |
+|                            +-------------------+                           |
++===========================================================================+
+```
+
+---
+
+## Module Reference
+
+### Core Simulation
+
+| Module | Description | Key Functions |
+|--------|-------------|---------------|
+| `Problem` | Fluent problem builder | `.diffusivity()`, `.velocity()`, `.reaction()`, `.dirichlet()`, `.neumann()` |
+| `solve` | One-line solver | `solve(problem, t_end)` |
+| `run` | Full control solver | `run(problem, t_end, dt, callbacks)` |
+| `mesh_1d`, `mesh_2d` | Mesh creation | `mesh_1d(nx, x_min, x_max)` |
+
+### Time Integration
+
+| Method | Order | Stability | Use Case |
+|--------|-------|-----------|----------|
+| `euler_step` | 1st | Conditional | Fast, simple problems |
+| `heun_step` | 2nd | Conditional | Moderate accuracy |
+| `rk4_step` | 4th | Conditional | High accuracy |
+| `RK4Integrator` | 4th | Automatic dt | Production simulations |
+| `AdaptiveTimeStepper` | Variable | Error-controlled | Stiff problems |
 
 ```python
-from biotransport import plot_field
+# High-order time integration
+result = bt.integrate(problem, t_end=1.0, method="rk4")
 
-# Plot the solution
-plot_field(
-   mesh,
-   solution,
-   title="Diffusion Result",
-   xlabel="Position",
-   ylabel="Concentration",
-)
+# Adaptive stepping with error control
+result = bt.solve_adaptive(problem, t_end=1.0, tol=1e-6)
 ```
-### Configuration Dataclasses
 
-For complex multi-physics simulations, use the configuration dataclasses to manage parameters:
+### Mass Transport Solvers
+
+```
++------------------+     +----------------------+     +------------------+
+|  DiffusionSolver |     | AdvectionDiffusion   |     | ReactionDiffusion|
+|------------------|     |----------------------|     |------------------|
+| - 1D, 2D, 3D     |     | - Upwind scheme      |     | - Linear         |
+| - Uniform D      |     | - Central difference |     | - Logistic       |
+| - Spatially-     |     | - Velocity fields    |     | - Michaelis-     |
+|   varying D      |     |                      |     |   Menten         |
++------------------+     +----------------------+     +------------------+
+         |                        |                          |
+         +------------------------+---------------------------+
+                                  |
+                    +---------------------------+
+                    | MembraneDiffusion1DSolver |
+                    |---------------------------|
+                    | - Partition coefficients  |
+                    | - Hindered transport      |
+                    | - Multi-layer membranes   |
+                    | - Renkin equation         |
+                    +---------------------------+
+```
+
+### Fluid Dynamics
+
+| Solver | Regime | Features |
+|--------|--------|----------|
+| `StokesSolver` | Creeping flow (Re << 1) | Incompressible, pressure-velocity coupling |
+| `NavierStokesSolver` | Inertial flow | Convection schemes, pressure projection |
+| `DarcyFlowSolver` | Porous media | Permeability fields, pressure BC |
+
+### Non-Newtonian Blood Rheology
+
+```python
+# Available viscosity models
+models = [
+    bt.NewtonianModel(mu=0.003),           # Constant viscosity
+    bt.PowerLawModel(K=0.017, n=0.708),    # Shear-thinning
+    bt.CarreauModel(mu_0=0.056, mu_inf=0.00345, lam=3.31, n=0.357),
+    bt.CassonModel(tau_y=0.005, k=0.004),  # Yield stress
+    bt.CrossModel(mu_0=0.056, mu_inf=0.00345, K=3.31, n=0.357),
+]
+
+# Built-in blood models
+casson = bt.blood_casson_model()
+carreau = bt.blood_carreau_model()
+```
+
+### Multi-Physics Applications
+
+```
++----------------------------------+     +----------------------------------+
+|     TumorDrugDeliverySolver      |     |     BioheatCryotherapySolver     |
+|----------------------------------|     |----------------------------------|
+|                                  |     |                                  |
+|  Pressure Field (IFP)            |     |  Pennes Bioheat Equation         |
+|         |                        |     |         |                        |
+|         v                        |     |         v                        |
+|  Velocity Field                  |     |  Phase Change (Freezing)         |
+|         |                        |     |         |                        |
+|         v                        |     |         v                        |
+|  Drug Concentration              |     |  Arrhenius Tissue Damage         |
+|                                  |     |                                  |
++----------------------------------+     +----------------------------------+
+```
 
 ```python
 from biotransport import TumorDrugDeliveryConfig, BioheatCryotherapyConfig
 
-# Create config with defaults or custom values
+# Configure with documented parameters
 config = TumorDrugDeliveryConfig(
-    domain_size=0.01,        # 10mm tissue region
     tumor_radius=0.003,      # 3mm tumor
-    D_drug_tumor=1e-11,      # Lower diffusivity in tumor
     IFP_tumor=25.0,          # Elevated interstitial pressure (mmHg)
+    D_drug_tumor=1e-11,      # Lower diffusivity in tumor
 )
 
-# View all parameters with units and descriptions
+# View all parameters with units
 print(config.describe())
-
-# Access derived quantities
-print(f"IFP in Pascals: {config.IFP_tumor_Pa:.1f}")
-print(f"Tumor area fraction: {config.tumor_area_fraction:.1%}")
 ```
 
-See the `python/biotransport/config/` module for complete parameter definitions with units and ranges.
-
-### Python “golden path” (least LoC)
-
-For problems that support the façade API (`*Problem` + `ExplicitFD`), you can use the
-top-level `run(...)` helper:
+### Electrochemical Transport (Nernst-Planck)
 
 ```python
-from biotransport import StructuredMesh, DiffusionProblem, Boundary, run, plot_field
-import numpy as np
+# Ion transport with electric field coupling
+from biotransport import IonSpecies, MultiIonSolver, ions, ghk
 
-mesh = StructuredMesh(200, 0.0, 1.0)
-initial = np.zeros(mesh.num_nodes(), dtype=np.float64)
+# Pre-defined ion species
+na = ions.sodium()    # Na+
+k = ions.potassium()  # K+
+cl = ions.chloride()  # Cl-
 
-problem = (
-   DiffusionProblem(mesh)
-   .diffusivity(1e-2)
-   .initial_condition(initial)
-   .dirichlet(Boundary.Left, 0.0)
-   .dirichlet(Boundary.Right, 0.0)
-)
-
-result = run(problem, t_end=0.1)
-plot_field(mesh, result.solution(), title="Diffusion (façade)")
+# Goldman-Hodgkin-Katz equation
+V_m = ghk.membrane_potential([na, k, cl], P_Na=1, P_K=1, P_Cl=0.45)
 ```
 
-## Troubleshooting
+### Pattern Formation
 
-### Python Version Mismatch
-
-If you see an error like:
+```python
+# Gray-Scott reaction-diffusion (Turing patterns)
+solver = bt.GrayScottSolver(mesh, Du=0.16, Dv=0.08, F=0.035, k=0.065)
+result = solver.run(t_end=10000, dt=1.0)
 ```
-ImportError: Python version mismatch: module was compiled for Python 3.12, but the interpreter version is incompatible: 3.9.21
+
+### Multi-Species Dynamics
+
+```python
+# Epidemic models
+sir = bt.SIRReaction(beta=0.3, gamma=0.1)
+seir = bt.SEIRReaction(beta=0.3, sigma=0.2, gamma=0.1)
+
+# Ecological models  
+predator_prey = bt.LotkaVolterraReaction(alpha=1.0, beta=0.1, gamma=0.1, delta=0.1)
+
+# Biochemical reactions
+brusselator = bt.BrusselatorReaction(a=1.0, b=3.0)
+enzyme = bt.EnzymeCascadeReaction(k1=1.0, k2=0.5, k3=0.1)
 ```
 
-Solutions:
-1. Make sure your conda environment is active
-2. Rebuild the project with the correct Python version:
-   ```bash
-   rm -rf build/
-   ./dev.sh build
-   ./dev.sh install
-   ```
+---
 
-### Windows build issues
+## Educational Utilities (BMEN 341)
 
-- If compilation fails, confirm you have the MSVC compiler installed (Visual Studio / Build Tools) and that `cmake` can find it.
-- Platform-specific compiled artifacts (like `.so`/`.pyd`) should not be committed to the repo.
+### Dimensionless Numbers
 
-### Docker Issues
+```python
+from biotransport import dimensionless
 
-If you encounter issues with Docker:
-1. Ensure Docker is running
-2. Try rebuilding the Docker image:
-   ```bash
-   docker build --no-cache -t biotransport:latest .
-   ```
-3. For CLion integration issues, make sure GDB is installed in your Docker image:
-   ```bash
-   docker run -it --name gdb-install biotransport:latest bash
-   apt-get update && apt-get install -y gdb
-   exit
-   docker commit gdb-install biotransport:latest
-   docker rm gdb-install
-   ```
+Re = dimensionless.reynolds(rho=1000, v=0.1, L=0.01, mu=0.001)    # = 1000
+Sc = dimensionless.schmidt(mu=0.001, rho=1000, D=1e-9)            # = 1000
+Pe = dimensionless.peclet(v=0.001, L=0.01, D=1e-9)                # = 10000
+Da = dimensionless.damkohler(k=0.1, L=0.01, D=1e-9)               # = 1e7
+Bi = dimensionless.biot(h=100, L=0.01, k=0.5)                     # = 2.0
+```
+
+### Analytical Solutions
+
+```python
+from biotransport import analytical
+
+# Semi-infinite diffusion
+c = analytical.semi_infinite_diffusion(x=0.001, t=100, D=1e-9, c0=1.0)
+
+# Poiseuille flow
+v = analytical.poiseuille_velocity(r=0.001, R=0.005, dp_dx=1000, mu=0.001)
+
+# Taylor-Couette flow  
+v_theta = analytical.taylor_couette(r, R1=0.01, R2=0.02, omega1=10, omega2=0)
+```
+
+---
+
+## Visualization
+
+```python
+# Simple plotting
+bt.plot(mesh, solution, title="My Simulation")
+
+# 1D with custom options
+bt.plot_1d(mesh, solution, xlabel="Position (m)", ylabel="Concentration (mol/L)")
+
+# 2D with colorbar
+bt.plot_2d(mesh, solution, cmap="viridis", colorbar=True)
+
+# 3D surface
+bt.plot_2d_surface(mesh, solution, elevation=30, azimuth=45)
+```
+
+### VTK Export for ParaView
+
+```python
+# Single timestep
+bt.write_vtk(mesh, {"concentration": c, "velocity": v}, "output.vtk")
+
+# Time series
+bt.write_vtk_series(mesh, snapshots, times, "simulation", "results/")
+```
+
+---
+
+## Examples
+
+### Basic
+
+| Example | Description |
+|---------|-------------|
+| `1d_diffusion.py` | Simple diffusion with Gaussian IC |
+| `heat_conduction.py` | 2D heat equation |
+
+### Intermediate
+
+| Example | Description |
+|---------|-------------|
+| `membrane_diffusion.py` | Transient membrane transport |
+| `steady_membrane_diffusion.py` | Steady-state with partitioning |
+| `oxygen_diffusion.py` | O2 consumption in tissue |
+| `drug_diffusion_2d.py` | 2D drug release |
+| `advection_diffusion.py` | Convection-diffusion |
+| `darcy_flow.py` | Porous media flow |
+| `stokes_flow.py` | Creeping viscous flow |
+| `navier_stokes_flow.py` | Inertial viscous flow |
+| `blood_rheology.py` | Non-Newtonian blood models |
+| `cylindrical_coordinates.py` | Axisymmetric problems |
+| `time_integration_methods.py` | Euler vs Heun vs RK4 |
+
+### Advanced
+
+| Example | Description |
+|---------|-------------|
+| `tumor_drug_delivery.py` | Multi-physics drug transport |
+| `bioheat_cryotherapy.py` | Cryotherapy with tissue damage |
+| `turing_patterns.py` | Gray-Scott reaction-diffusion |
+
+### Verification
+
+| Example | Description |
+|---------|-------------|
+| `verify_diffusion.py` | Analytical solution comparison |
+| `verify_poiseuille.py` | Pipe flow validation |
+| `verify_taylor_couette.py` | Rotating cylinders |
+| `verify_viscoelastic.py` | Non-Newtonian validation |
+
+```bash
+# Run all examples
+python run_examples.py
+```
+
+---
 
 ## Project Structure
 
 ```
 biotransport/
-├── cpp/                    # C++ core library
-│   ├── include/biotransport/
-│   │   ├── core/          # Mesh, numerics, analytical solutions
-│   │   ├── physics/       # Fluid dynamics, mass transport, heat transfer
-│   │   └── solvers/       # Diffusion, advection-diffusion, explicit FD
-│   ├── src/               # Implementation files
-│   ├── tests/             # C++ unit tests (Google Test)
-│   └── benchmarks/        # Performance benchmarks
-├── python/
-│   ├── bindings/          # pybind11 bindings
-│   ├── biotransport/      # Python package
-│   │   ├── config/        # Configuration dataclasses
-│   │   ├── visualization.py
-│   │   └── ...
-│   └── tests/             # Python tests (pytest)
-├── examples/
-│   ├── basic/             # Introductory examples
-│   ├── intermediate/      # Standard physics problems
-│   ├── advanced/          # Multi-physics simulations
-│   └── verification/      # Validation against analytical solutions
-└── results/               # Output directory for simulations
+|
++-- cpp/                          # C++ core library
+|   +-- include/biotransport/
+|   |   +-- core/                 # Mesh, numerics, analytical solutions
+|   |   +-- physics/              # Fluid dynamics, mass transport, heat transfer
+|   |   +-- solvers/              # Diffusion, advection-diffusion, explicit FD
+|   +-- src/                      # Implementation files
+|   +-- tests/                    # C++ unit tests (Google Test)
+|   +-- benchmarks/               # Performance benchmarks
+|
++-- python/
+|   +-- bindings/                 # pybind11 bindings
+|   +-- biotransport/             # Python package
+|   |   +-- config/               # Configuration dataclasses
+|   |   +-- adaptive.py           # Adaptive time-stepping
+|   |   +-- convergence.py        # Grid convergence studies
+|   |   +-- time_integrators.py   # RK4, Heun, Euler
+|   |   +-- visualization.py      # Plotting utilities
+|   |   +-- vtk_export.py         # VTK file output
+|   +-- tests/                    # Python tests (pytest)
+|
++-- examples/
+|   +-- basic/                    # Introductory examples
+|   +-- intermediate/             # Standard physics problems
+|   +-- advanced/                 # Multi-physics simulations
+|   +-- verification/             # Validation against analytical solutions
+|
++-- docs/
+|   +-- notes/                    # Development notes, gap analysis
+|
++-- results/                      # Output directory for simulations
 ```
 
-### Results Directory Behavior
+---
 
-Python examples write output to a `results/` folder. The location is chosen by this precedence:
+## API Cheatsheet
 
-1. **`BIOTRANSPORT_RESULTS_DIR`** environment variable (if set)
-2. **`base_dir`** argument passed to `get_result_path(...)`
-3. **Repo-root auto-detection** (walks up from script looking for `pyproject.toml`)
-4. **Current working directory** as fallback
+```python
+import biotransport as bt
+import numpy as np
 
-Set the environment variable for a predictable location when running from any CWD.
+# ---------------------------------------------------------------------------
+#                              MESH CREATION
+# ---------------------------------------------------------------------------
+mesh = bt.mesh_1d(100, 0, 1)                    # 1D: 100 nodes, [0, 1]
+mesh = bt.mesh_2d(50, 50, 0, 1, 0, 1)           # 2D: 50x50, [0,1] x [0,1]
+mesh = bt.StructuredMesh(100, 0.0, 1.0)         # Alternative 1D
+mesh = bt.StructuredMesh(50, 50, 0, 1, 0, 1)    # Alternative 2D
+mesh = bt.CylindricalMesh(50, 50, 0, R, 0, L)   # Cylindrical (r, z)
+
+# ---------------------------------------------------------------------------
+#                           PROBLEM DEFINITION
+# ---------------------------------------------------------------------------
+problem = (
+    bt.Problem(mesh)
+    .diffusivity(D)                             # Scalar or array
+    .velocity(vx, vy)                           # For advection
+    .reaction(rate)                             # Reaction term
+    .initial_condition(u0)                      # Array or helper
+    .dirichlet(bt.Boundary.Left, value)         # Fixed value BC
+    .neumann(bt.Boundary.Right, flux)           # Fixed flux BC
+)
+
+# ---------------------------------------------------------------------------
+#                              SOLVING
+# ---------------------------------------------------------------------------
+result = bt.solve(problem, t_end=1.0)           # Simplest
+result = bt.run(problem, t_end=1.0, dt=0.001)   # With dt control
+result = bt.integrate(problem, 1.0, method="rk4")  # Higher-order
+result = bt.solve_adaptive(problem, 1.0, tol=1e-6) # Adaptive
+
+# ---------------------------------------------------------------------------
+#                            VISUALIZATION
+# ---------------------------------------------------------------------------
+bt.plot(mesh, result.solution())                # Auto 1D/2D
+bt.plot_1d(mesh, solution)                      # Force 1D
+bt.plot_2d(mesh, solution, cmap="hot")          # Force 2D
+bt.write_vtk(mesh, {"u": solution}, "out.vtk")  # ParaView export
+```
+
+---
+
+## Testing
+
+```bash
+# Run all Python tests
+python -m pytest python/tests/ -v
+
+# Run with coverage
+python -m pytest python/tests/ --cov=biotransport --cov-report=html
+
+# Run C++ tests
+cd build && ctest --output-on-failure
+```
+
+**Current Status**: 293 tests passing
+
+---
+
+## Troubleshooting
+
+### Python Version Mismatch
+
+```
+ImportError: module was compiled for Python 3.12, but interpreter is 3.9
+```
+
+**Solution**: Rebuild with the correct Python version:
+```bash
+rm -rf build/
+pip install -e .
+```
+
+### Windows Build Issues
+
+- Ensure Visual Studio Build Tools with C++ workload is installed
+- Verify CMake can find the MSVC compiler
+
+### Docker Issues
+
+```bash
+# Rebuild without cache
+docker build --no-cache -t biotransport:latest .
+
+# Install GDB for debugging
+docker run -it --name fix biotransport:latest bash -c "apt-get update && apt-get install -y gdb"
+docker commit fix biotransport:latest
+docker rm fix
+```
+
+---
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+See [docs/notes/GAP_ANALYSIS.md](docs/notes/GAP_ANALYSIS.md) for current development priorities and the project roadmap.
+
+---
 
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
 
-## Contributing
+---
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+<div align="center">
+
+```
+    +-----------------------------------------------------------+
+    |                                                           |
+    |     "The purpose of computation is insight, not numbers"  |
+    |                                                           |
+    |                              - Richard Hamming            |
+    |                                                           |
+    +-----------------------------------------------------------+
+```
+
+**Built for Texas A&M University BMEN 341**
+
+*Computational Methods in Biomedical Engineering*
+
+</div>
