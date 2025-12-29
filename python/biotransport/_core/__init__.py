@@ -48,6 +48,8 @@ from ._core import (
     SolverStats,
     StructuredMesh,
     StructuredMesh3D,
+    # Higher-order finite difference stencils
+    StencilOps,
     # Advection-diffusion (Phase 2)
     AdvectionScheme,
     AdvectionDiffusionSolver,
@@ -153,6 +155,8 @@ __all__ = [
     "BioheatCryotherapySolver",
     "BioheatSaved",
     "SolverStats",
+    # Higher-order finite difference stencils
+    "StencilOps",
     "AdvectionScheme",
     "AdvectionDiffusionSolver",
     "DarcyFlowResult",

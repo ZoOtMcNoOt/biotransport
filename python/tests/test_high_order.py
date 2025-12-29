@@ -38,11 +38,11 @@ class TestLaplacianStencils:
         """4th-order Laplacian is exact for up to 4th-degree polynomials."""
         # u = x⁴ has d²u/dx² = 12x²
         n = 20
+        mesh = bt.mesh_1d(n, 0, 1)
         x = np.linspace(0, 1, n + 1)
-        dx = 1.0 / n
         u = x**4
 
-        lap = laplacian_4th_order(u, dx)
+        lap = laplacian_4th_order(mesh, u)
         exact = 12 * x**2
 
         # Should be exact (within roundoff) for interior points with full stencil
@@ -53,11 +53,11 @@ class TestLaplacianStencils:
         """6th-order Laplacian is exact for up to 6th-degree polynomials."""
         # u = x⁶ has d²u/dx² = 30x⁴
         n = 30
+        mesh = bt.mesh_1d(n, 0, 1)
         x = np.linspace(0, 1, n + 1)
-        dx = 1.0 / n
         u = x**6
 
-        lap = laplacian_6th_order(u, dx)
+        lap = laplacian_6th_order(mesh, u)
         exact = 30 * x**4
 
         # Should be exact for deep interior points with full stencil
@@ -69,12 +69,12 @@ class TestLaplacianStencils:
         # u = sin(2πx) has d²u/dx² = -4π² sin(2πx)
         errors = []
         for n in [20, 40, 80]:
+            mesh = bt.mesh_1d(n, 0, 1)
             x = np.linspace(0, 1, n + 1)
-            dx = 1.0 / n
             u = np.sin(2 * np.pi * x)
             exact = -((2 * np.pi) ** 2) * np.sin(2 * np.pi * x)
 
-            lap = laplacian_4th_order(u, dx)
+            lap = laplacian_4th_order(mesh, u)
 
             # Compute error in interior (skip boundary cells)
             error = np.max(np.abs(lap[2:-2] - exact[2:-2]))
@@ -115,11 +115,11 @@ class TestGradientStencils:
         """4th-order gradient is exact for cubic functions."""
         # u = x³ has du/dx = 3x²
         n = 20
+        mesh = bt.mesh_1d(n, 0, 1)
         x = np.linspace(0, 1, n + 1)
-        dx = 1.0 / n
         u = x**3
 
-        grad = gradient_4th_order(u, dx)
+        grad = gradient_4th_order(mesh, u)
         exact = 3 * x**2
 
         # Should be exact for interior points
@@ -130,12 +130,12 @@ class TestGradientStencils:
         """4th-order gradient converges with O(dx⁴)."""
         errors = []
         for n in [20, 40, 80]:
+            mesh = bt.mesh_1d(n, 0, 1)
             x = np.linspace(0, 1, n + 1)
-            dx = 1.0 / n
             u = np.sin(2 * np.pi * x)
             exact = 2 * np.pi * np.cos(2 * np.pi * x)
 
-            grad = gradient_4th_order(u, dx)
+            grad = gradient_4th_order(mesh, u)
             error = np.max(np.abs(grad[2:-2] - exact[2:-2]))
             errors.append(error)
 
@@ -265,7 +265,7 @@ class TestHighOrderDiffusionSolver:
 
         # Compute with 2nd and 4th order
         lap2 = laplacian_2nd_order(u, dx)
-        lap4 = laplacian_4th_order(u, dx)
+        lap4 = laplacian_4th_order(mesh, u)
 
         # Compute errors in interior (skip boundary cells)
         error2 = np.max(np.abs(lap2[2:-2] - exact_laplacian[2:-2]))
@@ -305,8 +305,8 @@ class TestVerifyOrderOfAccuracy:
         """Verification correctly identifies 4th-order scheme."""
 
         def factory(n):
-            dx = 1.0 / n
-            return lambda u: laplacian_4th_order(u, dx)
+            mesh = bt.mesh_1d(n, 0, 1)
+            return lambda u: laplacian_4th_order(mesh, u)
 
         def exact_solution(x):
             return np.sin(2 * np.pi * x)
@@ -342,14 +342,16 @@ class TestLaplacian2D:
         """4th-order 2D Laplacian handles quartic functions."""
         # u = x⁴ + y⁴ has ∇²u = 12x² + 12y²
         nx, ny = 20, 20
-        dx, dy = 0.05, 0.05
+        mesh = bt.mesh_2d(nx, ny, 0, 1, 0, 1)
         x = np.linspace(0, 1, nx + 1)
         y = np.linspace(0, 1, ny + 1)
         X, Y = np.meshgrid(x, y)
         u = X**4 + Y**4
         exact = 12 * X**2 + 12 * Y**2
 
-        lap = laplacian_4th_order(u, dx, dy)
+        lap = laplacian_4th_order(mesh, u)
+        # Reshape result to 2D for comparison
+        lap = lap.reshape((ny + 1, nx + 1))
 
         # Check interior points with full stencil
         assert lap[10, 10] == pytest.approx(exact[10, 10], rel=1e-6)

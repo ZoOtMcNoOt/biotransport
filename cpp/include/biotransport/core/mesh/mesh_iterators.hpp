@@ -241,6 +241,11 @@ private:
  *
  * Provides unified Laplacian, gradient, and other stencil operations
  * that work for both 1D and 2D meshes.
+ *
+ * Supports 2nd-order, 4th-order, and 6th-order accurate discretizations:
+ * - 2nd-order: 3-point stencil, O(dx²) error
+ * - 4th-order: 5-point stencil, O(dx⁴) error
+ * - 6th-order: 7-point stencil, O(dx⁶) error (1D only)
  */
 class StencilOps {
 public:
@@ -250,6 +255,11 @@ public:
           inv_dy2_(mesh.is1D() ? 0.0 : 1.0 / (mesh.dy() * mesh.dy())),
           inv_2dx_(1.0 / (2.0 * mesh.dx())),
           inv_2dy_(mesh.is1D() ? 0.0 : 1.0 / (2.0 * mesh.dy())),
+          inv_12dx2_(1.0 / (12.0 * mesh.dx() * mesh.dx())),
+          inv_12dy2_(mesh.is1D() ? 0.0 : 1.0 / (12.0 * mesh.dy() * mesh.dy())),
+          inv_180dx2_(1.0 / (180.0 * mesh.dx() * mesh.dx())),
+          inv_12dx_(1.0 / (12.0 * mesh.dx())),
+          inv_12dy_(mesh.is1D() ? 0.0 : 1.0 / (12.0 * mesh.dy())),
           stride_(mesh.nx() + 1) {}
 
     /**
@@ -267,6 +277,51 @@ public:
             lap += (u[idx + stride_] - 2.0 * u[idx] + u[idx - stride_]) * inv_dy2_;
         }
         return lap;
+    }
+
+    /**
+     * @brief Compute the 4th-order accurate discrete Laplacian at a node.
+     *
+     * d²u/dx² ≈ (-u[i+2] + 16*u[i+1] - 30*u[i] + 16*u[i-1] - u[i-2]) / (12*dx²)
+     *
+     * Truncation error: O(dx⁴)
+     *
+     * Note: Requires at least 2 nodes of padding on each side.
+     *
+     * @param u Solution vector
+     * @param idx Node index
+     * @return 4th-order Laplacian value
+     */
+    double laplacian4thOrder(const std::vector<double>& u, int idx) const {
+        double lap =
+            (-u[idx + 2] + 16.0 * u[idx + 1] - 30.0 * u[idx] + 16.0 * u[idx - 1] - u[idx - 2]) *
+            inv_12dx2_;
+        if (!mesh_.is1D()) {
+            lap += (-u[idx + 2 * stride_] + 16.0 * u[idx + stride_] - 30.0 * u[idx] +
+                    16.0 * u[idx - stride_] - u[idx - 2 * stride_]) *
+                   inv_12dy2_;
+        }
+        return lap;
+    }
+
+    /**
+     * @brief Compute the 6th-order accurate discrete Laplacian at a node (1D only).
+     *
+     * d²u/dx² ≈ (2*u[i+3] - 27*u[i+2] + 270*u[i+1] - 490*u[i]
+     *           + 270*u[i-1] - 27*u[i-2] + 2*u[i-3]) / (180*dx²)
+     *
+     * Truncation error: O(dx⁶)
+     *
+     * Note: Only implemented for 1D meshes. Requires at least 3 nodes padding.
+     *
+     * @param u Solution vector
+     * @param idx Node index
+     * @return 6th-order Laplacian value
+     */
+    double laplacian6thOrder(const std::vector<double>& u, int idx) const {
+        return (2.0 * u[idx + 3] - 27.0 * u[idx + 2] + 270.0 * u[idx + 1] - 490.0 * u[idx] +
+                270.0 * u[idx - 1] - 27.0 * u[idx - 2] + 2.0 * u[idx - 3]) *
+               inv_180dx2_;
     }
 
     /**
@@ -344,6 +399,40 @@ public:
     }
 
     /**
+     * @brief Compute 4th-order x-gradient at a node.
+     *
+     * du/dx ≈ (-u[i+2] + 8*u[i+1] - 8*u[i-1] + u[i-2]) / (12*dx)
+     *
+     * Truncation error: O(dx⁴)
+     *
+     * @param u Solution vector
+     * @param idx Node index
+     * @return 4th-order du/dx
+     */
+    double gradX4thOrder(const std::vector<double>& u, int idx) const {
+        return (-u[idx + 2] + 8.0 * u[idx + 1] - 8.0 * u[idx - 1] + u[idx - 2]) * inv_12dx_;
+    }
+
+    /**
+     * @brief Compute 4th-order y-gradient at a node.
+     *
+     * du/dy ≈ (-u[j+2] + 8*u[j+1] - 8*u[j-1] + u[j-2]) / (12*dy)
+     *
+     * Truncation error: O(dx⁴)
+     *
+     * @param u Solution vector
+     * @param idx Node index
+     * @return 4th-order du/dy (0 for 1D)
+     */
+    double gradY4thOrder(const std::vector<double>& u, int idx) const {
+        if (mesh_.is1D())
+            return 0.0;
+        return (-u[idx + 2 * stride_] + 8.0 * u[idx + stride_] - 8.0 * u[idx - stride_] +
+                u[idx - 2 * stride_]) *
+               inv_12dy_;
+    }
+
+    /**
      * @brief Compute upwind derivative in x-direction.
      *
      * @param u Solution vector
@@ -377,9 +466,160 @@ public:
         }
     }
 
+    // =========================================================================
+    // Bulk Array Operations
+    // =========================================================================
+
+    /**
+     * @brief Apply 4th-order Laplacian to entire 1D array.
+     *
+     * Uses 4th-order stencil in interior, falls back to 2nd-order at boundaries.
+     *
+     * @param u Input array
+     * @return Laplacian output array
+     */
+    std::vector<double> laplacian4thOrderBulk1D(const std::vector<double>& u) const {
+        const int n = static_cast<int>(u.size());
+        std::vector<double> lap(n, 0.0);
+
+        // 4th-order interior (needs i-2 to i+2)
+        for (int i = 2; i < n - 2; ++i) {
+            lap[i] = (-u[i + 2] + 16.0 * u[i + 1] - 30.0 * u[i] + 16.0 * u[i - 1] - u[i - 2]) *
+                     inv_12dx2_;
+        }
+
+        // 2nd-order at boundaries
+        if (n > 2) {
+            lap[1] = (u[2] - 2.0 * u[1] + u[0]) * inv_dx2_;
+            lap[n - 2] = (u[n - 1] - 2.0 * u[n - 2] + u[n - 3]) * inv_dx2_;
+        }
+
+        return lap;
+    }
+
+    /**
+     * @brief Apply 6th-order Laplacian to entire 1D array.
+     *
+     * Uses 6th-order in deep interior, 4th-order in transition, 2nd-order near boundary.
+     *
+     * @param u Input array
+     * @return Laplacian output array
+     */
+    std::vector<double> laplacian6thOrderBulk1D(const std::vector<double>& u) const {
+        const int n = static_cast<int>(u.size());
+        std::vector<double> lap(n, 0.0);
+
+        // 6th-order deep interior (needs i-3 to i+3)
+        for (int i = 3; i < n - 3; ++i) {
+            lap[i] = (2.0 * u[i + 3] - 27.0 * u[i + 2] + 270.0 * u[i + 1] - 490.0 * u[i] +
+                      270.0 * u[i - 1] - 27.0 * u[i - 2] + 2.0 * u[i - 3]) *
+                     inv_180dx2_;
+        }
+
+        // 4th-order at i=2 and i=n-3
+        if (n > 4) {
+            for (int i : {2, n - 3}) {
+                if (i >= 2 && i <= n - 3) {
+                    lap[i] =
+                        (-u[i + 2] + 16.0 * u[i + 1] - 30.0 * u[i] + 16.0 * u[i - 1] - u[i - 2]) *
+                        inv_12dx2_;
+                }
+            }
+        }
+
+        // 2nd-order at i=1 and i=n-2
+        if (n > 2) {
+            lap[1] = (u[2] - 2.0 * u[1] + u[0]) * inv_dx2_;
+            lap[n - 2] = (u[n - 1] - 2.0 * u[n - 2] + u[n - 3]) * inv_dx2_;
+        }
+
+        return lap;
+    }
+
+    /**
+     * @brief Apply 4th-order Laplacian to entire 2D array (row-major).
+     *
+     * Uses 4th-order stencil in interior, falls back to 2nd-order near boundaries.
+     *
+     * @param u Input array (row-major, size = (ny+1) * (nx+1))
+     * @return Laplacian output array
+     */
+    std::vector<double> laplacian4thOrderBulk2D(const std::vector<double>& u) const {
+        const int nx = mesh_.nx();
+        const int ny = mesh_.ny();
+        std::vector<double> lap(u.size(), 0.0);
+
+        // 4th-order interior (needs 2-cell padding)
+#ifdef BIOTRANSPORT_ENABLE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (int j = 2; j < ny - 1; ++j) {
+            for (int i = 2; i < nx - 1; ++i) {
+                const int idx = j * stride_ + i;
+                const double lap_x = (-u[idx + 2] + 16.0 * u[idx + 1] - 30.0 * u[idx] +
+                                      16.0 * u[idx - 1] - u[idx - 2]) *
+                                     inv_12dx2_;
+                const double lap_y =
+                    (-u[idx + 2 * stride_] + 16.0 * u[idx + stride_] - 30.0 * u[idx] +
+                     16.0 * u[idx - stride_] - u[idx - 2 * stride_]) *
+                    inv_12dy2_;
+                lap[idx] = lap_x + lap_y;
+            }
+        }
+
+        // 2nd-order in transition zone (1 cell from boundary)
+        // j=1 and j=ny-1 rows
+        for (int j : {1, ny - 1}) {
+            for (int i = 1; i < nx; ++i) {
+                const int idx = j * stride_ + i;
+                lap[idx] = (u[idx + 1] - 2.0 * u[idx] + u[idx - 1]) * inv_dx2_ +
+                           (u[idx + stride_] - 2.0 * u[idx] + u[idx - stride_]) * inv_dy2_;
+            }
+        }
+        // i=1 and i=nx-1 columns (excluding corners already done)
+        for (int i : {1, nx - 1}) {
+            for (int j = 2; j < ny - 1; ++j) {
+                const int idx = j * stride_ + i;
+                lap[idx] = (u[idx + 1] - 2.0 * u[idx] + u[idx - 1]) * inv_dx2_ +
+                           (u[idx + stride_] - 2.0 * u[idx] + u[idx - stride_]) * inv_dy2_;
+            }
+        }
+
+        return lap;
+    }
+
+    /**
+     * @brief Apply 4th-order gradient to entire 1D array.
+     *
+     * Uses 4th-order stencil in interior, falls back to 2nd-order at boundaries.
+     *
+     * @param u Input array
+     * @return Gradient output array
+     */
+    std::vector<double> gradient4thOrderBulk1D(const std::vector<double>& u) const {
+        const int n = static_cast<int>(u.size());
+        std::vector<double> grad(n, 0.0);
+
+        // 4th-order interior (needs i-2 to i+2)
+        for (int i = 2; i < n - 2; ++i) {
+            grad[i] = (-u[i + 2] + 8.0 * u[i + 1] - 8.0 * u[i - 1] + u[i - 2]) * inv_12dx_;
+        }
+
+        // 2nd-order at boundaries
+        if (n > 2) {
+            grad[1] = (u[2] - u[0]) * inv_2dx_;
+            grad[n - 2] = (u[n - 1] - u[n - 3]) * inv_2dx_;
+        }
+
+        return grad;
+    }
+
     // Accessor for precomputed values
     double invDx2() const { return inv_dx2_; }
     double invDy2() const { return inv_dy2_; }
+    double inv12Dx2() const { return inv_12dx2_; }
+    double inv12Dy2() const { return inv_12dy2_; }
+    double inv180Dx2() const { return inv_180dx2_; }
     int stride() const { return stride_; }
 
 private:
@@ -388,6 +628,11 @@ private:
     double inv_dy2_;
     double inv_2dx_;
     double inv_2dy_;
+    double inv_12dx2_;   ///< 1/(12*dx²) for 4th-order Laplacian
+    double inv_12dy2_;   ///< 1/(12*dy²) for 4th-order Laplacian
+    double inv_180dx2_;  ///< 1/(180*dx²) for 6th-order Laplacian
+    double inv_12dx_;    ///< 1/(12*dx) for 4th-order gradient
+    double inv_12dy_;    ///< 1/(12*dy) for 4th-order gradient
     int stride_;
 };
 

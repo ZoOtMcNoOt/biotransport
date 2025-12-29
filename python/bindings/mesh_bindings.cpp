@@ -13,6 +13,7 @@
 #include "binding_helpers.hpp"
 #include <biotransport/core/boundary.hpp>
 #include <biotransport/core/mesh/cylindrical_mesh.hpp>
+#include <biotransport/core/mesh/mesh_iterators.hpp>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/core/mesh/structured_mesh_3d.hpp>
 #include <cmath>
@@ -178,6 +179,66 @@ void register_mesh_bindings(py::module_& m) {
             [](const CylindricalMesh& mesh, const std::vector<double>& vr,
                const std::vector<double>& vz) { return copy_to_numpy(mesh.divergence(vr, vz)); },
             py::arg("vr"), py::arg("vz"));
+
+    // =========================================================================
+    // StencilOps - Higher-order finite difference stencils
+    // =========================================================================
+    py::class_<StencilOps>(m, "StencilOps",
+                           "Finite difference stencil operations on structured meshes.")
+        .def(py::init<const StructuredMesh&>(), py::arg("mesh"),
+             "Create stencil operator for the given mesh.")
+        // 2nd-order (existing)
+        .def("laplacian", &StencilOps::laplacian, py::arg("u"), py::arg("idx"),
+             "Compute 2nd-order Laplacian at node idx.")
+        // 4th-order
+        .def("laplacian_4th_order", &StencilOps::laplacian4thOrder, py::arg("u"), py::arg("idx"),
+             "Compute 4th-order Laplacian at node idx. Requires 2-node padding.")
+        // 6th-order (1D only)
+        .def("laplacian_6th_order", &StencilOps::laplacian6thOrder, py::arg("u"), py::arg("idx"),
+             "Compute 6th-order Laplacian at node idx (1D only). Requires 3-node padding.")
+        // Gradients
+        .def("grad_x", &StencilOps::gradX, py::arg("u"), py::arg("idx"),
+             "Compute 2nd-order x-gradient at node idx.")
+        .def("grad_y", &StencilOps::gradY, py::arg("u"), py::arg("idx"),
+             "Compute 2nd-order y-gradient at node idx.")
+        .def("grad_x_4th_order", &StencilOps::gradX4thOrder, py::arg("u"), py::arg("idx"),
+             "Compute 4th-order x-gradient at node idx.")
+        .def("grad_y_4th_order", &StencilOps::gradY4thOrder, py::arg("u"), py::arg("idx"),
+             "Compute 4th-order y-gradient at node idx.")
+        // Bulk operations (1D)
+        .def(
+            "laplacian_4th_order_bulk_1d",
+            [](const StencilOps& ops, const std::vector<double>& u) {
+                return copy_to_numpy(ops.laplacian4thOrderBulk1D(u));
+            },
+            py::arg("u"), "Apply 4th-order Laplacian to entire 1D array. Returns numpy array.")
+        .def(
+            "laplacian_6th_order_bulk_1d",
+            [](const StencilOps& ops, const std::vector<double>& u) {
+                return copy_to_numpy(ops.laplacian6thOrderBulk1D(u));
+            },
+            py::arg("u"), "Apply 6th-order Laplacian to entire 1D array. Returns numpy array.")
+        // Bulk operations (2D)
+        .def(
+            "laplacian_4th_order_bulk_2d",
+            [](const StencilOps& ops, const std::vector<double>& u) {
+                return copy_to_numpy(ops.laplacian4thOrderBulk2D(u));
+            },
+            py::arg("u"),
+            "Apply 4th-order Laplacian to entire 2D array (row-major). Returns numpy array.")
+        // Bulk gradient (1D)
+        .def(
+            "gradient_4th_order_bulk_1d",
+            [](const StencilOps& ops, const std::vector<double>& u) {
+                return copy_to_numpy(ops.gradient4thOrderBulk1D(u));
+            },
+            py::arg("u"), "Apply 4th-order gradient to entire 1D array. Returns numpy array.")
+        // Accessors
+        .def("inv_dx2", &StencilOps::invDx2, "Get precomputed 1/dx².")
+        .def("inv_dy2", &StencilOps::invDy2, "Get precomputed 1/dy².")
+        .def("inv_12_dx2", &StencilOps::inv12Dx2, "Get precomputed 1/(12*dx²).")
+        .def("inv_12_dy2", &StencilOps::inv12Dy2, "Get precomputed 1/(12*dy²).")
+        .def("stride", &StencilOps::stride, "Get row stride for 2D indexing.");
 }
 
 }  // namespace bindings
