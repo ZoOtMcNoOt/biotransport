@@ -564,6 +564,6 @@ This project is licensed under the [MIT License](LICENSE).
 
 **Built for Texas A&M University BMEN 341**
 
-*Computational Methods in Biomedical Engineering*
+*Biotransport*
 
 </div>
