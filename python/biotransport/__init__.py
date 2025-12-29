@@ -172,6 +172,28 @@ from .convergence import (
     plot_convergence,
 )
 
+# Pulsatile (time-varying) boundary conditions
+from .pulsatile import (
+    PulsatileBC,
+    ConstantBC,
+    SinusoidalBC,
+    RampBC,
+    StepBC,
+    SquareWaveBC,
+    CustomBC,
+    ArterialPressureBC,
+    VenousPressureBC,
+    CardiacOutputBC,
+    RespiratoryBC,
+    DrugInfusionBC,
+    CompositeBC,
+    PulsatileResult,
+    solve_pulsatile,
+    heart_rate_to_period,
+    period_to_heart_rate,
+    sample_waveform,
+)
+
 # ============================================================================
 # User-friendly aliases
 # ============================================================================
@@ -235,6 +257,25 @@ __all__ = [
     "run_convergence_study",
     "temporal_convergence_study",
     "plot_convergence",
+    # ========== Pulsatile boundary conditions ==========
+    "PulsatileBC",
+    "ConstantBC",
+    "SinusoidalBC",
+    "RampBC",
+    "StepBC",
+    "SquareWaveBC",
+    "CustomBC",
+    "ArterialPressureBC",
+    "VenousPressureBC",
+    "CardiacOutputBC",
+    "RespiratoryBC",
+    "DrugInfusionBC",
+    "CompositeBC",
+    "PulsatileResult",
+    "solve_pulsatile",
+    "heart_rate_to_period",
+    "period_to_heart_rate",
+    "sample_waveform",
     # ========== Plotting variants ==========
     "plot_field",
     "plot_1d",

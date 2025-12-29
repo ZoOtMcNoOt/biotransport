@@ -120,7 +120,7 @@ This analysis identifies capabilities needed across the full academic spectrum:
 | **Fluid-Structure Interaction (FSI)** | ❌ Not implemented | Medium | Blood vessel mechanics |
 | **Poroelasticity** | ❌ Not implemented | Medium | Soft tissue deformation + flow |
 | **Electrochemical Transport** | ✅ Complete | Medium | Ion channels, Nernst-Planck |
-| **Pulsatile Boundary Conditions** | 🟡 Manual | Low | Cardiac cycle BCs |
+| **Pulsatile Boundary Conditions** | ✅ Complete | Low | Cardiac cycle BCs (`ArterialPressureBC`, `VenousPressureBC`, etc.) |
 | **Moving Boundaries / ALE** | ❌ Not implemented | Low | Growing tumors, wound healing |
 | **Multi-Species Systems (N>2)** | ✅ Complete | Medium | Complex reaction networks |
 | **Pharmacokinetic Models** | ✅ Tumor solver | Medium | Drug delivery modeling |
