@@ -207,6 +207,18 @@ from .high_order import (
     verify_order_of_accuracy,
 )
 
+# Newton-Raphson iteration for nonlinear steady-state problems
+from .newton_raphson import (
+    NewtonRaphsonSolver,
+    NonlinearDiffusionSolver,
+    NewtonResult,
+    ConvergenceCriterion,
+    michaelis_menten,
+    hill_kinetics,
+    bistable,
+    exponential_decay,
+)
+
 # ============================================================================
 # User-friendly aliases
 # ============================================================================
@@ -411,5 +423,14 @@ __all__ = [
     "constants",
     "ions",
     "ghk",
+    # ========== Newton-Raphson nonlinear solvers ==========
+    "NewtonRaphsonSolver",
+    "NonlinearDiffusionSolver",
+    "NewtonResult",
+    "ConvergenceCriterion",
+    "michaelis_menten",
+    "hill_kinetics",
+    "bistable",
+    "exponential_decay",
     "__version__",
 ]

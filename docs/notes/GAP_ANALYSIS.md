@@ -94,7 +94,7 @@ This analysis identifies capabilities needed across the full academic spectrum:
 | **Crank-Nicolson** | ✅ Implemented | High | Unconditionally stable, 2nd-order |
 | **Runge-Kutta (RK4)** | ✅ Implemented | Medium | 4th-order time accuracy, Heun (RK2) also available |
 | **Adaptive Time-Stepping** | ✅ Implemented | High | Error-controlled integration |
-| **Newton-Raphson Iteration** | ❌ Not implemented | Medium | Nonlinear steady-state problems |
+| **Newton-Raphson Iteration** | ✅ Complete | Medium | Nonlinear steady-state problems |
 
 ### 2. MESH & GEOMETRY
 
@@ -206,7 +206,7 @@ These gaps enable novel research contributions:
 3. **Higher-Order Schemes** — 4th-order spatial accuracy
 4. ✅ **Runge-Kutta (RK4)** — 4th-order time accuracy *(Complete - `bt.integrate()`, `bt.RK4Integrator`)*
 5. **Multigrid Solvers** — O(n) complexity for elliptic PDEs
-6. **Newton-Raphson Iteration** — Nonlinear steady-state problems
+6. ✅ **Newton-Raphson Iteration** — Nonlinear steady-state problems *(Complete)*
 7. **Poroelasticity** — Tissue mechanics coupling
 8. **Benchmark Suite (Published)** — Community trust
 
@@ -282,7 +282,7 @@ These enable cutting-edge/niche research:
 | Higher-order schemes (4th) | ❌ Not started | 2-3 weeks | Research accuracy |
 | Runge-Kutta (RK4) | ✅ Complete | - | 4th-order time accuracy |
 | Multigrid solvers | ❌ Not started | 4-6 weeks | O(n) complexity |
-| Newton-Raphson iteration | ❌ Not started | 2-3 weeks | Nonlinear steady-state |
+| Newton-Raphson iteration | ✅ Complete | - | Nonlinear steady-state |
 | Poroelasticity coupling | ❌ Not started | 4-6 weeks | Tissue mechanics |
 | Published benchmark suite | 🟡 Internal only | 2-3 weeks | Community trust |
 

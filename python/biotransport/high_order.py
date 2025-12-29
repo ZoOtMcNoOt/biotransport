@@ -310,7 +310,7 @@ class HighOrderDiffusionSolver:
         # Extract mesh info
         self.nx = mesh.nx()
         self.dx = mesh.dx()
-        self.is_1d = mesh.is_1d  # Python binding uses snake_case property
+        self.is_1d = mesh.is_1d()  # Note: is_1d is a method, not property
 
         if not self.is_1d:
             self.ny = mesh.ny()
