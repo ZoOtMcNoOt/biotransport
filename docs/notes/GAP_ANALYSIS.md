@@ -90,7 +90,7 @@ This analysis identifies capabilities needed across the full academic spectrum:
 | **ADI (Alternating Direction Implicit)** | ✅ Complete | High | Fast 2D/3D implicit without full matrix |
 | **Multigrid Solvers** | ❌ Not implemented | Medium | O(n) complexity for elliptic PDEs |
 | **Sparse Matrix Support** | ✅ Eigen integration | High | Implicit methods, eigenvalue problems |
-| **Higher-Order Schemes** | ❌ Only 2nd-order central | Medium | 4th-order for research accuracy |
+| **Higher-Order Schemes** | ✅ 4th & 6th-order stencils | Medium | 4th-order for research accuracy |
 | **Crank-Nicolson** | ✅ Implemented | High | Unconditionally stable, 2nd-order |
 | **Runge-Kutta (RK4)** | ✅ Implemented | Medium | 4th-order time accuracy, Heun (RK2) also available |
 | **Adaptive Time-Stepping** | ✅ Implemented | High | Error-controlled integration |

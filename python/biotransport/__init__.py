@@ -194,6 +194,19 @@ from .pulsatile import (
     sample_waveform,
 )
 
+# Higher-order finite difference schemes
+from .high_order import (
+    laplacian_2nd_order,
+    laplacian_4th_order,
+    laplacian_6th_order,
+    gradient_4th_order,
+    d2dx2,
+    ddx,
+    HighOrderDiffusionSolver,
+    HighOrderResult,
+    verify_order_of_accuracy,
+)
+
 # ============================================================================
 # User-friendly aliases
 # ============================================================================
@@ -276,6 +289,16 @@ __all__ = [
     "heart_rate_to_period",
     "period_to_heart_rate",
     "sample_waveform",
+    # ========== Higher-order finite difference schemes ==========
+    "laplacian_2nd_order",
+    "laplacian_4th_order",
+    "laplacian_6th_order",
+    "gradient_4th_order",
+    "d2dx2",
+    "ddx",
+    "HighOrderDiffusionSolver",
+    "HighOrderResult",
+    "verify_order_of_accuracy",
     # ========== Plotting variants ==========
     "plot_field",
     "plot_1d",
