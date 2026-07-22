@@ -45,7 +45,7 @@ def verify_semi_infinite_diffusion():
     print(f"  D = {D:.2e} m²/s")
     print(f"  C_surface = {C_surface}")
     print(f"  C_initial = {C_initial}")
-    print(f"  Domain = 0 to {L*1000:.1f} mm")
+    print(f"  Domain = 0 to {L * 1000:.1f} mm")
     print(f"  t_final = {t_final:.0f} s")
 
     # Solve numerically using simplified API
@@ -64,8 +64,8 @@ def verify_semi_infinite_diffusion():
     )
 
     # Penetration depth: characteristic length scale of diffusion
-    delta = bt.analytical.diffusion_penetration_depth(D, t_final)
-    print(f"\nPenetration depth delta = sqrt(Dt) = {delta*1e6:.2f} um")
+    delta = bt.analytical.diffusion_length(D, t_final)
+    print(f"\nCharacteristic diffusion length sqrt(Dt) = {delta * 1e6:.2f} um")
 
     # Error analysis (only where penetration has occurred)
     mask = x < 5 * delta  # Where concentration is significant
@@ -90,7 +90,7 @@ def verify_semi_infinite_diffusion():
         color="gray",
         linestyle=":",
         alpha=0.7,
-        label=f"delta = {delta*1e6:.1f} mum",
+        label=f"delta = {delta * 1e6:.1f} mum",
     )
     ax1.set_xlabel("Position x (mum)")
     ax1.set_ylabel("Concentration C/C0")
@@ -147,8 +147,8 @@ def verify_time_evolution():
         )
         ax.plot(x * 1e6, C_ana, "-", color=colors[i], linewidth=2, label=f"t = {t} s")
 
-        # Penetration depth marker
-        delta = bt.analytical.diffusion_penetration_depth(D, t)
+        # Characteristic diffusion-length marker; this is not a threshold depth.
+        delta = bt.analytical.diffusion_length(D, t)
         ax.axvline(x=delta * 1e6, color=colors[i], linestyle=":", alpha=0.3)
 
     ax.set_xlabel("Position x (mum)")
@@ -166,10 +166,10 @@ def verify_time_evolution():
     return True
 
 
-def verify_penetration_depth():
-    """Verify penetration depth formula delta = sqrt(Dt)."""
+def verify_diffusion_length():
+    """Verify the explicitly defined characteristic length sqrt(Dt)."""
     print("\n" + "=" * 60)
-    print("Penetration Depth Verification")
+    print("Characteristic Diffusion Length Verification")
     print("=" * 60)
 
     # Test various D and t combinations
@@ -183,7 +183,7 @@ def verify_penetration_depth():
     all_passed = True
 
     for D, t in test_cases:
-        delta_ana = bt.analytical.diffusion_penetration_depth(D, t)
+        delta_ana = bt.analytical.diffusion_length(D, t)
         delta_expected = np.sqrt(D * t)
         error = abs(delta_ana - delta_expected) / delta_expected
 
@@ -193,18 +193,20 @@ def verify_penetration_depth():
         print(f"\nD = {D:.0e} m²/s, t = {t:.0f} s:")
         print(f"  delta = {delta_ana:.4e} m")
         print(f"  sqrt(Dt) = {delta_expected:.4e} m")
-        print(f"  {'OK' if passed else 'X'} Error: {error*100:.2e}%")
+        print(f"  {'OK' if passed else 'X'} Error: {error * 100:.2e}%")
 
-    print(f"\n{'OK PASSED' if all_passed else 'X FAILED'}: Penetration depth formula")
+    print(f"\n{'OK PASSED' if all_passed else 'X FAILED'}: Diffusion length formula")
     return all_passed
 
 
 if __name__ == "__main__":
     results = []
     results.append(verify_semi_infinite_diffusion())
-    results.append(verify_time_evolution())
-    results.append(verify_penetration_depth())
+    verify_time_evolution()  # Plot-only demonstration; not counted as a check.
+    results.append(verify_diffusion_length())
 
     print("\n" + "=" * 60)
     print(f"SUMMARY: {sum(results)}/{len(results)} verifications passed")
     print("=" * 60)
+    if not all(results):
+        raise SystemExit(1)

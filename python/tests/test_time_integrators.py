@@ -206,7 +206,13 @@ class TestRK4Integrator:
         """Test RK4Integrator can be constructed."""
         mesh = bt.mesh_1d(50, 0.0, 1.0)
         ic = bt.gaussian(mesh, center=0.5, width=0.1)
-        problem = bt.Problem(mesh).diffusivity(0.01).initial_condition(ic)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(ic)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
 
         integrator = bt.RK4Integrator(problem)
         assert integrator is not None
@@ -216,16 +222,21 @@ class TestRK4Integrator:
         """Test that max_stable_dt returns a positive value."""
         mesh = bt.mesh_1d(50, 0.0, 1.0)
         ic = bt.gaussian(mesh, center=0.5, width=0.1)
-        problem = bt.Problem(mesh).diffusivity(0.01).initial_condition(ic)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(ic)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
 
         integrator = bt.RK4Integrator(problem)
         dt = integrator.max_stable_dt()
 
         assert dt > 0
-        # RK4 should allow larger dt than Euler CFL
         dx = 1.0 / 50
-        dt_euler = dx * dx / (2 * 0.01)  # Euler CFL limit
-        assert dt >= dt_euler  # RK4 should be at least as permissive
+        expected = 0.5 * 2.785293563405282 * dx * dx / (4 * 0.01)
+        assert dt == pytest.approx(expected)
 
     def test_solve_basic(self):
         """Test that solve runs and returns a result."""
@@ -315,10 +326,31 @@ class TestHeunIntegrator:
         """Test HeunIntegrator can be constructed."""
         mesh = bt.mesh_1d(50, 0.0, 1.0)
         ic = bt.gaussian(mesh, center=0.5, width=0.1)
-        problem = bt.Problem(mesh).diffusivity(0.01).initial_condition(ic)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(ic)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
 
         integrator = bt.HeunIntegrator(problem)
         assert integrator is not None
+
+    def test_max_stable_dt_matches_euler_limit(self):
+        """Heun/RK2 has the Euler negative-real-axis stability interval."""
+        mesh = bt.mesh_1d(50, 0.0, 1.0)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(0.0)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
+
+        integrator = bt.HeunIntegrator(problem)
+        expected = 0.8 * mesh.dx() ** 2 / (2 * 0.01)
+        assert integrator.max_stable_dt() == pytest.approx(expected)
 
     def test_solve_basic(self):
         """Test that solve runs and returns a result."""
@@ -337,6 +369,92 @@ class TestHeunIntegrator:
 
         assert result is not None
         assert result.stats["method"] == "heun"
+
+    def test_default_step_damps_highest_frequency_mode(self):
+        """The default Heun step must not amplify the diffusion grid mode."""
+        mesh = bt.mesh_1d(50, 0.0, 1.0)
+        initial = np.array(
+            [0.0 if index in (0, 50) else (-1.0) ** index for index in range(51)]
+        )
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(initial)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
+        integrator = bt.HeunIntegrator(problem)
+
+        result = integrator.solve(
+            t_end=integrator.max_stable_dt(),
+            dt=integrator.max_stable_dt(),
+        )
+
+        assert np.max(np.abs(result.solution[1:-1])) <= np.max(np.abs(initial[1:-1]))
+
+
+class TestLegacyProblemValidation:
+    """Legacy Python wrappers must reject physics they cannot preserve."""
+
+    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    def test_rejects_multidimensional_mesh(self, integrator):
+        mesh = bt.mesh_2d(4, 4)
+        problem = bt.Problem(mesh).diffusivity(0.01).initial_condition(0.0)
+
+        with pytest.raises(ValueError, match="only 1D diffusion"):
+            integrator(problem)
+
+    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "physics", ["variable diffusivity", "reaction", "advection"]
+    )
+    def test_rejects_unrepresented_physics(self, integrator, physics):
+        mesh = bt.mesh_1d(10)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(0.0)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
+        if physics == "variable diffusivity":
+            problem.diffusivity_field(np.full(mesh.num_nodes(), 0.01))
+        elif physics == "reaction":
+            problem.constant_source(1.0)
+        else:
+            problem.velocity(0.1)
+
+        with pytest.raises(ValueError, match=physics):
+            integrator(problem)
+
+    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    def test_rejects_non_dirichlet_boundaries(self, integrator):
+        mesh = bt.mesh_1d(10)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(0.0)
+            .neumann(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
+
+        with pytest.raises(ValueError, match="Dirichlet left/right"):
+            integrator(problem)
+
+    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize("safety_factor", [0.0, -0.1, 1.1, np.inf, np.nan])
+    def test_rejects_invalid_safety_factor(self, integrator, safety_factor):
+        mesh = bt.mesh_1d(10)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(0.0)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
+
+        with pytest.raises(ValueError, match="safety_factor"):
+            integrator(problem, safety_factor=safety_factor)
 
 
 # ============================================================================
@@ -361,6 +479,48 @@ class TestIntegrateFunction:
 
         result = bt.integrate(problem, t_end=0.1, method="euler")
         assert result.stats["method"] == "euler"
+
+    def test_integrate_euler_forwards_dt_and_lands_exactly(self):
+        """Euler delegates its requested ceiling and shortens the final step."""
+        mesh = bt.mesh_1d(10, 0.0, 1.0)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(0.0)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
+
+        result = bt.integrate(
+            problem,
+            t_end=0.1,
+            method="euler",
+            dt=0.03,
+        )
+
+        diagnostics = result.stats["diagnostics"]
+        assert result.time == pytest.approx(0.1)
+        assert result.stats["t_end"] == pytest.approx(0.1)
+        assert diagnostics.requested_time_step == pytest.approx(0.03)
+        assert diagnostics.steps == 4
+        assert diagnostics.maximum_time_step == pytest.approx(0.03)
+        assert diagnostics.minimum_time_step == pytest.approx(0.01)
+
+    def test_integrate_euler_preserves_configured_source(self):
+        """The canonical Euler path must not inherit legacy simplifications."""
+        mesh = bt.mesh_1d(10, 0.0, 1.0)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(0.0)
+            .constant_source(1.0)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
+
+        result = bt.integrate(problem, t_end=0.01, method="euler", dt=0.005)
+
+        assert np.max(result.solution[1:-1]) == pytest.approx(0.01)
 
     def test_integrate_heun(self):
         """Test integrate with heun method."""
@@ -428,8 +588,13 @@ class TestMethodAccuracyComparison:
         )
 
         t_end = 0.1
-        decay_factor = np.exp(-(np.pi**2) * D * t_end)
-        expected = np.array([np.sin(np.pi * xi) * decay_factor for xi in x])
+        # Compare temporal error against the exact solution of the same
+        # semi-discrete Laplacian. Comparing with the continuum eigenvalue can
+        # let Euler's time error accidentally cancel the spatial error.
+        discrete_eigenvalue = (
+            -4.0 * D * np.sin(0.5 * np.pi * mesh.dx()) ** 2 / mesh.dx() ** 2
+        )
+        expected = np.asarray(ic) * np.exp(discrete_eigenvalue * t_end)
 
         # Use same timestep for both
         dt = 0.001
@@ -441,9 +606,9 @@ class TestMethodAccuracyComparison:
         error_rk4 = np.sqrt(np.mean((result_rk4.solution - expected) ** 2))
 
         # RK4 should be more accurate
-        assert (
-            error_rk4 < error_euler
-        ), f"RK4 error ({error_rk4}) should be less than Euler error ({error_euler})"
+        assert error_rk4 < error_euler, (
+            f"RK4 error ({error_rk4}) should be less than Euler error ({error_euler})"
+        )
 
     def test_heun_more_accurate_than_euler(self):
         """Verify Heun gives better accuracy than Euler for same dt."""
@@ -463,8 +628,10 @@ class TestMethodAccuracyComparison:
         )
 
         t_end = 0.1
-        decay_factor = np.exp(-(np.pi**2) * D * t_end)
-        expected = np.array([np.sin(np.pi * xi) * decay_factor for xi in x])
+        discrete_eigenvalue = (
+            -4.0 * D * np.sin(0.5 * np.pi * mesh.dx()) ** 2 / mesh.dx() ** 2
+        )
+        expected = np.asarray(ic) * np.exp(discrete_eigenvalue * t_end)
 
         dt = 0.001
 
@@ -475,6 +642,6 @@ class TestMethodAccuracyComparison:
         error_heun = np.sqrt(np.mean((result_heun.solution - expected) ** 2))
 
         # Heun should be more accurate
-        assert (
-            error_heun < error_euler
-        ), f"Heun error ({error_heun}) should be less than Euler error ({error_euler})"
+        assert error_heun < error_euler, (
+            f"Heun error ({error_heun}) should be less than Euler error ({error_euler})"
+        )

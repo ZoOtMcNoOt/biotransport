@@ -1,12 +1,16 @@
-"""
-Adaptive Time-Stepping for Transport Simulations
+"""Legacy adaptive stepping for a narrow diffusion problem.
 
-Provides error-controlled time integration with automatic step size adjustment.
-This is essential for robust simulations where the optimal time step varies
-during the computation (e.g., reaction fronts, transient heat sources).
+This Python orchestrator uses step doubling around the original native
+``DiffusionSolver``.  It supports only one-dimensional, uniform-diffusivity
+diffusion with fixed Dirichlet values at both ends.  It rejects reactions,
+sources, advection, variable diffusivity, multidimensional meshes, and natural
+boundary conditions rather than silently dropping configured physics.
+
+Use :func:`biotransport.solve` for general transport.  This module remains for
+legacy pure-diffusion workflows that specifically need adaptive step doubling.
 
 Key features:
-- Error estimation via Richardson extrapolation (comparing dt and dt/2)
+- Error estimation via step doubling (comparing dt and dt/2)
 - Automatic step size increase/decrease based on local error
 - Step rejection when error exceeds tolerance
 - Comprehensive statistics tracking
@@ -28,6 +32,7 @@ from ._core import (
     DiffusionSolver,
     TransportProblem,
 )
+from .time_integrators import _validate_legacy_diffusion_problem
 
 
 @dataclass
@@ -75,10 +80,11 @@ class AdaptiveTimeStepperConfig:
 
 class AdaptiveTimeStepper:
     """
-    Adaptive time-stepping controller for transport simulations.
+    Legacy adaptive controller for supported 1D uniform diffusion.
 
-    Uses local error estimation via step-doubling (Richardson extrapolation)
-    to automatically adjust the time step for efficiency and accuracy.
+    Uses local error estimation via step doubling to automatically adjust the
+    time step.  It does not compose the complete :class:`TransportProblem`
+    operator; unsupported configurations raise during construction.
 
     The error is estimated by comparing:
     - One step of size dt
@@ -123,6 +129,7 @@ class AdaptiveTimeStepper:
             Print step information during solve.
         """
         self.problem = problem
+        self._validate_config(tol, atol, safety, dt_min, dt_max)
         self.config = AdaptiveTimeStepperConfig(
             tol=tol,
             atol=atol,
@@ -132,10 +139,13 @@ class AdaptiveTimeStepper:
         )
         self.verbose = verbose
 
-        # Create solver instance for stepping
-        self._mesh = problem.mesh()
-        self._D = problem.diffusivity()
-        self._initial = np.array(problem.initial())
+        # Validate before extracting the intentionally narrow solver state.
+        self._mesh, self._D, self._left_bc, self._right_bc = (
+            _validate_legacy_diffusion_problem(problem, "AdaptiveTimeStepper")
+        )
+        self._initial = np.asarray(problem.initial(), dtype=float).copy()
+        self._initial[0] = self._left_bc.value
+        self._initial[-1] = self._right_bc.value
 
         # Compute CFL limit
         self._cfl_limit = self._compute_cfl_limit()
@@ -143,32 +153,46 @@ class AdaptiveTimeStepper:
         if dt_max is None:
             self.config.dt_max = self._cfl_limit
 
+    @staticmethod
+    def _validate_config(
+        tol: float,
+        atol: float,
+        safety: float,
+        dt_min: float,
+        dt_max: Optional[float],
+    ) -> None:
+        """Reject invalid controller parameters before entering the solve loop."""
+        if not np.isfinite(tol) or tol <= 0.0:
+            raise ValueError("tol must be finite and positive")
+        if not np.isfinite(atol) or atol <= 0.0:
+            raise ValueError("atol must be finite and positive")
+        if not np.isfinite(safety) or not 0.0 < safety <= 1.0:
+            raise ValueError("safety must be in (0, 1]")
+        if not np.isfinite(dt_min) or dt_min <= 0.0:
+            raise ValueError("dt_min must be finite and positive")
+        if dt_max is not None:
+            if not np.isfinite(dt_max) or dt_max <= 0.0:
+                raise ValueError("dt_max must be finite and positive when provided")
+            if dt_max < dt_min:
+                raise ValueError("dt_max must be greater than or equal to dt_min")
+
     def _compute_cfl_limit(self) -> float:
         """Compute the maximum stable time step based on CFL condition."""
         mesh = self._mesh
         D = self._D
+        if D == 0.0:
+            return float("inf")
         dx2 = mesh.dx() ** 2
-
-        if mesh.is_1d():
-            return 0.9 * dx2 / (2.0 * D)
-        else:
-            dy2 = mesh.dy() ** 2
-            return 0.9 / (2.0 * D * (1.0 / dx2 + 1.0 / dy2))
+        return dx2 / (2.0 * D)
 
     def _create_solver(self, initial: np.ndarray):
         """Create a fresh solver with the given initial condition."""
-        # Get the linear reaction rate if present
-        # Note: We access the problem's internal state
-        problem = self.problem
-
-        # Create appropriate solver type
+        # Configuration was restricted to pure diffusion during construction.
         solver = DiffusionSolver(self._mesh, self._D)
         solver.set_initial_condition(initial.tolist())
 
-        # Set boundary conditions
-        boundaries = problem.boundaries()
-        for i in range(4):
-            solver.set_boundary_condition(i, boundaries[i])
+        solver.set_boundary_condition(0, self._left_bc)
+        solver.set_boundary_condition(1, self._right_bc)
 
         return solver
 
@@ -227,16 +251,26 @@ class AdaptiveTimeStepper:
         AdaptiveResult
             Solution and statistics.
         """
-        if t_end <= 0:
-            raise ValueError("t_end must be positive")
+        t_end = float(t_end)
+        if not np.isfinite(t_end) or t_end <= 0.0:
+            raise ValueError("t_end must be finite and positive")
+        if dt_initial is not None:
+            dt_initial = float(dt_initial)
+            if not np.isfinite(dt_initial) or dt_initial <= 0.0:
+                raise ValueError("dt_initial must be finite and positive")
 
         # Initialize
         u = self._initial.copy()
         t = 0.0
-        dt = dt_initial if dt_initial else self.config.safety * self._cfl_limit
+        if dt_initial is not None:
+            dt = dt_initial
+        elif np.isfinite(self._cfl_limit):
+            dt = self.config.safety * self._cfl_limit
+        else:
+            dt = t_end
 
-        # Ensure dt doesn't exceed CFL
-        dt = min(dt, self._cfl_limit)
+        # Respect both the user ceiling and the exact diffusion stability limit.
+        dt = min(dt, self.config.dt_max, self._cfl_limit, t_end)
 
         # Statistics tracking
         steps = 0
@@ -251,6 +285,11 @@ class AdaptiveTimeStepper:
 
             # Estimate error
             u_full, u_half, error = self._estimate_error(u, dt)
+            if not np.isfinite(error):
+                raise FloatingPointError(
+                    "adaptive error estimate became non-finite; reduce the time step "
+                    "or inspect the initial field"
+                )
 
             if error <= 1.0:
                 # Accept step (use the more accurate u_half)
@@ -318,12 +357,13 @@ def solve_adaptive(
     verbose: bool = False,
 ) -> AdaptiveResult:
     """
-    Convenience function for adaptive time-stepping.
+    Convenience wrapper for the limited legacy adaptive stepper.
 
     Parameters
     ----------
     problem : TransportProblem
-        The transport problem to solve.
+        A 1D uniform-diffusion problem with Dirichlet endpoint conditions.
+        General transport configurations raise instead of being simplified.
     t_end : float
         Final simulation time.
     tol : float

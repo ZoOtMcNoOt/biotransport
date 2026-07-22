@@ -3,7 +3,7 @@
  * @brief Stokes flow solver for viscous incompressible flow.
  *
  * Solves the steady Stokes equations for creeping flow:
- *   -∇p + μ∇²v = f   (momentum)
+ *   -∇p + μ∇²v + f = 0   (momentum)
  *   ∇·v = 0          (continuity)
  *
  * Where:
@@ -39,35 +39,35 @@ struct StokesResult {
     std::vector<double> v;         ///< y-velocity field [m/s]
     std::vector<double> pressure;  ///< Pressure field [Pa]
     int iterations;                ///< Number of outer iterations
-    double residual;               ///< Final momentum residual
-    double divergence;             ///< Final divergence residual
-    bool converged;                ///< Whether solver converged
+    double residual;               ///< Maximum discrete momentum defect [N/m^3]
+    double divergence;             ///< Maximum discrete divergence [1/s]
+    bool converged;                ///< True for every returned result; failures throw
 };
 
 /**
  * @brief Solver for steady Stokes flow.
  *
- * Uses a staggered grid (MAC scheme) to avoid checkerboard pressure modes.
- * Velocities are stored at cell faces, pressure at cell centers.
+ * This implementation is collocated: u, v, and pressure are all stored at
+ * StructuredMesh nodes. Centered pressure gradients are used without a
+ * Rhie-Chow or equivalent checkerboard-pressure stabilization. It is not a
+ * staggered MAC discretization and should not be described or interpreted as
+ * one.
  *
  * The algorithm uses a pressure-correction (projection) method:
- * 1. Solve momentum equations ignoring pressure (intermediate velocity)
+ * 1. Relax momentum equations using the current pressure
  * 2. Solve pressure Poisson equation from divergence constraint
  * 3. Correct velocities to be divergence-free
  * 4. Iterate until convergence
  *
- * Example usage:
+ * Verified sealed-domain usage:
  * @code
- *   StructuredMesh mesh(50, 50, 0, 1, 0, 1);
- *   StokesSolver solver(mesh, 0.001);  // mu = 1 mPa·s (water-like)
- *
- *   solver.setVelocityBC(Boundary::Left, VelocityBC::Inflow(0.01));
- *   solver.setVelocityBC(Boundary::Right, VelocityBC::Outflow());
- *   solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
- *   solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
+ *   StructuredMesh mesh(20, 12, 0, 1, 0, 0.5);
+ *   StokesSolver solver(mesh, 0.001);  // all four walls default to no slip
+ *   solver.setBodyForce(3.0, -1.0);   // uniform force density [N/m^3]
  *
  *   auto result = solver.solve();
- *   // result.u, result.v, result.pressure contain the solution
+ *   // The exact sealed equilibrium has u = v = 0 and
+ *   // p = 3*x - y minus its nodal mean (the deterministic pressure gauge).
  * @endcode
  */
 class StokesSolver {
@@ -82,6 +82,11 @@ public:
 
     /**
      * @brief Set velocity boundary condition.
+     *
+     * NOSLIP, DIRICHLET, INFLOW, and OUTFLOW are supported. OUTFLOW means
+     * zero outward-normal velocity gradient; it is not a traction or pressure
+     * boundary. StressFree/NEUMANN is rejected because that traction condition
+     * is not implemented.
      *
      * @param side Boundary side
      * @param bc Velocity boundary condition
@@ -108,7 +113,8 @@ public:
     /**
      * @brief Set convergence tolerance.
      *
-     * @param tol Maximum residual for convergence. Default 1e-6.
+     * @param tol Positive finite threshold used for velocity-iterate change
+     *        [m/s] and maximum discrete divergence [1/s].
      */
     StokesSolver& setTolerance(double tol);
 
@@ -122,21 +128,23 @@ public:
     /**
      * @brief Set pressure relaxation factor.
      *
-     * @param omega_p Pressure relaxation (0.1 to 0.8 typical). Default 0.3.
+     * @param omega_p Pressure relaxation in (0, 1]. Default 0.3.
      */
     StokesSolver& setPressureRelaxation(double omega_p);
 
     /**
      * @brief Set velocity relaxation factor.
      *
-     * @param omega_v Velocity relaxation (0.5 to 0.9 typical). Default 0.7.
+     * @param omega_v Velocity relaxation in (0, 1]. Default 0.7.
      */
     StokesSolver& setVelocityRelaxation(double omega_v);
 
     /**
      * @brief Solve the Stokes flow problem.
      *
-     * @return StokesResult containing velocity, pressure, and convergence info
+     * @return A finite, converged StokesResult. Invalid callback values,
+     *         numerical failure, and failure to meet the configured iteration
+     *         criteria throw.
      */
     [[nodiscard]] StokesResult solve() const;
 
@@ -158,7 +166,7 @@ public:
      * @param rho Fluid density [kg/m³]
      * @return Reynolds number Re = rho*U*L/mu
      */
-    double reynolds(double L, double U, double rho) const { return rho * U * L / mu_; }
+    double reynolds(double L, double U, double rho) const;
 
 private:
     const StructuredMesh& mesh_;
@@ -175,6 +183,12 @@ private:
     std::function<double(double, double)> fy_ = [](double, double) {
         return 0.0;
     };
+    // The scalar overload is distinguishable from arbitrary callbacks.  This
+    // permits an exact hydrostatic solution for a sealed all-no-slip domain
+    // without guessing whether a callback happens to be spatially uniform.
+    bool has_uniform_body_force_ = true;
+    double uniform_fx_ = 0.0;
+    double uniform_fy_ = 0.0;
 
     // Solver parameters
     double tolerance_ = 1e-4;  // More practical tolerance for most problems
@@ -193,6 +207,8 @@ private:
     double computeMomentumResidual(const std::vector<double>& u, const std::vector<double>& v,
                                    const std::vector<double>& p) const;
     double computeDivergence(const std::vector<double>& u, const std::vector<double>& v) const;
+    double bodyForceX(double x, double y) const;
+    double bodyForceY(double x, double y) const;
 };
 
 }  // namespace biotransport

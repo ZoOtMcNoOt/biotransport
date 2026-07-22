@@ -1,401 +1,312 @@
 /**
  * @file test_stokes.cpp
- * @brief Unit tests for the Stokes flow solver
- *
- * Tests verify:
- * 1. Basic solver construction and parameter setting
- * 2. Poiseuille flow (pressure-driven channel flow)
- * 3. Lid-driven cavity flow
- * 4. No-slip boundary conditions
- * 5. Convergence behavior
- * 6. Mass conservation (divergence-free velocity)
+ * @brief Always-on verification tests for the steady incompressible Stokes solver.
  */
 
+#include "../test_support/science_test.hpp"
 #include <algorithm>
 #include <biotransport/physics/fluid_dynamics/stokes.hpp>
-#include <cassert>
 #include <cmath>
-#include <iostream>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace biotransport;
 
-// Helper function to check approximate equality
-bool approxEqual(double a, double b, double tol = 1e-6) {
-    return std::abs(a - b) < tol;
+namespace {
+
+double maximumMagnitude(const std::vector<double>& values) {
+    double maximum = 0.0;
+    for (double value : values) {
+        SCIENCE_REQUIRE_FINITE(value, "field value");
+        maximum = std::max(maximum, std::abs(value));
+    }
+    return maximum;
 }
 
-// Helper function to check relative error
-double relativeError(double computed, double expected) {
-    if (std::abs(expected) < 1e-12)
-        return std::abs(computed);
-    return std::abs(computed - expected) / std::abs(expected);
-}
+double maximumDivergence(const StructuredMesh& mesh, const std::vector<double>& u,
+                         const std::vector<double>& v) {
+    const int nx = mesh.nx();
+    const int ny = mesh.ny();
+    const int stride = nx + 1;
+    const double dx = mesh.dx();
+    const double dy = mesh.dy();
+    double maximum = 0.0;
 
-/**
- * Test 1: Basic solver construction
- */
-void testConstruction() {
-    std::cout << "Test 1: Basic construction..." << std::endl;
-
-    StructuredMesh mesh(10, 10, 0.0, 1.0, 0.0, 1.0);
-    double mu = 0.001;
-
-    StokesSolver solver(mesh, mu);
-
-    // Should not throw
-    solver.setTolerance(1e-6);
-    solver.setMaxIterations(1000);
-    solver.setPressureRelaxation(0.1);
-    solver.setVelocityRelaxation(0.5);
-    solver.setBodyForce(0.0, 0.0);
-
-    std::cout << "  PASSED" << std::endl;
-}
-
-/**
- * Test 2: Invalid parameters should throw
- */
-void testInvalidParameters() {
-    std::cout << "Test 2: Invalid parameters..." << std::endl;
-
-    StructuredMesh mesh2D(10, 10, 0.0, 1.0, 0.0, 1.0);
-    StructuredMesh mesh1D(10, 0.0, 1.0);
-
-    // Negative viscosity should throw
-    bool caught = false;
-    try {
-        StokesSolver solver(mesh2D, -0.001);
-    } catch (const std::invalid_argument&) {
-        caught = true;
-    }
-    assert(caught && "Should throw for negative viscosity");
-
-    // 1D mesh should throw
-    caught = false;
-    try {
-        StokesSolver solver(mesh1D, 0.001);
-    } catch (const std::invalid_argument&) {
-        caught = true;
-    }
-    assert(caught && "Should throw for 1D mesh");
-
-    std::cout << "  PASSED" << std::endl;
-}
-
-/**
- * Test 3: Poiseuille flow (pressure-driven channel flow)
- *
- * Analytical solution for 2D channel:
- *   u(y) = (dP/dx) / (2*mu) * y * (H - y)
- *   v = 0
- *   u_max = (dP/dx) * H^2 / (8*mu)
- */
-void testPoiseuilleFlow() {
-    std::cout << "Test 3: Poiseuille flow..." << std::endl;
-
-    // Channel dimensions
-    double L = 1.0;         // length
-    double H = 0.1;         // height
-    double mu = 0.001;      // viscosity
-    double dP_dx = 1000.0;  // pressure gradient (body force)
-
-    // Analytical maximum velocity
-    double u_max_analytical = dP_dx * H * H / (8.0 * mu);
-
-    // Create mesh
-    int nx = 40, ny = 20;
-    StructuredMesh mesh(nx, ny, 0.0, L, 0.0, H);
-
-    // Create solver
-    StokesSolver solver(mesh, mu);
-
-    // No-slip on walls
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
-
-    // Outflow on both ends (periodic-like for developed flow)
-    solver.setVelocityBC(Boundary::Left, VelocityBC::Outflow());
-    solver.setVelocityBC(Boundary::Right, VelocityBC::Outflow());
-
-    // Body force represents pressure gradient
-    solver.setBodyForce(dP_dx, 0.0);
-
-    // Solver parameters
-    solver.setTolerance(1e-8);
-    solver.setMaxIterations(5000);
-
-    // Solve
-    StokesResult result = solver.solve();
-
-    assert(result.converged && "Poiseuille flow should converge");
-
-    // Check maximum velocity
-    double u_max_computed = *std::max_element(result.u.begin(), result.u.end());
-    double error = relativeError(u_max_computed, u_max_analytical);
-
-    std::cout << "  u_max analytical: " << u_max_analytical << std::endl;
-    std::cout << "  u_max computed:   " << u_max_computed << std::endl;
-    std::cout << "  Relative error:   " << error * 100 << "%" << std::endl;
-    std::cout << "  Iterations:       " << result.iterations << std::endl;
-
-    assert(error < 0.01 && "Poiseuille flow error should be < 1%");
-
-    // Check v ≈ 0 everywhere
-    double v_max = 0.0;
-    for (double vi : result.v) {
-        v_max = std::max(v_max, std::abs(vi));
-    }
-    assert(v_max < 1e-6 && "v should be approximately zero");
-
-    std::cout << "  PASSED" << std::endl;
-}
-
-/**
- * Test 4: Lid-driven cavity flow
- *
- * Classic benchmark problem:
- * - Square cavity with moving top lid
- * - Develops recirculating flow
- */
-void testLidDrivenCavity() {
-    std::cout << "Test 4: Lid-driven cavity..." << std::endl;
-
-    double L = 1.0;
-    double mu = 0.01;
-    double u_lid = 1.0;
-
-    int nx = 20, ny = 20;
-    StructuredMesh mesh(nx, ny, 0.0, L, 0.0, L);
-
-    StokesSolver solver(mesh, mu);
-
-    // No-slip on walls
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Left, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Right, VelocityBC::NoSlip());
-
-    // Moving lid on top
-    solver.setVelocityBC(Boundary::Top, VelocityBC::Dirichlet(u_lid, 0.0));
-
-    solver.setTolerance(1e-6);
-    solver.setMaxIterations(5000);
-
-    StokesResult result = solver.solve();
-
-    assert(result.converged && "Lid-driven cavity should converge");
-
-    // Check top boundary has u = u_lid
-    int stride = nx + 1;
-    for (int i = 0; i <= nx; ++i) {
-        int idx = ny * stride + i;
-        assert(approxEqual(result.u[idx], u_lid, 1e-6) && "Top boundary should have u = u_lid");
-    }
-
-    // Check bottom has u = 0
-    for (int i = 0; i <= nx; ++i) {
-        assert(approxEqual(result.u[i], 0.0, 1e-6) && "Bottom should have u = 0");
-    }
-
-    // Check flow develops (non-zero interior velocities)
-    double u_interior_max = 0.0;
-    double v_interior_max = 0.0;
     for (int j = 1; j < ny; ++j) {
         for (int i = 1; i < nx; ++i) {
-            int idx = j * stride + i;
-            u_interior_max = std::max(u_interior_max, std::abs(result.u[idx]));
-            v_interior_max = std::max(v_interior_max, std::abs(result.v[idx]));
+            const int index = j * stride + i;
+            const double divergence = (u[index + 1] - u[index - 1]) / (2.0 * dx) +
+                                      (v[index + stride] - v[index - stride]) / (2.0 * dy);
+            maximum = std::max(maximum, std::abs(divergence));
         }
     }
-
-    std::cout << "  Max interior u: " << u_interior_max << std::endl;
-    std::cout << "  Max interior v: " << v_interior_max << std::endl;
-    std::cout << "  Iterations:     " << result.iterations << std::endl;
-
-    assert(u_interior_max > 0.1 && "Should have significant interior u velocity");
-    assert(v_interior_max > 0.01 && "Should have non-zero interior v velocity");
-
-    std::cout << "  PASSED" << std::endl;
+    return maximum;
 }
 
-/**
- * Test 5: Body force driven flow in closed cavity
- */
-void testBodyForceCavity() {
-    std::cout << "Test 5: Body force in closed cavity..." << std::endl;
+double maximumMomentumResidual(const StructuredMesh& mesh, const StokesResult& result,
+                               double viscosity, double force_x, double force_y) {
+    const int nx = mesh.nx();
+    const int ny = mesh.ny();
+    const int stride = nx + 1;
+    const double dx = mesh.dx();
+    const double dy = mesh.dy();
+    const double dx_squared = dx * dx;
+    const double dy_squared = dy * dy;
+    double maximum = 0.0;
 
-    int nx = 10, ny = 10;
-    StructuredMesh mesh(nx, ny, 0.0, 1.0, 0.0, 1.0);
+    for (int j = 1; j < ny; ++j) {
+        for (int i = 1; i < nx; ++i) {
+            const int index = j * stride + i;
+            const double laplacian_u =
+                (result.u[index - 1] - 2.0 * result.u[index] + result.u[index + 1]) / dx_squared +
+                (result.u[index - stride] - 2.0 * result.u[index] + result.u[index + stride]) /
+                    dy_squared;
+            const double laplacian_v =
+                (result.v[index - 1] - 2.0 * result.v[index] + result.v[index + 1]) / dx_squared +
+                (result.v[index - stride] - 2.0 * result.v[index] + result.v[index + stride]) /
+                    dy_squared;
+            const double pressure_x =
+                (result.pressure[index + 1] - result.pressure[index - 1]) / (2.0 * dx);
+            const double pressure_y =
+                (result.pressure[index + stride] - result.pressure[index - stride]) / (2.0 * dy);
 
+            maximum = std::max(maximum, std::abs(-pressure_x + viscosity * laplacian_u + force_x));
+            maximum = std::max(maximum, std::abs(-pressure_y + viscosity * laplacian_v + force_y));
+        }
+    }
+    return maximum;
+}
+
+void testConstructionAndPhysicalInputValidation() {
+    StructuredMesh mesh_2d(8, 8, 0.0, 1.0, 0.0, 1.0);
+    StructuredMesh mesh_1d(8, 0.0, 1.0);
+    StokesSolver valid(mesh_2d, 1.0e-3);
+    SCIENCE_REQUIRE_NEAR(valid.viscosity(), 1.0e-3, 0.0, 0.0, "stored viscosity");
+
+    bool rejected_nonpositive_viscosity = false;
+    try {
+        StokesSolver invalid(mesh_2d, 0.0);
+    } catch (const std::invalid_argument&) {
+        rejected_nonpositive_viscosity = true;
+    }
+    SCIENCE_REQUIRE(rejected_nonpositive_viscosity,
+                    "zero viscosity is outside the Stokes model and must be rejected");
+
+    bool rejected_one_dimensional_mesh = false;
+    try {
+        StokesSolver invalid(mesh_1d, 1.0e-3);
+    } catch (const std::invalid_argument&) {
+        rejected_one_dimensional_mesh = true;
+    }
+    SCIENCE_REQUIRE(rejected_one_dimensional_mesh,
+                    "an incompressible 2D solver must reject a 1D mesh");
+}
+
+void testQuiescentExactSolution() {
+    StructuredMesh mesh(8, 8, 0.0, 1.0, 0.0, 1.0);
     StokesSolver solver(mesh, 1.0);
+    solver.setTolerance(1.0e-12).setMaxIterations(10).setBodyForce(0.0, 0.0);
 
-    // All walls no-slip
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Left, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Right, VelocityBC::NoSlip());
-
-    // Apply body force
-    solver.setBodyForce(10.0, 0.0);
-    solver.setMaxIterations(500);
-
-    StokesResult result = solver.solve();
-
-    // Should produce some flow
-    double u_max = *std::max_element(result.u.begin(), result.u.end());
-
-    std::cout << "  Max u: " << u_max << std::endl;
-    std::cout << "  Iterations: " << result.iterations << std::endl;
-
-    assert(u_max > 0.0 && "Body force should produce flow");
-    assert(!std::isnan(u_max) && "Solution should not contain NaN");
-
-    std::cout << "  PASSED" << std::endl;
+    const StokesResult result = solver.solve();
+    SCIENCE_REQUIRE(result.converged, "zero forcing with no-slip walls is an exact steady state");
+    SCIENCE_REQUIRE(result.iterations == 1,
+                    "an exact zero initial state should converge in one outer iteration; actual=" +
+                        std::to_string(result.iterations));
+    SCIENCE_REQUIRE_NEAR(maximumMagnitude(result.u), 0.0, 0.0, 0.0, "quiescent x-velocity");
+    SCIENCE_REQUIRE_NEAR(maximumMagnitude(result.v), 0.0, 0.0, 0.0, "quiescent y-velocity");
+    SCIENCE_REQUIRE_NEAR(maximumMagnitude(result.pressure), 0.0, 0.0, 0.0,
+                         "quiescent gauge pressure");
+    SCIENCE_REQUIRE_NEAR(result.residual, 0.0, 0.0, 0.0, "quiescent momentum residual");
+    SCIENCE_REQUIRE_NEAR(result.divergence, 0.0, 0.0, 0.0, "quiescent continuity residual");
 }
 
-/**
- * Test 6: Grid convergence study
- */
-void testGridConvergence() {
-    std::cout << "Test 6: Grid convergence..." << std::endl;
+void testSealedUniformForceHydrostaticEquilibrium() {
+    const StructuredMesh mesh(10, 8, -0.25, 1.75, 0.5, 2.0);
+    constexpr double viscosity = 0.37;
+    constexpr double force_x = 7.5;
+    constexpr double force_y = -2.25;
 
-    double L = 1.0;
-    double H = 0.1;
-    double mu = 0.001;
-    double dP_dx = 1000.0;
-    double u_max_analytical = dP_dx * H * H / (8.0 * mu);
+    StokesSolver solver(mesh, viscosity);
+    solver.setVelocityBC(Boundary::Left, VelocityBC::NoSlip())
+        .setVelocityBC(Boundary::Right, VelocityBC::NoSlip())
+        .setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip())
+        .setVelocityBC(Boundary::Top, VelocityBC::NoSlip())
+        .setBodyForce(force_x, force_y)
+        .setTolerance(1.0e-14)
+        .setMaxIterations(1);
 
-    std::vector<int> resolutions = {10, 20, 40};
-    std::vector<double> errors;
+    const StokesResult result = solver.solve();
+    SCIENCE_REQUIRE(result.converged,
+                    "a sealed domain under a conservative uniform force is an exact equilibrium");
+    SCIENCE_REQUIRE(result.iterations == 1,
+                    "the analytical hydrostatic branch must not run an iterative approximation");
+    SCIENCE_REQUIRE_NEAR(maximumMagnitude(result.u), 0.0, 0.0, 0.0, "hydrostatic x-velocity");
+    SCIENCE_REQUIRE_NEAR(maximumMagnitude(result.v), 0.0, 0.0, 0.0, "hydrostatic y-velocity");
+    SCIENCE_REQUIRE_NEAR(result.divergence, 0.0, 0.0, 0.0, "hydrostatic continuity residual");
 
-    for (int n : resolutions) {
-        int nx = n * 2;
-        int ny = n;
-        StructuredMesh mesh(nx, ny, 0.0, L, 0.0, H);
-
-        StokesSolver solver(mesh, mu);
-        solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-        solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
-        solver.setVelocityBC(Boundary::Left, VelocityBC::Outflow());
-        solver.setVelocityBC(Boundary::Right, VelocityBC::Outflow());
-        solver.setBodyForce(dP_dx, 0.0);
-        solver.setTolerance(1e-8);
-        solver.setMaxIterations(5000);
-
-        StokesResult result = solver.solve();
-        double u_max = *std::max_element(result.u.begin(), result.u.end());
-        double error = relativeError(u_max, u_max_analytical);
-        errors.push_back(error);
-
-        std::cout << "  Grid " << nx << "x" << ny << ": error = " << error * 100 << "%"
-                  << std::endl;
+    long double raw_pressure_sum = 0.0L;
+    for (int j = 0; j <= mesh.ny(); ++j) {
+        for (int i = 0; i <= mesh.nx(); ++i) {
+            raw_pressure_sum += static_cast<long double>(force_x) * mesh.x(i) +
+                                static_cast<long double>(force_y) * mesh.y(i, j);
+        }
     }
-
-    // Error should decrease with finer grids
-    for (size_t i = 1; i < errors.size(); ++i) {
-        assert(errors[i] <= errors[i - 1] && "Error should decrease with finer grid");
+    const double expected_mean =
+        static_cast<double>(raw_pressure_sum / static_cast<long double>(mesh.numNodes()));
+    double computed_mean = 0.0;
+    const int stride = mesh.nx() + 1;
+    for (int j = 0; j <= mesh.ny(); ++j) {
+        for (int i = 0; i <= mesh.nx(); ++i) {
+            const int index = j * stride + i;
+            const double expected = force_x * mesh.x(i) + force_y * mesh.y(i, j) - expected_mean;
+            SCIENCE_REQUIRE_NEAR(result.pressure[index], expected, 2.0e-14, 2.0e-14,
+                                 "zero-mean hydrostatic pressure");
+            computed_mean += result.pressure[index];
+        }
     }
-
-    // Finest grid should have small error
-    assert(errors.back() < 0.01 && "Fine grid error should be < 1%");
-
-    std::cout << "  PASSED" << std::endl;
+    computed_mean /= static_cast<double>(mesh.numNodes());
+    SCIENCE_REQUIRE_NEAR(computed_mean, 0.0, 2.0e-14, 0.0, "deterministic nodal pressure gauge");
+    SCIENCE_REQUIRE(result.residual < 2.0e-13,
+                    "hydrostatic momentum defect must be roundoff-sized; actual=" +
+                        science_test::number(result.residual));
 }
 
-/**
- * Test 7: No NaN in results
- */
-void testNoNaN() {
-    std::cout << "Test 7: No NaN values..." << std::endl;
+struct ChannelBenchmark {
+    StructuredMesh mesh;
+    StokesResult result;
+    double maximum_velocity_error;
+    double maximum_transverse_velocity;
+    double maximum_divergence;
+    double maximum_momentum_residual;
+    double reference_maximum_velocity;
+    double body_force;
+    double height;
 
-    int nx = 15, ny = 15;
-    StructuredMesh mesh(nx, ny, 0.0, 1.0, 0.0, 1.0);
+    ChannelBenchmark()
+        : mesh(24, 12, 0.0, 2.0, 0.0, 1.0),
+          result(),
+          maximum_velocity_error(0.0),
+          maximum_transverse_velocity(0.0),
+          maximum_divergence(0.0),
+          maximum_momentum_residual(0.0),
+          reference_maximum_velocity(1.0),
+          body_force(8.0),
+          height(1.0) {
+        constexpr double viscosity = 1.0;
+        StokesSolver solver(mesh, viscosity);
+        solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip())
+            .setVelocityBC(Boundary::Top, VelocityBC::NoSlip())
+            .setVelocityBC(Boundary::Left, VelocityBC::Outflow())
+            .setVelocityBC(Boundary::Right, VelocityBC::Outflow())
+            .setBodyForce(body_force, 0.0)
+            .setTolerance(1.0e-5)
+            .setMaxIterations(2000);
+        result = solver.solve();
 
-    StokesSolver solver(mesh, 0.01);
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Top, VelocityBC::Dirichlet(1.0, 0.0));
-    solver.setVelocityBC(Boundary::Left, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Right, VelocityBC::NoSlip());
-    solver.setMaxIterations(1000);
+        const int stride = mesh.nx() + 1;
+        for (int j = 0; j <= mesh.ny(); ++j) {
+            const double y = mesh.y(0, j);
+            const double exact = body_force * y * (height - y) / (2.0 * viscosity);
+            for (int i = 0; i <= mesh.nx(); ++i) {
+                const int index = j * stride + i;
+                maximum_velocity_error =
+                    std::max(maximum_velocity_error, std::abs(result.u[index] - exact));
+            }
+        }
 
-    StokesResult result = solver.solve();
-
-    for (size_t i = 0; i < result.u.size(); ++i) {
-        assert(!std::isnan(result.u[i]) && "u should not contain NaN");
-        assert(!std::isnan(result.v[i]) && "v should not contain NaN");
-        assert(!std::isnan(result.pressure[i]) && "pressure should not contain NaN");
-        assert(!std::isinf(result.u[i]) && "u should not contain Inf");
-        assert(!std::isinf(result.v[i]) && "v should not contain Inf");
+        maximum_transverse_velocity = maximumMagnitude(result.v);
+        maximum_divergence = maximumDivergence(mesh, result.u, result.v);
+        maximum_momentum_residual =
+            maximumMomentumResidual(mesh, result, viscosity, body_force, 0.0);
     }
+};
 
-    std::cout << "  PASSED" << std::endl;
+const ChannelBenchmark& channelBenchmark() {
+    static const ChannelBenchmark benchmark;
+    return benchmark;
 }
 
-/**
- * Test 8: Inflow/outflow boundary conditions
- */
-void testInflowOutflow() {
-    std::cout << "Test 8: Inflow/outflow BCs..." << std::endl;
-
-    int nx = 30, ny = 10;
-    StructuredMesh mesh(nx, ny, 0.0, 1.0, 0.0, 0.1);
-
-    double u_inlet = 0.5;
-
-    StokesSolver solver(mesh, 0.001);
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Left, VelocityBC::Inflow(u_inlet, 0.0));
-    solver.setVelocityBC(Boundary::Right, VelocityBC::Outflow());
-    solver.setTolerance(1e-6);
-    solver.setMaxIterations(3000);
-
-    StokesResult result = solver.solve();
-
-    // Check inlet velocity is applied
-    int stride = nx + 1;
-    for (int j = 0; j <= ny; ++j) {
-        int idx = j * stride;  // Left boundary
-        assert(approxEqual(result.u[idx], u_inlet, 1e-4) && "Inlet u should match BC");
-    }
-
-    // Check flow reaches outlet
-    double u_outlet_avg = 0.0;
-    for (int j = 0; j <= ny; ++j) {
-        int idx = j * stride + nx;  // Right boundary
-        u_outlet_avg += result.u[idx];
-    }
-    u_outlet_avg /= (ny + 1);
-
-    std::cout << "  Inlet velocity:  " << u_inlet << std::endl;
-    std::cout << "  Outlet avg u:    " << u_outlet_avg << std::endl;
-
-    assert(u_outlet_avg > 0.3 && "Flow should reach outlet");
-
-    std::cout << "  PASSED" << std::endl;
+void reportChannelMetrics(const ChannelBenchmark& benchmark) {
+    science_test::report("outer iterations", benchmark.result.iterations);
+    science_test::report("reported converged", benchmark.result.converged ? 1.0 : 0.0);
+    science_test::report("reported residual", benchmark.result.residual);
+    science_test::report("reported divergence", benchmark.result.divergence, "s^-1");
+    science_test::report("max velocity error / Umax",
+                         benchmark.maximum_velocity_error / benchmark.reference_maximum_velocity);
+    science_test::report("max |v| / Umax", benchmark.maximum_transverse_velocity /
+                                               benchmark.reference_maximum_velocity);
+    science_test::report("H max|div(u)| / Umax", benchmark.height * benchmark.maximum_divergence /
+                                                     benchmark.reference_maximum_velocity);
+    science_test::report("max momentum residual / body force",
+                         benchmark.maximum_momentum_residual / benchmark.body_force);
 }
+
+void testPlanePoiseuilleAccuracyAndConservation() {
+    // With f_x=8, mu=1, H=1, the exact fully developed solution is
+    // u(y)=4y(1-y), v=0 and Umax=1. The centered Laplacian is exact for this quadratic.
+    const ChannelBenchmark& benchmark = channelBenchmark();
+    reportChannelMetrics(benchmark);
+
+    const double relative_velocity_error =
+        benchmark.maximum_velocity_error / benchmark.reference_maximum_velocity;
+    const double relative_transverse_velocity =
+        benchmark.maximum_transverse_velocity / benchmark.reference_maximum_velocity;
+    const double dimensionless_divergence =
+        benchmark.height * benchmark.maximum_divergence / benchmark.reference_maximum_velocity;
+    const double normalized_momentum_residual =
+        benchmark.maximum_momentum_residual / benchmark.body_force;
+
+    SCIENCE_REQUIRE(relative_velocity_error < 5.0e-3,
+                    "Poiseuille velocity must agree with the exact profile to <0.5%; actual=" +
+                        science_test::number(relative_velocity_error));
+    SCIENCE_REQUIRE(relative_transverse_velocity < 1.0e-5,
+                    "fully developed channel flow must not create transverse velocity; actual=" +
+                        science_test::number(relative_transverse_velocity));
+    SCIENCE_REQUIRE(dimensionless_divergence < 1.0e-4,
+                    "continuity defect H|max div(u)|/Umax must be <1e-4; actual=" +
+                        science_test::number(dimensionless_divergence));
+    SCIENCE_REQUIRE(normalized_momentum_residual < 2.0e-3,
+                    "discrete momentum defect must be <0.2% of the driving force; actual=" +
+                        science_test::number(normalized_momentum_residual));
+}
+
+void testResultDiagnosticsHaveDocumentedScientificMeaning() {
+    const ChannelBenchmark& benchmark = channelBenchmark();
+
+    SCIENCE_REQUIRE_NEAR(benchmark.result.divergence, benchmark.maximum_divergence, 1.0e-12,
+                         1.0e-10, "reported maximum divergence");
+    SCIENCE_REQUIRE_NEAR(
+        benchmark.result.residual, benchmark.maximum_momentum_residual, 1.0e-12, 1.0e-8,
+        "reported momentum residual (StokesResult::residual is documented as this quantity)");
+}
+
+void testConvergenceFlagMatchesScientificAcceptanceCriteria() {
+    const ChannelBenchmark& benchmark = channelBenchmark();
+    const bool meets_scientific_limits =
+        benchmark.maximum_velocity_error / benchmark.reference_maximum_velocity < 5.0e-3 &&
+        benchmark.height * benchmark.maximum_divergence / benchmark.reference_maximum_velocity <
+            1.0e-4 &&
+        benchmark.maximum_momentum_residual / benchmark.body_force < 2.0e-3;
+    SCIENCE_REQUIRE(benchmark.result.converged == meets_scientific_limits,
+                    "converged must reflect velocity-independent momentum and continuity "
+                    "criteria; reported=" +
+                        std::to_string(benchmark.result.converged) +
+                        ", scientific=" + std::to_string(meets_scientific_limits));
+}
+
+}  // namespace
 
 int main() {
-    std::cout << "========================================" << std::endl;
-    std::cout << "Stokes Solver Unit Tests" << std::endl;
-    std::cout << "========================================" << std::endl;
-
-    try {
-        testConstruction();
-        testInvalidParameters();
-        testPoiseuilleFlow();
-        testLidDrivenCavity();
-        testBodyForceCavity();
-        testGridConvergence();
-        testNoNaN();
-        testInflowOutflow();
-
-        std::cout << "========================================" << std::endl;
-        std::cout << "All 8 tests PASSED!" << std::endl;
-        std::cout << "========================================" << std::endl;
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "FAILED with exception: " << e.what() << std::endl;
-        return 1;
-    }
+    return science_test::runSuite(
+        "steady Stokes flow",
+        {{"construction and physical input validation", testConstructionAndPhysicalInputValidation},
+         {"quiescent exact solution", testQuiescentExactSolution},
+         {"sealed uniform-force hydrostatic equilibrium",
+          testSealedUniformForceHydrostaticEquilibrium},
+         {"plane Poiseuille accuracy and conservation", testPlanePoiseuilleAccuracyAndConservation},
+         {"result diagnostics have documented scientific meaning",
+          testResultDiagnosticsHaveDocumentedScientificMeaning},
+         {"convergence flag matches scientific acceptance criteria",
+          testConvergenceFlagMatchesScientificAcceptanceCriteria}});
 }

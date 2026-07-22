@@ -114,7 +114,7 @@ for i in range(1, len(snapshot_times)):
     current_mass = np.sum(current_solution)
     print(
         f"{snapshot_hours[i]:>10.1f} {current_solution.min():>15.6e} "
-        f"{current_solution.max():>15.6e} {current_mass/initial_mass:>15.3f}"
+        f"{current_solution.max():>15.6e} {current_mass / initial_mass:>15.3f}"
     )
 
 print(f"\n✓ Captured {len(solutions)} time snapshots")
@@ -122,9 +122,9 @@ print(f"\n✓ Captured {len(solutions)} time snapshots")
 # ========================================================================
 # VTK Export for ParaView visualization
 # ========================================================================
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("Exporting VTK files for ParaView...")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
 
 # Export time series
 series_prefix = bt.get_result_path("drug_diffusion_series", EXAMPLE_NAME)
@@ -149,9 +149,9 @@ print(f"\n✓ Final snapshot exported: {final_vtk}")
 # ========================================================================
 # Matplotlib visualization of snapshots
 # ========================================================================
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("Creating matplotlib visualization...")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
 
 # Create multi-panel plot
 n_snapshots = len(solutions)
@@ -201,9 +201,9 @@ plt.show()
 # ========================================================================
 # Summary
 # ========================================================================
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("SUMMARY")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
 
 final_solution = solutions[-1]
 retention = np.sum(final_solution) / initial_mass * 100
@@ -212,7 +212,7 @@ print(f"\nSimulation completed for {snapshot_hours[-1]} hours")
 print(f"  Initial peak concentration: {initial_condition.max():.6f}")
 print(f"  Final peak concentration: {final_solution.max():.6f}")
 print(f"  Drug retention: {retention:.1f}% (decay + diffusion to boundaries)")
-print(f"  Reduction factor: {initial_condition.max()/final_solution.max():.1f}x")
+print(f"  Reduction factor: {initial_condition.max() / final_solution.max():.1f}x")
 
 print("\n📊 Visualization files created:")
 print("  • Matplotlib time series: drug_time_series.png")
@@ -227,4 +227,4 @@ print("  • Modify initial condition to simulate injection sites")
 print("  • Add heterogeneous diffusivity for tissue layers")
 
 print(f"\n📁 All results saved to: {bt.get_result_path('', EXAMPLE_NAME)}")
-print(f"{'='*70}")
+print(f"{'=' * 70}")

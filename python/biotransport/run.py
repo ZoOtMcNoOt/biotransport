@@ -1,249 +1,138 @@
-"""Beginner-friendly run helpers.
-
-The goal is a single, obvious entry point for the common case:
-- configure a *Problem*
-- run to an end time with conservative, stable defaults
-
-Advanced users can still call `ExplicitFD().run(...)` directly or use
-CrankNicolsonDiffusion for implicit timestepping.
-"""
+"""Thin, user-friendly access to the canonical C++ transport solver."""
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Mapping, Sequence
+from numbers import Real
 
 from ._core import (
-    ExplicitFD,
+    BoundaryCondition,
+    SolveOptions,
     TransportProblem,
-    CrankNicolsonDiffusion,
-    Boundary,
-    BoundaryType,
+    TransportResult,
+    solve_transport,
 )
 
 
-def run(problem, t_end: float, *, solver: ExplicitFD | None = None):
-    """Run a configured problem to `t_end` using the ExplicitFD façade.
-
-    Args:
-        problem: A TransportProblem instance
-        t_end: End time in seconds
-        solver: Optional ExplicitFD instance (creates one if not provided)
-
-    Returns:
-        RunResult: Result containing `.solution()` and `.stats`
-    """
-    if solver is None:
-        solver = ExplicitFD()
-    return solver.run(problem, float(t_end))
-
-
 def solve(
-    problem,
-    t: float,
+    problem: TransportProblem,
+    end_time: float | None = None,
     *,
+    t: float | None = None,
+    time_step: float | None = None,
     dt: float | None = None,
-    method: str = "explicit",
-    safety_factor: float = 0.9,
-    initial_condition=None,
-):
-    """Solve a transport problem to time t using explicit or implicit methods.
+    safety_factor: float = 0.8,
+    reaction_step_fraction: float = 0.1,
+    max_steps: int = 10_000_000,
+    check_finite: bool = True,
+    method: str = "conservative",
+) -> TransportResult:
+    """Solve a scalar transport problem entirely in the C++ core.
 
-    This is the simplest way to run a simulation. Just configure your
-    problem and call solve().
+    Parameters
+    ----------
+    problem:
+        Physics configured with :class:`biotransport.Problem`.
+    end_time:
+        Requested physical end time. The result lands on this time exactly.
+    time_step:
+        Maximum explicit step. When omitted, the C++ solver selects a certified
+        transport-stable step. Custom reactions require either this argument or
+        a declared derivative bound.
+    safety_factor:
+        Fraction of the certified explicit stability limit used automatically.
+    reaction_step_fraction:
+        Accuracy guard relative to a known reaction timescale.
 
-    Args:
-        problem: A TransportProblem (or Problem) instance
-        t: End time in seconds
-        dt: Time step size (optional). If not provided:
-            - For explicit: uses CFL-stable timestep
-            - For crank_nicolson: uses dt = t/100 by default
-        method: Solution method - "explicit" or "crank_nicolson"
-        safety_factor: CFL safety factor for explicit method (default 0.9)
-        initial_condition: Initial condition array (optional). Required for
-            crank_nicolson if using high-level API due to a binding limitation.
-
-    Returns:
-        For explicit: RunResult with .solution() and .stats
-        For crank_nicolson: CNSolveResult with .solution, .time, .iterations_per_step
-
-    Example:
-        >>> import biotransport as bt
-        >>> mesh = bt.mesh_1d(100)
-        >>> ic = bt.gaussian(mesh, center=0.5, width=0.1)
-        >>> problem = bt.Problem(mesh).diffusivity(0.01).initial_condition(ic)
-        >>>
-        >>> # Explicit (default)
-        >>> result = bt.solve(problem, t=0.1)
-        >>>
-        >>> # Crank-Nicolson - pass IC explicitly for now
-        >>> result = bt.solve(problem, t=1.0, dt=0.1, method="crank_nicolson",
-        ...                   initial_condition=ic)
-        >>> print(result.solution)  # Final solution
+    Notes
+    -----
+    ``t`` and ``dt`` remain as compatibility aliases. ``method`` accepts
+    ``"conservative"`` or ``"explicit"``; other algorithms are exposed through
+    their specialized APIs until they share this scientific contract.
     """
-    if method == "explicit":
-        solver = ExplicitFD().safety_factor(safety_factor)
-        return solver.run(problem, float(t))
+    if end_time is not None and t is not None:
+        raise TypeError("Pass either end_time or t, not both")
+    if end_time is None:
+        end_time = t
+    if end_time is None:
+        raise TypeError("end_time is required")
 
-    elif method == "crank_nicolson":
-        # Extract problem parameters
-        mesh = problem.mesh()
-        D = problem.diffusivity()
+    if time_step is not None and dt is not None:
+        raise TypeError("Pass either time_step or dt, not both")
+    if time_step is None:
+        time_step = dt
 
-        # Create CN solver
-        cn_solver = CrankNicolsonDiffusion(mesh, D)
-
-        # Set initial condition - use provided IC or try from problem
-        if initial_condition is not None:
-            # Use explicitly provided IC
-            u0 = initial_condition
-            if hasattr(u0, "tolist"):
-                u0 = list(u0)  # Convert numpy array to list
-            elif not isinstance(u0, list):
-                u0 = list(u0)
-        else:
-            # Fallback: try problem.initial() - may have issues with some bindings
-            u0 = problem.initial()
-        cn_solver.set_initial_condition(u0)
-
-        # Apply boundary conditions
-        boundaries = problem.boundaries()
-        boundary_map = {
-            0: Boundary.Left,
-            1: Boundary.Right,
-            2: Boundary.Bottom,
-            3: Boundary.Top,
-        }
-
-        for idx, boundary in boundary_map.items():
-            bc = boundaries[idx]
-            if bc.type == BoundaryType.DIRICHLET:
-                cn_solver.set_dirichlet_boundary(boundary, bc.value)
-            elif bc.type == BoundaryType.NEUMANN:
-                cn_solver.set_neumann_boundary(boundary, bc.value)
-
-        # Determine timestep and number of steps
-        if dt is None:
-            dt = t / 100.0  # Default: 100 steps
-
-        num_steps = int(t / dt + 0.5)  # Round to nearest integer
-
-        # Solve using CN
-        cn_solver.solve(dt, num_steps)
-
-        # Create a result object compatible with the expected interface
-        class CNResult:
-            def __init__(self, solver):
-                self._solver = solver
-                self._solution = solver.solution()
-                self._time = solver.time()
-
-                # Mock stats for compatibility
-                class MockStats:
-                    def __init__(self, steps):
-                        self.steps = steps
-
-                self.stats = MockStats(num_steps)
-
-            def solution(self):
-                return self._solution
-
-        return CNResult(cn_solver)
-
-    else:
+    normalized_method = method.lower().replace("-", "_")
+    if normalized_method not in {"conservative", "explicit", "explicit_euler"}:
         raise ValueError(
-            f"Unknown method '{method}'. Use 'explicit' or 'crank_nicolson'."
+            "The intuitive solve() API currently supports the verified conservative "
+            "explicit solver only. Use a specialized solver explicitly for other methods."
         )
+
+    options = SolveOptions()
+    options.final_time = float(end_time)
+    options.time_step = 0.0 if time_step is None else float(time_step)
+    options.safety_factor = float(safety_factor)
+    options.reaction_step_fraction = float(reaction_step_fraction)
+    options.max_steps = int(max_steps)
+    options.check_finite = bool(check_finite)
+    return solve_transport(problem, options)
+
+
+def run(problem: TransportProblem, t_end: float, **kwargs) -> TransportResult:
+    """Compatibility alias for :func:`solve`; computation remains in C++."""
+    return solve(problem, end_time=t_end, **kwargs)
 
 
 def run_checkpoints(
     mesh,
     checkpoints: Sequence[float],
     diffusivity: float,
-    initial_condition: list | None = None,
-    boundaries: dict | None = None,
-    *,
-    solver: ExplicitFD | None = None,
-    on_checkpoint=None,
-) -> dict:
-    """Run simulation saving results at multiple checkpoint times.
+    initial_condition=None,
+    boundaries: Mapping[object, BoundaryCondition] | None = None,
+    **solve_kwargs,
+) -> dict[float, object]:
+    """Solve pure diffusion in C++ and return fields at requested times.
 
-    This is a convenience function for multi-time simulations. It handles
-    the boilerplate of chaining runs and updating initial conditions.
-
-    Args:
-        mesh: StructuredMesh instance
-        checkpoints: List of times to save solutions (must be sorted, > 0)
-        diffusivity: Diffusion coefficient (uniform)
-        initial_condition: Initial field values (defaults to zeros)
-        boundaries: Dict mapping Boundary to BoundaryCondition (optional)
-        solver: Optional ExplicitFD instance
-        on_checkpoint: Optional callback(t, solution) called at each checkpoint
-
-    Returns:
-        dict: Mapping from checkpoint time to solution array
-
-    Example:
-        >>> mesh = StructuredMesh(0, 0.01, 100)
-        >>> ic = [1.0 if x < 0.002 else 0.0 for x in mesh.x_coords()]
-        >>> results = run_checkpoints(
-        ...     mesh,
-        ...     checkpoints=[0.1, 0.5, 1.0, 5.0],
-        ...     diffusivity=1e-9,
-        ...     initial_condition=ic,
-        ...     boundaries={bt.Boundary.LEFT: bt.BoundaryCondition.dirichlet(1.0)},
-        ... )
-        >>> # results[1.0] is the solution at t=1.0s
+    This helper is deliberately scoped to uniform diffusion. For reactions or
+    advection, construct a :class:`Problem` and call :func:`solve` so configured
+    terms cannot be lost while rebuilding checkpoint segments.
     """
-
-    if solver is None:
-        solver = ExplicitFD()
-
-    # Validate checkpoints
     if not checkpoints:
         raise ValueError("checkpoints must not be empty")
+    times = sorted(float(value) for value in checkpoints)
+    if times[0] <= 0.0 or any(right <= left for left, right in zip(times, times[1:])):
+        raise ValueError(
+            "checkpoints must be unique, strictly increasing, and positive"
+        )
 
-    sorted_times = sorted(checkpoints)
-    if sorted_times[0] <= 0:
-        raise ValueError("All checkpoint times must be > 0")
-
-    # Initialize
+    node_count = mesh.num_nodes()
     if initial_condition is None:
-        n_nodes = (mesh.nx() + 1) * (mesh.ny() + 1) if mesh.ny() > 0 else mesh.nx() + 1
-        current_ic = [0.0] * n_nodes
+        current = [0.0] * node_count
+    elif isinstance(initial_condition, Real):
+        current = [float(initial_condition)] * node_count
     else:
-        current_ic = list(initial_condition)
-
-    results = {}
+        current = list(initial_condition)
+    if len(current) != node_count:
+        raise ValueError(
+            f"initial_condition has {len(current)} values; the mesh requires {node_count}"
+        )
+    results: dict[float, object] = {}
     current_time = 0.0
 
-    for target_time in sorted_times:
-        duration = target_time - current_time
-        if duration <= 0:
-            continue
-
-        # Build problem for this segment
-        problem = TransportProblem(mesh)
-        problem.diffusivity(diffusivity)
-        problem.initialCondition(current_ic)
-
-        # Apply boundaries if provided
+    for target_time in times:
+        problem = (
+            TransportProblem(mesh)
+            .diffusivity(float(diffusivity))
+            .initial_condition(current)
+        )
         if boundaries:
-            for boundary, bc in boundaries.items():
-                problem.boundary(boundary, bc)
+            for side, condition in boundaries.items():
+                problem.boundary(side, condition)
 
-        # Run segment
-        result = solver.run(problem, duration)
-        solution = list(result.solution())
-
-        # Store result
-        results[target_time] = solution
-
-        # Callback
-        if on_checkpoint:
-            on_checkpoint(target_time, solution)
-
-        # Update for next segment
-        current_ic = solution
+        result = solve(problem, end_time=target_time - current_time, **solve_kwargs)
+        current = result.concentration.tolist()
+        results[target_time] = result.concentration
         current_time = target_time
 
     return results

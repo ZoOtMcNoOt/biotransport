@@ -59,4 +59,4 @@ ReferenceAlignment: Left
 
 # Miscellaneous
 FixNamespaceComments: true
-ReflowComments: true
+ReflowComments: false

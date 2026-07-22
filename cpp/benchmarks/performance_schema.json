@@ -1,0 +1,281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ZoOtMcNoOt/biotransport/schemas/performance-v1.json",
+  "title": "BioTransport reproducible performance evidence v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_utc",
+    "program",
+    "provenance",
+    "configuration",
+    "results"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "biotransport.performance.v1"
+    },
+    "generated_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "program": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "project_version",
+        "revision",
+        "revision_discoverable",
+        "revision_dirty",
+        "compiler",
+        "build",
+        "platform",
+        "openmp"
+      ],
+      "properties": {
+        "project_version": { "type": "string" },
+        "revision": { "type": "string" },
+        "revision_discoverable": { "type": "boolean" },
+        "revision_dirty": { "type": "boolean" },
+        "compiler": {
+          "type": "object",
+          "required": ["id", "version", "cpp_standard", "cpp_standard_name"],
+          "properties": {
+            "id": { "type": "string" },
+            "version": { "type": "string" },
+            "cpp_standard": { "type": "integer" },
+            "cpp_standard_name": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "build": {
+          "type": "object",
+          "required": [
+            "type",
+            "generator",
+            "configured_cxx_flags",
+            "openmp_cxx_flags",
+            "benchmark_target_flags",
+            "flags_scope",
+            "assertions_enabled",
+            "eigen_enabled"
+          ],
+          "properties": {
+            "type": { "type": "string" },
+            "generator": { "type": "string" },
+            "configured_cxx_flags": { "type": "string" },
+            "openmp_cxx_flags": { "type": "string" },
+            "benchmark_target_flags": { "type": "string" },
+            "flags_scope": { "type": "string" },
+            "assertions_enabled": { "type": "boolean" },
+            "eigen_enabled": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "platform": {
+          "type": "object",
+          "required": [
+            "operating_system",
+            "architecture",
+            "cpu_model",
+            "logical_threads"
+          ],
+          "properties": {
+            "operating_system": { "type": "string" },
+            "architecture": { "type": "string" },
+            "cpu_model": { "type": "string" },
+            "logical_threads": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "openmp": {
+          "type": "object",
+          "required": [
+            "compile_definition",
+            "enabled",
+            "specification_date",
+            "maximum_threads",
+            "observed_threads",
+            "thread_limit",
+            "dynamic_teams",
+            "omp_num_threads_environment",
+            "omp_proc_bind_environment",
+            "omp_places_environment"
+          ],
+          "properties": {
+            "compile_definition": { "type": "boolean" },
+            "enabled": { "type": "boolean" },
+            "specification_date": { "type": "integer", "minimum": 0 },
+            "maximum_threads": { "type": "integer", "minimum": 1 },
+            "observed_threads": { "type": "integer", "minimum": 1 },
+            "thread_limit": { "type": "integer", "minimum": 1 },
+            "dynamic_teams": { "type": "boolean" },
+            "omp_num_threads_environment": { "type": "string" },
+            "omp_proc_bind_environment": { "type": "string" },
+            "omp_places_environment": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "configuration": {
+      "type": "object",
+      "required": [
+        "warmup_runs",
+        "timed_runs",
+        "requested_steps",
+        "requested_sizes_cells_per_axis"
+      ],
+      "properties": {
+        "warmup_runs": { "type": "integer", "minimum": 0 },
+        "timed_runs": { "type": "integer", "minimum": 2 },
+        "requested_steps": { "type": "integer", "minimum": 1 },
+        "requested_sizes_cells_per_axis": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "implementation",
+          "timed_scope",
+          "parallel",
+          "workload",
+          "correctness",
+          "timing_ms",
+          "throughput"
+        ],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "implementation": { "type": "string", "minLength": 1 },
+          "timed_scope": { "type": "string", "minLength": 1 },
+          "parallel": {
+            "type": "object",
+            "required": ["kernel", "openmp_effective_for_workload", "observed_threads"],
+            "properties": {
+              "kernel": { "type": "string" },
+              "openmp_effective_for_workload": { "type": "boolean" },
+              "observed_threads": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          },
+          "workload": {
+            "type": "object",
+            "required": [
+              "cells_x",
+              "cells_y",
+              "cell_count",
+              "node_count",
+              "species_count",
+              "step_count",
+              "maximum_time_step",
+              "final_time",
+              "parameters"
+            ],
+            "properties": {
+              "cells_x": { "type": "integer", "minimum": 1 },
+              "cells_y": { "type": "integer", "minimum": 1 },
+              "cell_count": { "type": "integer", "minimum": 1 },
+              "node_count": { "type": "integer", "minimum": 1 },
+              "species_count": { "type": "integer", "minimum": 1 },
+              "step_count": { "type": "integer", "minimum": 1 },
+              "maximum_time_step": { "type": "number", "exclusiveMinimum": 0 },
+              "final_time": { "type": "number", "exclusiveMinimum": 0 },
+              "parameters": {
+                "type": "object",
+                "additionalProperties": { "type": "number" }
+              }
+            },
+            "additionalProperties": false
+          },
+          "correctness": {
+            "type": "object",
+            "required": [
+              "status",
+              "invariant",
+              "tolerance_basis",
+              "reference_value",
+              "observed_value",
+              "absolute_error",
+              "relative_error",
+              "tolerance",
+              "solution_checksum",
+              "checksum_definition",
+              "repeatable_across_runs",
+              "maximum_checksum_difference"
+            ],
+            "properties": {
+              "status": { "enum": ["pass", "fail"] },
+              "invariant": { "type": "string", "minLength": 1 },
+              "tolerance_basis": { "type": "string", "minLength": 1 },
+              "reference_value": { "type": "number" },
+              "observed_value": { "type": "number" },
+              "absolute_error": { "type": "number", "minimum": 0 },
+              "relative_error": { "type": "number", "minimum": 0 },
+              "tolerance": { "type": "number", "minimum": 0 },
+              "solution_checksum": { "type": "number" },
+              "checksum_definition": { "type": "string", "minLength": 1 },
+              "repeatable_across_runs": { "type": "boolean" },
+              "maximum_checksum_difference": { "type": "number", "minimum": 0 }
+            },
+            "additionalProperties": false
+          },
+          "timing_ms": {
+            "type": "object",
+            "required": [
+              "clock",
+              "samples",
+              "mean",
+              "population_stddev",
+              "minimum",
+              "maximum",
+              "median"
+            ],
+            "properties": {
+              "clock": { "type": "string" },
+              "samples": {
+                "type": "array",
+                "minItems": 2,
+                "items": { "type": "number", "exclusiveMinimum": 0 }
+              },
+              "mean": { "type": "number", "exclusiveMinimum": 0 },
+              "population_stddev": { "type": "number", "minimum": 0 },
+              "minimum": { "type": "number", "exclusiveMinimum": 0 },
+              "maximum": { "type": "number", "exclusiveMinimum": 0 },
+              "median": { "type": "number", "exclusiveMinimum": 0 }
+            },
+            "additionalProperties": false
+          },
+          "throughput": {
+            "type": "object",
+            "required": ["basis", "node_species_steps_per_second"],
+            "properties": {
+              "basis": { "type": "string" },
+              "node_species_steps_per_second": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -78,13 +78,13 @@ def verify_velocity_profile():
     torque = bt.analytical.taylor_couette_torque(a, b, omega_a, omega_b, mu)
 
     print("\nParameters:")
-    print(f"  Inner radius a = {a*1000:.1f} mm")
-    print(f"  Outer radius b = {b*1000:.1f} mm")
+    print(f"  Inner radius a = {a * 1000:.1f} mm")
+    print(f"  Outer radius b = {b * 1000:.1f} mm")
     print(f"  Inner angular velocity = {omega_a:.1f} rad/s")
     print(f"  Outer angular velocity = {omega_b:.1f} rad/s")
-    print(f"  Viscosity = {mu*1000:.1f} mPa*s")
+    print(f"  Viscosity = {mu * 1000:.1f} mPa*s")
     print("\nResults:")
-    print(f"  Max velocity (inner wall) = {v[0]*100:.2f} cm/s")
+    print(f"  Max velocity (inner wall) = {v[0] * 100:.2f} cm/s")
     print(f"  Torque per unit length = {torque:.6e} N*m/m")
 
     # Plot
@@ -126,7 +126,8 @@ def verify_velocity_profile():
     plt.savefig(bt.get_result_path("taylor_couette_verification.png", EXAMPLE_NAME))
     plt.show()
 
-    return True
+    # Plot-only demonstration; pass/fail evidence is provided by the boundary
+    # and solid-body limiting-case checks.
 
 
 def verify_solid_body_rotation():
@@ -157,9 +158,11 @@ def verify_solid_body_rotation():
 if __name__ == "__main__":
     results = []
     results.append(verify_boundary_conditions())
-    results.append(verify_velocity_profile())
+    verify_velocity_profile()
     results.append(verify_solid_body_rotation())
 
     print("\n" + "=" * 60)
     print(f"SUMMARY: {sum(results)}/{len(results)} verifications passed")
     print("=" * 60)
+    if not all(results):
+        raise SystemExit(1)

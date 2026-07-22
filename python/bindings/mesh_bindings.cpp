@@ -89,6 +89,7 @@ void register_mesh_bindings(py::module_& m) {
     py::enum_<BoundaryType>(m, "BoundaryType")
         .value("DIRICHLET", BoundaryType::DIRICHLET)
         .value("NEUMANN", BoundaryType::NEUMANN)
+        .value("ROBIN", BoundaryType::ROBIN)
         .export_values();
 
     // Boundary side enum
@@ -99,13 +100,22 @@ void register_mesh_bindings(py::module_& m) {
         .value("Top", Boundary::Top)
         .export_values();
 
-    // Boundary condition (type + value)
-    py::class_<BoundaryCondition>(m, "BoundaryCondition")
+    // Boundary condition metadata. Solver support for each type is solver-specific.
+    py::class_<BoundaryCondition>(m, "BoundaryCondition",
+                                  "Scalar boundary-condition data. Robin conditions use "
+                                  "a*u + b*du/dn = c; consult the selected solver for support.")
         .def(py::init<BoundaryType, double>(), py::arg("type"), py::arg("value"))
         .def_readwrite("type", &BoundaryCondition::type)
         .def_readwrite("value", &BoundaryCondition::value)
+        .def_readwrite("a", &BoundaryCondition::a, "Coefficient of u in a Robin condition")
+        .def_readwrite("b", &BoundaryCondition::b,
+                       "Coefficient of the outward-normal derivative in a Robin condition")
+        .def_readwrite("c", &BoundaryCondition::c, "Right-hand side of a Robin condition")
         .def_static("dirichlet", &BoundaryCondition::Dirichlet, py::arg("value"))
-        .def_static("neumann", &BoundaryCondition::Neumann, py::arg("flux"));
+        .def_static("neumann", &BoundaryCondition::Neumann, py::arg("normal_derivative"),
+                    "Create a Neumann condition for the outward-normal derivative.")
+        .def_static("robin", &BoundaryCondition::Robin, py::arg("a"), py::arg("b"), py::arg("c"),
+                    "Create Robin metadata for a*u + b*du/dn = c. Solver support varies.");
 
     // =========================================================================
     // CylindricalMesh
@@ -143,8 +153,12 @@ void register_mesh_bindings(py::module_& m) {
         .def("dz", &CylindricalMesh::dz)
         .def("rmin", &CylindricalMesh::rmin)
         .def("rmax", &CylindricalMesh::rmax)
+        .def("thetamin", &CylindricalMesh::thetamin)
+        .def("thetamax", &CylindricalMesh::thetamax)
         .def("zmin", &CylindricalMesh::zmin)
         .def("zmax", &CylindricalMesh::zmax)
+        .def("theta_node_count", &CylindricalMesh::thetaNodeCount)
+        .def("theta_periodic", &CylindricalMesh::thetaPeriodic)
         .def("r", &CylindricalMesh::r, py::arg("i"))
         .def("theta", &CylindricalMesh::theta, py::arg("j"))
         .def("z", &CylindricalMesh::z, py::arg("k"))
@@ -163,6 +177,12 @@ void register_mesh_bindings(py::module_& m) {
             },
             py::arg("phi"))
         .def(
+            "gradient_theta",
+            [](const CylindricalMesh& mesh, const std::vector<double>& phi) {
+                return copy_to_numpy(mesh.gradientTheta(phi));
+            },
+            py::arg("phi"), "Compute the physical azimuthal component (1/r) d(phi)/d(theta).")
+        .def(
             "gradient_z",
             [](const CylindricalMesh& mesh, const std::vector<double>& phi) {
                 return copy_to_numpy(mesh.gradientZ(phi));
@@ -178,14 +198,23 @@ void register_mesh_bindings(py::module_& m) {
             "divergence",
             [](const CylindricalMesh& mesh, const std::vector<double>& vr,
                const std::vector<double>& vz) { return copy_to_numpy(mesh.divergence(vr, vz)); },
-            py::arg("vr"), py::arg("vz"));
+            py::arg("vr"), py::arg("vz"),
+            "Compute axisymmetric divergence from radial and axial components.")
+        .def(
+            "divergence",
+            [](const CylindricalMesh& mesh, const std::vector<double>& vr,
+               const std::vector<double>& vtheta, const std::vector<double>& vz) {
+                return copy_to_numpy(mesh.divergence(vr, vtheta, vz));
+            },
+            py::arg("vr"), py::arg("vtheta"), py::arg("vz"),
+            "Compute full cylindrical divergence from radial, azimuthal, and axial components.");
 
     // =========================================================================
     // StencilOps - Higher-order finite difference stencils
     // =========================================================================
     py::class_<StencilOps>(m, "StencilOps",
                            "Finite difference stencil operations on structured meshes.")
-        .def(py::init<const StructuredMesh&>(), py::arg("mesh"),
+        .def(py::init<const StructuredMesh&>(), py::arg("mesh"), py::keep_alive<1, 2>(),
              "Create stencil operator for the given mesh.")
         // 2nd-order (existing)
         .def("laplacian", &StencilOps::laplacian, py::arg("u"), py::arg("idx"),

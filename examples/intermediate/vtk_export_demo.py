@@ -42,7 +42,7 @@ mesh = bt.mesh_2d(100, 100, x_min=0.0, x_max=2.5, y_min=0.0, y_max=2.5)
 # Diffusion parameters
 D = 2e-5  # Diffusivity
 
-print(f"Mesh: {mesh.nx()+1} x {mesh.ny()+1} nodes")
+print(f"Mesh: {mesh.nx() + 1} x {mesh.ny() + 1} nodes")
 print(f"Domain: {mesh.x(mesh.nx())} x {mesh.y(mesh.ny())}")
 
 # Initial condition: Background with localized spots
@@ -112,9 +112,9 @@ for i, t_target in enumerate(time_points):
 # ========================================================================
 # VTK Export Method 1: Single snapshot
 # ========================================================================
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("VTK Export Method 1: Single Snapshot")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
 
 # Export final state as a single VTK file
 vtk_single_path = bt.get_result_path("pattern_final.vtk", EXAMPLE_NAME)
@@ -131,9 +131,9 @@ print("  4. Use 'Surface' or 'Surface with Edges' representation")
 # ========================================================================
 # VTK Export Method 2: Time series for animation
 # ========================================================================
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("VTK Export Method 2: Time Series Animation")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
 
 # Export all time points as a series
 series_prefix = bt.get_result_path("pattern_series", EXAMPLE_NAME)
@@ -155,9 +155,9 @@ print("  5. Optional: File -> Save Animation to create video")
 # ========================================================================
 # Also create matplotlib visualizations for comparison
 # ========================================================================
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("Creating matplotlib comparison plots...")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
 
 fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 fig.suptitle(
@@ -204,9 +204,9 @@ print(f"  [OK] Matplotlib plots saved ({len(solutions)} snapshots)")
 # ========================================================================
 # Export additional fields (example with multiple variables)
 # ========================================================================
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("Advanced: Exporting Multiple Fields")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
 
 # Calculate derived quantities
 final_solution = solutions[-1]
@@ -238,9 +238,9 @@ print(f"  {vtk_grad_path}")
 # ========================================================================
 # Summary and Tips
 # ========================================================================
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("SUMMARY: VTK Export Best Practices")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
 
 print("\nWhen to use VTK export:")
 print("  - 2D and 3D problems requiring detailed spatial visualization")
@@ -264,6 +264,6 @@ print("  - Save state (.pvsm) to preserve visualization settings")
 print("\nAll results saved to:")
 print(f"  {bt.get_result_path('', EXAMPLE_NAME)}")
 
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("Example complete!")
-print(f"{'='*70}")
+print(f"{'=' * 70}")

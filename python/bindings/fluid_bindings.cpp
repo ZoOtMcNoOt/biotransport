@@ -5,19 +5,19 @@
 
 // Ensure M_PI is defined on MSVC
 #define _USE_MATH_DEFINES
-#include <cmath>
-
 #include "fluid_bindings.hpp"
-#include "binding_helpers.hpp"
+
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
-#include <biotransport/core/mesh/structured_mesh.hpp>
+#include "binding_helpers.hpp"
 #include <biotransport/core/boundary.hpp>
+#include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/physics/fluid_dynamics/darcy_flow.hpp>
-#include <biotransport/physics/fluid_dynamics/stokes.hpp>
 #include <biotransport/physics/fluid_dynamics/navier_stokes.hpp>
 #include <biotransport/physics/fluid_dynamics/non_newtonian.hpp>
+#include <biotransport/physics/fluid_dynamics/stokes.hpp>
+#include <cmath>
 
 namespace biotransport {
 namespace bindings {
@@ -36,32 +36,29 @@ void register_fluid_bindings(py::module_& m) {
         .def("vy", [](const DarcyFlowResult& r) { return to_numpy(r.vy); });
 
     py::class_<DarcyFlowSolver>(m, "DarcyFlowSolver")
-        .def(py::init<const StructuredMesh&, double>(),
-             py::arg("mesh"), py::arg("kappa"),
+        .def(py::init<const StructuredMesh&, double>(), py::arg("mesh"), py::arg("kappa"),
              py::keep_alive<1, 2>())
-        .def(py::init<const StructuredMesh&, const std::vector<double>&>(),
-             py::arg("mesh"), py::arg("kappa"),
-             py::keep_alive<1, 2>())
-        .def("set_dirichlet", &DarcyFlowSolver::setDirichlet,
-             py::arg("side"), py::arg("pressure"),
+        .def(py::init<const StructuredMesh&, const std::vector<double>&>(), py::arg("mesh"),
+             py::arg("kappa"), py::keep_alive<1, 2>())
+        .def("set_dirichlet", &DarcyFlowSolver::setDirichlet, py::arg("side"), py::arg("pressure"),
              py::return_value_policy::reference_internal)
-        .def("set_neumann", &DarcyFlowSolver::setNeumann,
-             py::arg("side"), py::arg("flux"),
+        .def("set_outward_pressure_gradient", &DarcyFlowSolver::setNeumann, py::arg("side"),
+             py::arg("outward_pressure_gradient_Pa_per_m"),
+             py::return_value_policy::reference_internal,
+             "Set outward dp/dn [Pa/m]. This is not Darcy velocity or volumetric flux.")
+        .def("set_neumann", &DarcyFlowSolver::setNeumann, py::arg("side"), py::arg("flux"),
+             py::return_value_policy::reference_internal,
+             "Compatibility spelling: flux is outward dp/dn [Pa/m], not physical flux. Prefer "
+             "set_outward_pressure_gradient().")
+        .def("set_internal_pressure", &DarcyFlowSolver::setInternalPressure, py::arg("mask"),
+             py::arg("pressure"), py::return_value_policy::reference_internal)
+        .def("set_omega", &DarcyFlowSolver::setOmega, py::arg("omega"),
              py::return_value_policy::reference_internal)
-        .def("set_internal_pressure", &DarcyFlowSolver::setInternalPressure,
-             py::arg("mask"), py::arg("pressure"),
+        .def("set_tolerance", &DarcyFlowSolver::setTolerance, py::arg("tol"),
              py::return_value_policy::reference_internal)
-        .def("set_omega", &DarcyFlowSolver::setOmega,
-             py::arg("omega"),
+        .def("set_max_iterations", &DarcyFlowSolver::setMaxIterations, py::arg("max_iter"),
              py::return_value_policy::reference_internal)
-        .def("set_tolerance", &DarcyFlowSolver::setTolerance,
-             py::arg("tol"),
-             py::return_value_policy::reference_internal)
-        .def("set_max_iterations", &DarcyFlowSolver::setMaxIterations,
-             py::arg("max_iter"),
-             py::return_value_policy::reference_internal)
-        .def("set_initial_guess", &DarcyFlowSolver::setInitialGuess,
-             py::arg("pressure"),
+        .def("set_initial_guess", &DarcyFlowSolver::setInitialGuess, py::arg("pressure"),
              py::return_value_policy::reference_internal)
         .def("solve", &DarcyFlowSolver::solve)
         .def("kappa", [](const DarcyFlowSolver& s) { return to_numpy(s.kappa()); });
@@ -82,12 +79,13 @@ void register_fluid_bindings(py::module_& m) {
         .def_readwrite("u_value", &VelocityBC::u_value)
         .def_readwrite("v_value", &VelocityBC::v_value)
         .def_static("no_slip", &VelocityBC::NoSlip)
-        .def_static("inflow", &VelocityBC::Inflow,
-             py::arg("u"), py::arg("v") = 0.0)
-        .def_static("outflow", &VelocityBC::Outflow)
-        .def_static("dirichlet", &VelocityBC::Dirichlet,
-             py::arg("u"), py::arg("v"))
-        .def_static("stress_free", &VelocityBC::StressFree);
+        .def_static("inflow", &VelocityBC::Inflow, py::arg("u"), py::arg("v") = 0.0)
+        .def_static("outflow", &VelocityBC::Outflow,
+                    "Create a zero-outward-normal-velocity-gradient condition")
+        .def_static("dirichlet", &VelocityBC::Dirichlet, py::arg("u"), py::arg("v"))
+        .def_static("stress_free", &VelocityBC::StressFree,
+                    "Create traction-free metadata; current flow solvers reject this "
+                    "unsupported condition instead of treating it as outflow");
 
     py::class_<StokesResult>(m, "StokesResult")
         .def(py::init<>())
@@ -100,31 +98,23 @@ void register_fluid_bindings(py::module_& m) {
         .def("pressure", [](const StokesResult& r) { return to_numpy(r.pressure); });
 
     py::class_<StokesSolver>(m, "StokesSolver")
-        .def(py::init<const StructuredMesh&, double>(),
-             py::arg("mesh"), py::arg("viscosity"),
+        .def(py::init<const StructuredMesh&, double>(), py::arg("mesh"), py::arg("viscosity"),
              py::keep_alive<1, 2>())
-        .def("set_velocity_bc", &StokesSolver::setVelocityBC,
-             py::arg("side"), py::arg("bc"),
+        .def("set_velocity_bc", &StokesSolver::setVelocityBC, py::arg("side"), py::arg("bc"),
              py::return_value_policy::reference_internal)
         .def("set_body_force", py::overload_cast<double, double>(&StokesSolver::setBodyForce),
-             py::arg("fx"), py::arg("fy"),
+             py::arg("fx"), py::arg("fy"), py::return_value_policy::reference_internal)
+        .def("set_tolerance", &StokesSolver::setTolerance, py::arg("tol"),
              py::return_value_policy::reference_internal)
-        .def("set_tolerance", &StokesSolver::setTolerance,
-             py::arg("tol"),
+        .def("set_max_iterations", &StokesSolver::setMaxIterations, py::arg("max_iter"),
              py::return_value_policy::reference_internal)
-        .def("set_max_iterations", &StokesSolver::setMaxIterations,
-             py::arg("max_iter"),
+        .def("set_pressure_relaxation", &StokesSolver::setPressureRelaxation, py::arg("omega_p"),
              py::return_value_policy::reference_internal)
-        .def("set_pressure_relaxation", &StokesSolver::setPressureRelaxation,
-             py::arg("omega_p"),
-             py::return_value_policy::reference_internal)
-        .def("set_velocity_relaxation", &StokesSolver::setVelocityRelaxation,
-             py::arg("omega_v"),
+        .def("set_velocity_relaxation", &StokesSolver::setVelocityRelaxation, py::arg("omega_v"),
              py::return_value_policy::reference_internal)
         .def("solve", &StokesSolver::solve)
         .def("viscosity", &StokesSolver::viscosity)
-        .def("reynolds", &StokesSolver::reynolds,
-             py::arg("L"), py::arg("U"), py::arg("rho"));
+        .def("reynolds", &StokesSolver::reynolds, py::arg("L"), py::arg("U"), py::arg("rho"));
 
     // =========================================================================
     // Navier-Stokes Solver
@@ -142,48 +132,45 @@ void register_fluid_bindings(py::module_& m) {
         .def_readonly("time_steps", &NavierStokesResult::time_steps)
         .def_readonly("max_velocity", &NavierStokesResult::max_velocity)
         .def_readonly("reynolds", &NavierStokesResult::reynolds)
+        .def_readonly("pressure_iterations", &NavierStokesResult::pressure_iterations,
+                      "Iterations used by the final pressure projection")
+        .def_readonly("pressure_residual", &NavierStokesResult::pressure_residual,
+                      "Relative residual of the final pressure Poisson solve")
+        .def_readonly("divergence", &NavierStokesResult::divergence,
+                      "Maximum absolute cell divergence after projection [1/s]")
         .def_readonly("stable", &NavierStokesResult::stable)
         .def("u", [](const NavierStokesResult& r) { return to_numpy(r.u); })
         .def("v", [](const NavierStokesResult& r) { return to_numpy(r.v); })
         .def("pressure", [](const NavierStokesResult& r) { return to_numpy(r.pressure); });
 
     py::class_<NavierStokesSolver>(m, "NavierStokesSolver")
-        .def(py::init<const StructuredMesh&, double, double>(),
-             py::arg("mesh"), py::arg("density"), py::arg("viscosity"),
-             py::keep_alive<1, 2>())
-        .def("set_velocity_bc", &NavierStokesSolver::setVelocityBC,
-             py::arg("side"), py::arg("bc"),
+        .def(py::init<const StructuredMesh&, double, double>(), py::arg("mesh"), py::arg("density"),
+             py::arg("viscosity"), py::keep_alive<1, 2>())
+        .def("set_velocity_bc", &NavierStokesSolver::setVelocityBC, py::arg("side"), py::arg("bc"),
              py::return_value_policy::reference_internal)
         .def("set_body_force", py::overload_cast<double, double>(&NavierStokesSolver::setBodyForce),
-             py::arg("fx"), py::arg("fy"),
+             py::arg("fx"), py::arg("fy"), py::return_value_policy::reference_internal)
+        .def("set_initial_velocity", &NavierStokesSolver::setInitialVelocity, py::arg("u0"),
+             py::arg("v0"), py::return_value_policy::reference_internal)
+        .def("set_convection_scheme", &NavierStokesSolver::setConvectionScheme, py::arg("scheme"),
              py::return_value_policy::reference_internal)
-        .def("set_initial_velocity", &NavierStokesSolver::setInitialVelocity,
-             py::arg("u0"), py::arg("v0"),
+        .def("set_cfl", &NavierStokesSolver::setCFL, py::arg("cfl"),
              py::return_value_policy::reference_internal)
-        .def("set_convection_scheme", &NavierStokesSolver::setConvectionScheme,
-             py::arg("scheme"),
+        .def("set_time_step", &NavierStokesSolver::setTimeStep, py::arg("dt"),
              py::return_value_policy::reference_internal)
-        .def("set_cfl", &NavierStokesSolver::setCFL,
-             py::arg("cfl"),
-             py::return_value_policy::reference_internal)
-        .def("set_time_step", &NavierStokesSolver::setTimeStep,
-             py::arg("dt"),
-             py::return_value_policy::reference_internal)
-        .def("set_pressure_tolerance", &NavierStokesSolver::setPressureTolerance,
-             py::arg("tol"),
+        .def("set_pressure_tolerance", &NavierStokesSolver::setPressureTolerance, py::arg("tol"),
              py::return_value_policy::reference_internal)
         .def("set_max_pressure_iterations", &NavierStokesSolver::setMaxPressureIterations,
-             py::arg("max_iter"),
-             py::return_value_policy::reference_internal)
-        .def("solve", &NavierStokesSolver::solve,
-             py::arg("duration"), py::arg("output_interval") = 0.0)
-        .def("solve_steps", &NavierStokesSolver::solveSteps,
-             py::arg("num_steps"))
+             py::arg("max_iter"), py::return_value_policy::reference_internal)
+        .def("solve", &NavierStokesSolver::solve, py::arg("duration"),
+             py::arg("output_interval") = 0.0)
+        .def("solve_steps", &NavierStokesSolver::solveSteps, py::arg("num_steps"))
         .def("density", &NavierStokesSolver::density)
         .def("viscosity", &NavierStokesSolver::viscosity)
         .def("kinematic_viscosity", &NavierStokesSolver::kinematicViscosity)
-        .def("reynolds", &NavierStokesSolver::reynolds,
-             py::arg("L"), py::arg("U"));
+        .def("max_time_step", &NavierStokesSolver::maxTimeStep, py::arg("u"), py::arg("v"),
+             "Return the explicit stability limit for packed staggered velocity fields")
+        .def("reynolds", &NavierStokesSolver::reynolds, py::arg("L"), py::arg("U"));
 
     // =========================================================================
     // Non-Newtonian Fluid Models
@@ -213,8 +200,8 @@ void register_fluid_bindings(py::module_& m) {
 
     // Power-law model
     py::class_<PowerLawModel, ViscosityModel>(m, "PowerLawModel")
-        .def(py::init<double, double, double>(),
-             py::arg("K"), py::arg("n"), py::arg("gamma_min") = 1e-10)
+        .def(py::init<double, double, double>(), py::arg("K"), py::arg("n"),
+             py::arg("gamma_min") = 1e-10)
         .def("K", &PowerLawModel::K)
         .def("n", &PowerLawModel::n)
         .def("is_shear_thinning", &PowerLawModel::isShearThinning)
@@ -222,8 +209,8 @@ void register_fluid_bindings(py::module_& m) {
 
     // Carreau model
     py::class_<CarreauModel, ViscosityModel>(m, "CarreauModel")
-        .def(py::init<double, double, double, double>(),
-             py::arg("mu0"), py::arg("mu_inf"), py::arg("lambda_"), py::arg("n"))
+        .def(py::init<double, double, double, double>(), py::arg("mu0"), py::arg("mu_inf"),
+             py::arg("lambda_"), py::arg("n"))
         .def("mu0", &CarreauModel::mu0)
         .def("mu_inf", &CarreauModel::muInf)
         .def("lambda_", &CarreauModel::lambda)
@@ -231,8 +218,8 @@ void register_fluid_bindings(py::module_& m) {
 
     // Carreau-Yasuda model
     py::class_<CarreauYasudaModel, ViscosityModel>(m, "CarreauYasudaModel")
-        .def(py::init<double, double, double, double, double>(),
-             py::arg("mu0"), py::arg("mu_inf"), py::arg("lambda_"), py::arg("a"), py::arg("n"))
+        .def(py::init<double, double, double, double, double>(), py::arg("mu0"), py::arg("mu_inf"),
+             py::arg("lambda_"), py::arg("a"), py::arg("n"))
         .def("mu0", &CarreauYasudaModel::mu0)
         .def("mu_inf", &CarreauYasudaModel::muInf)
         .def("lambda_", &CarreauYasudaModel::lambda)
@@ -241,8 +228,8 @@ void register_fluid_bindings(py::module_& m) {
 
     // Cross model
     py::class_<CrossModel, ViscosityModel>(m, "CrossModel")
-        .def(py::init<double, double, double, double>(),
-             py::arg("mu0"), py::arg("mu_inf"), py::arg("K"), py::arg("m"))
+        .def(py::init<double, double, double, double>(), py::arg("mu0"), py::arg("mu_inf"),
+             py::arg("K"), py::arg("m"))
         .def("mu0", &CrossModel::mu0)
         .def("mu_inf", &CrossModel::muInf)
         .def("K", &CrossModel::K)
@@ -250,41 +237,45 @@ void register_fluid_bindings(py::module_& m) {
 
     // Bingham model
     py::class_<BinghamModel, ViscosityModel>(m, "BinghamModel")
-        .def(py::init<double, double, double>(),
-             py::arg("tau_y"), py::arg("mu_p"), py::arg("epsilon") = 1e-6)
+        .def(py::init<double, double, double>(), py::arg("tau_y"), py::arg("mu_p"),
+             py::arg("epsilon") = 1e-6)
         .def("yield_stress", &BinghamModel::yieldStress)
         .def("plastic_viscosity", &BinghamModel::plasticViscosity)
-        .def("bingham_number", &BinghamModel::binghamNumber,
-             py::arg("L"), py::arg("U"));
+        .def("bingham_number", &BinghamModel::binghamNumber, py::arg("L"), py::arg("U"));
 
     // Herschel-Bulkley model
     py::class_<HerschelBulkleyModel, ViscosityModel>(m, "HerschelBulkleyModel")
-        .def(py::init<double, double, double, double>(),
-             py::arg("tau_y"), py::arg("K"), py::arg("n"), py::arg("epsilon") = 1e-6)
+        .def(py::init<double, double, double, double>(), py::arg("tau_y"), py::arg("K"),
+             py::arg("n"), py::arg("epsilon") = 1e-6)
         .def("yield_stress", &HerschelBulkleyModel::yieldStress)
         .def("K", &HerschelBulkleyModel::K)
         .def("n", &HerschelBulkleyModel::n);
 
     // Casson model (blood rheology)
     py::class_<CassonModel, ViscosityModel>(m, "CassonModel")
-        .def(py::init<double, double, double>(),
-             py::arg("tau_y"), py::arg("mu_p"), py::arg("epsilon") = 1e-6)
+        .def(py::init<double, double, double>(), py::arg("tau_y"), py::arg("mu_p"),
+             py::arg("epsilon") = 1e-6)
         .def("yield_stress", &CassonModel::yieldStress)
         .def("plastic_viscosity", &CassonModel::plasticViscosity);
 
     // Blood rheology utility functions
-    m.def("blood_casson_model", &bloodCassonModel,
-          py::arg("hematocrit"),
-          "Create Casson model for blood at given hematocrit (0-0.7).");
+    m.def("blood_casson_model", &bloodCassonModel, py::arg("hematocrit"),
+          "Create the supported Casson blood correlation for hematocrit in [0, 0.60]. "
+          "Inputs outside the 35%-55% source evidence range are extrapolations.");
 
-    m.def("blood_carreau_model", &bloodCarreauModel,
-          py::arg("hematocrit"),
-          "Create Carreau model for blood at given hematocrit (0-0.7).");
+    m.def("blood_carreau_model", &bloodCarreauModel, py::arg("hematocrit"),
+          "Create an educational hematocrit-scaled Carreau surrogate for hematocrit in "
+          "[0, 0.60], anchored to a commonly reported 45% fit.");
 
-    m.def("pipe_wall_shear_rate", &pipeWallShearRate,
-          py::arg("Q"), py::arg("R"),
-          "Wall shear rate in pipe flow: gamma_w = 4Q/(pi*R^3).");
+    m.def("pipe_wall_shear_rate", &pipeWallShearRate, py::arg("Q"), py::arg("R"),
+          "Return the nonnegative Newtonian nominal wall shear-rate magnitude "
+          "4*abs(Q)/(pi*R^3). It is uncorrected for non-Newtonian flow.");
+
+    m.def("apparent_viscosity_pipe", &apparentViscosityPipe, py::arg("model"), py::arg("Q"),
+          py::arg("R"), py::arg("pressure_gradient"),
+          "Infer apparent pipe viscosity using a model-based Rabinowitsch-Mooney correction. "
+          "Q and pressure_gradient must describe opposing flow and pressure-drop directions.");
 }
 
-} // namespace bindings
-} // namespace biotransport
+}  // namespace bindings
+}  // namespace biotransport

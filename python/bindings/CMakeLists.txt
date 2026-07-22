@@ -1,12 +1,17 @@
 # Modular Python bindings - split into focused modules for maintainability
 set(BINDING_SOURCES
     biotransport_bindings_new.cpp
+    balance_bindings.cpp
+    metadata_bindings.cpp
     mesh_bindings.cpp
+    nonuniform_bindings.cpp
     diffusion_bindings.cpp
     fluid_bindings.cpp
+    high_order_bindings.cpp
     utilities_bindings.cpp
     io_bindings.cpp
     sparse_bindings.cpp)
+list(APPEND BINDING_SOURCES transport_bindings.cpp)
 
 pybind11_add_module(_core ${BINDING_SOURCES})
 target_link_libraries(_core PRIVATE biotransport)
@@ -25,6 +30,6 @@ execute_process(
 # Install the bindings to the Python package directory
 install(
   TARGETS _core
-  LIBRARY DESTINATION "${PYTHON_SITE_PACKAGES}/biotransport/_core"
-  RUNTIME DESTINATION "${PYTHON_SITE_PACKAGES}/biotransport/_core"
-  ARCHIVE DESTINATION "${PYTHON_SITE_PACKAGES}/biotransport/_core")
+  LIBRARY DESTINATION "biotransport/_core"
+  RUNTIME DESTINATION "biotransport/_core"
+  ARCHIVE DESTINATION "biotransport/_core")

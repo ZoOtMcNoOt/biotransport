@@ -29,10 +29,10 @@ nx, ny, nz = 20, 20, 20  # 20 cells in each direction
 mesh = bt.StructuredMesh3D(nx, ny, nz, 0.0, L, 0.0, L, 0.0, L)
 
 print("3D Mesh created:")
-print(f"  Nodes: {mesh.num_nodes()} ({nx+1} x {ny+1} x {nz+1})")
+print(f"  Nodes: {mesh.num_nodes()} ({nx + 1} x {ny + 1} x {nz + 1})")
 print(f"  Cells: {mesh.num_cells()} ({nx} x {ny} x {nz})")
 print(
-    f"  Grid spacing: dx={mesh.dx()*1e3:.3f} mm, dy={mesh.dy()*1e3:.3f} mm, dz={mesh.dz()*1e3:.3f} mm"
+    f"  Grid spacing: dx={mesh.dx() * 1e3:.3f} mm, dy={mesh.dy() * 1e3:.3f} mm, dz={mesh.dz() * 1e3:.3f} mm"
 )
 
 # =============================================================================
@@ -60,7 +60,7 @@ for k in range(nz + 1):
                 u0[idx] = 0.0  # Ambient
 
 print(
-    f"\nInitial condition: Hot sphere (T=100°C) at center, radius={radius*1e3:.2f} mm"
+    f"\nInitial condition: Hot sphere (T=100°C) at center, radius={radius * 1e3:.2f} mm"
 )
 
 # =============================================================================
@@ -92,13 +92,13 @@ t_end = 0.01  # seconds
 num_steps = int(t_end / dt)
 
 print("\nRunning simulation:")
-print(f"  Total time: {t_end*1000:.1f} ms")
+print(f"  Total time: {t_end * 1000:.1f} ms")
 print(f"  Time steps: {num_steps}")
 
 # Run the simulation
 solver.solve(dt, num_steps)
 
-print(f"  Simulation complete, t = {solver.time()*1000:.1f} ms")
+print(f"  Simulation complete, t = {solver.time() * 1000:.1f} ms")
 
 # =============================================================================
 # Results Analysis
@@ -204,7 +204,7 @@ ax1 = axes[0, 0]
 im1 = ax1.pcolormesh(x_mm, y_mm, xy_initial, cmap="hot", shading="auto")
 ax1.set_xlabel("x (mm)")
 ax1.set_ylabel("y (mm)")
-ax1.set_title(f"Initial Condition (XY slice at z={mesh.z(nz//2)*1000:.1f} mm)")
+ax1.set_title(f"Initial Condition (XY slice at z={mesh.z(nz // 2) * 1000:.1f} mm)")
 ax1.set_aspect("equal")
 plt.colorbar(im1, ax=ax1, label="Temperature (°C)")
 
@@ -214,7 +214,7 @@ im2 = ax2.pcolormesh(x_mm, y_mm, xy_final, cmap="hot", shading="auto")
 ax2.set_xlabel("x (mm)")
 ax2.set_ylabel("y (mm)")
 ax2.set_title(
-    f"Final (t={solver.time()*1000:.1f} ms) - XY slice at z={mesh.z(nz//2)*1000:.1f} mm"
+    f"Final (t={solver.time() * 1000:.1f} ms) - XY slice at z={mesh.z(nz // 2) * 1000:.1f} mm"
 )
 ax2.set_aspect("equal")
 plt.colorbar(im2, ax=ax2, label="Temperature (°C)")
@@ -224,7 +224,7 @@ ax3 = axes[1, 0]
 im3 = ax3.pcolormesh(x_mm, z_mm, xz_final, cmap="hot", shading="auto")
 ax3.set_xlabel("x (mm)")
 ax3.set_ylabel("z (mm)")
-ax3.set_title(f"XZ slice at y={mesh.y(ny//2)*1000:.1f} mm")
+ax3.set_title(f"XZ slice at y={mesh.y(ny // 2) * 1000:.1f} mm")
 ax3.set_aspect("equal")
 plt.colorbar(im3, ax=ax3, label="Temperature (°C)")
 
@@ -233,7 +233,7 @@ ax4 = axes[1, 1]
 im4 = ax4.pcolormesh(y_mm, z_mm, yz_final, cmap="hot", shading="auto")
 ax4.set_xlabel("y (mm)")
 ax4.set_ylabel("z (mm)")
-ax4.set_title(f"YZ slice at x={mesh.x(nx//2)*1000:.1f} mm")
+ax4.set_title(f"YZ slice at x={mesh.x(nx // 2) * 1000:.1f} mm")
 ax4.set_aspect("equal")
 plt.colorbar(im4, ax=ax4, label="Temperature (°C)")
 

@@ -66,7 +66,7 @@ t = 0.0
 for t_target in times_to_save:
     print(f"Simulating from t={t:.1f}s to t={t_target:.1f}s...")
     result = bt.solve(problem, t_target - t)
-    sol = np.array(result.solution())  # solution() is a method
+    sol = np.asarray(result.solution).copy()
     problem = problem.initial_condition(list(sol))
     saved_solutions[t_target] = sol
     t = t_target

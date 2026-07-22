@@ -147,20 +147,33 @@ int main() {
         double dp_dx = -100.0;
         double mu = 0.001;
 
-        double v_center = ana::couette_velocity(0.0, h2, dp_dx, mu);
-        double v_max = ana::couette_max_velocity(h2, dp_dx, mu);
+        double v_center = ana::plane_poiseuille_velocity(0.0, h2, dp_dx, mu);
+        double v_max = ana::plane_poiseuille_max_velocity(h2, dp_dx, mu);
 
         if (!approx_eq(v_center, v_max)) {
-            std::cerr << "FAIL: couette v(y=0) != v_max\n";
+            std::cerr << "FAIL: plane-Poiseuille v(y=0) != v_max\n";
             ++failures;
         }
     }
 
     {
         // At y = ±h/2 (walls), v = 0
-        double v_wall = ana::couette_velocity(0.001, 0.001, -100.0, 0.001);
+        double v_wall = ana::plane_poiseuille_velocity(0.001, 0.001, -100.0, 0.001);
         if (!approx_eq(v_wall, 0.0)) {
-            std::cerr << "FAIL: couette_velocity at wall expected 0.0, got " << v_wall << "\n";
+            std::cerr << "FAIL: plane_poiseuille_velocity at wall expected 0.0, got " << v_wall
+                      << "\n";
+            ++failures;
+        }
+    }
+
+    {
+        const double U = 0.25;
+        const double H = 0.004;
+        if (!approx_eq(ana::couette_velocity(0.0, H, U), 0.0) ||
+            !approx_eq(ana::couette_velocity(H / 2.0, H, U), U / 2.0) ||
+            !approx_eq(ana::couette_velocity(H, H, U), U) ||
+            !approx_eq(ana::couette_max_velocity(U), U)) {
+            std::cerr << "FAIL: Couette solution does not satisfy the wall values/linear profile\n";
             ++failures;
         }
     }

@@ -7,6 +7,7 @@ API Reference
    core
    solvers
    config
+   applications
    utilities
 
 
@@ -17,7 +18,25 @@ Package Overview
 
 The ``biotransport`` package provides:
 
-- **Core classes**: :class:`StructuredMesh`, :class:`CylindricalMesh`, :class:`TransportProblem`
-- **Solvers**: Physics-specific solver classes for diffusion, advection, reaction-diffusion, fluid dynamics
-- **Config**: Dataclass configurations for multi-physics solvers
-- **Utilities**: Dimensionless numbers, analytical solutions, visualization
+- **Core classes**: :class:`StructuredMesh`, :class:`StructuredMesh3D`,
+  :class:`CylindricalMesh`, :class:`NonuniformMesh1D`, and
+  :class:`TransportProblem`.
+- **Native solvers**: Physics-specific C++ classes for scalar, multi-species,
+  electrochemical, membrane, flow, and application models.  Exact scope and
+  evidence are available from :mod:`biotransport.contracts`.
+- **Config and provenance**: Validated application configurations plus
+  :mod:`biotransport.provenance` records.  Bundled defaults remain
+  illustrative unless a project supplies defensible provenance.
+- **Units**: :mod:`biotransport.units` converts selected semantic quantities
+  before handing plain SI values to native solvers.
+- **Analysis**: :mod:`biotransport.analysis` provides scoped sensitivity and
+  uncertainty screening for caller-defined scalar quantities of interest.
+- **Accounting**: :class:`BalanceLedger` and :func:`reconcile_balances` audit
+  caller-supplied inventories/transfers; they do not couple solvers.
+- **Artifacts**: :mod:`biotransport.reproducibility` writes deterministic,
+  fingerprinted run manifests.
+- **Utilities**: Dimensionless numbers, analytical solutions, mesh helpers,
+  visualization, and file helpers.
+
+See :doc:`utilities` for the workflow-module API and
+:doc:`../science_contract` for the scientific interpretation boundary.

@@ -1,164 +1,182 @@
 /**
  * @file diffusion_solver_3d.hpp
- * @brief 3D diffusion and reaction-diffusion solvers.
+ * @brief Conservative explicit 3D diffusion and reaction--diffusion solvers.
  *
- * Extends the solver framework to 3D structured meshes for:
- * - Pure diffusion (∂u/∂t = D∇²u)
- * - Reaction-diffusion (∂u/∂t = D∇²u + R(u,x,y,z,t))
- * - Linear decay (∂u/∂t = D∇²u - ku)
- *
- * Supports OpenMP parallelization for multi-core acceleration.
+ * The discretization is vertex-centred finite volume on a uniform Cartesian
+ * mesh.  Boundary nodes own half control volumes, edges own quarter control
+ * volumes, and corners own eighth control volumes.  Internal diffusive fluxes
+ * cancel pairwise, so homogeneous Neumann data conserve the trapezoidal-volume
+ * integral up to roundoff.  Neumann values are outward derivatives du/dn.
+ * Dirichlet traces meeting on an edge or corner must agree within
+ * 64*epsilon*max(1, |a|, |b|); contradictory traces are rejected before any
+ * public state is changed.
  */
 
 #ifndef BIOTRANSPORT_SOLVERS_DIFFUSION_SOLVER_3D_HPP
 #define BIOTRANSPORT_SOLVERS_DIFFUSION_SOLVER_3D_HPP
 
+#include <algorithm>
 #include <array>
 #include <biotransport/core/boundary.hpp>
-#include <biotransport/core/mesh/mesh_iterators_3d.hpp>
 #include <biotransport/core/mesh/structured_mesh_3d.hpp>
 #include <cmath>
 #include <functional>
+#include <limits>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace biotransport {
 
-/**
- * @brief Base class for 3D explicit time-stepping solvers using CRTP.
- */
+namespace legacy_reaction_3d_detail {
+
+inline void requireNonnegativeField(const std::vector<double>& values, const char* name) {
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (!std::isfinite(values[index]) || values[index] < 0.0) {
+            throw std::invalid_argument(std::string(name) +
+                                        " must be finite and non-negative at index " +
+                                        std::to_string(index));
+        }
+    }
+}
+
+inline void requireNonnegativeFinite(double value, const char* name) {
+    if (!std::isfinite(value) || value < 0.0)
+        throw std::invalid_argument(std::string(name) + " must be finite and non-negative");
+}
+
+inline void validateCandidate(double value, bool require_nonnegative, const char* solver_name) {
+    if (!std::isfinite(value))
+        throw std::runtime_error(std::string(solver_name) + " produced a non-finite concentration");
+    if (require_nonnegative && value < 0.0) {
+        throw std::runtime_error(std::string(solver_name) +
+                                 " would produce a negative concentration; reduce the time step "
+                                 "or revise the reaction/boundary data");
+    }
+}
+
+inline void validateState(const std::vector<double>& values, bool require_nonnegative,
+                          const char* name) {
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (!std::isfinite(values[index])) {
+            throw std::runtime_error(std::string(name) + " contains a non-finite value at index " +
+                                     std::to_string(index));
+        }
+        if (require_nonnegative && values[index] < 0.0) {
+            throw std::runtime_error(std::string(name) + " contains a negative value at index " +
+                                     std::to_string(index));
+        }
+    }
+}
+
+}  // namespace legacy_reaction_3d_detail
+
 template <typename Derived>
 class ExplicitSolverBase3D {
 public:
     ExplicitSolverBase3D(const StructuredMesh3D& mesh, double diffusivity)
-        : mesh_(mesh), diffusivity_(diffusivity), iterator_(mesh), stencil_ops_(mesh) {
-        if (diffusivity <= 0.0) {
-            throw std::invalid_argument("Diffusivity must be positive");
-        }
-        solution_.resize(mesh.numNodes(), 0.0);
-        scratch_.resize(solution_.size(), 0.0);
-
-        // Default boundary conditions (Dirichlet, value = 0)
-        for (int i = 0; i < 6; ++i) {
-            boundary_conditions_[i] = BoundaryCondition::Dirichlet(0.0);
-        }
+        : mesh_(mesh),
+          diffusivity_(diffusivity),
+          solution_(mesh.numNodes(), 0.0),
+          scratch_(mesh.numNodes(), 0.0) {
+        requirePositiveFinite(diffusivity, "Diffusivity");
+        boundary_conditions_.fill(BoundaryCondition::Dirichlet(0.0));
     }
 
-    /**
-     * @brief Set the initial condition.
-     */
     void setInitialCondition(const std::vector<double>& values) {
         if (values.size() != solution_.size()) {
-            throw std::invalid_argument("Initial condition size doesn't match mesh");
+            throw std::invalid_argument("Initial condition size does not match mesh");
         }
+        requireFiniteInput(values, "Initial condition");
         solution_ = values;
     }
 
-    /**
-     * @brief Set a Dirichlet boundary condition on a face.
-     */
     void setDirichletBoundary(Boundary3D boundary, double value) {
-        boundary_conditions_[to_index(boundary)] = BoundaryCondition::Dirichlet(value);
+        requireFinite(value, "Dirichlet value");
+        boundary_conditions_[checkedIndex(boundary)] = BoundaryCondition::Dirichlet(value);
     }
 
     void setDirichletBoundary(int boundary_id, double value) {
-        setDirichletBoundary(static_cast<Boundary3D>(boundary_id), value);
+        setDirichletBoundary(checkedBoundary(boundary_id), value);
+    }
+
+    void setNeumannBoundary(Boundary3D boundary, double normal_derivative) {
+        requireFinite(normal_derivative, "Neumann outward-normal derivative");
+        boundary_conditions_[checkedIndex(boundary)] =
+            BoundaryCondition::Neumann(normal_derivative);
+    }
+
+    void setNeumannBoundary(int boundary_id, double normal_derivative) {
+        setNeumannBoundary(checkedBoundary(boundary_id), normal_derivative);
+    }
+
+    void setBoundaryCondition(Boundary3D boundary, const BoundaryCondition& condition) {
+        (void)checkedIndex(boundary);
+        if (condition.type == BoundaryType::ROBIN) {
+            throw std::invalid_argument(
+                "ExplicitSolverBase3D does not implement Robin boundaries; use Dirichlet or "
+                "outward-derivative Neumann data");
+        }
+        requireFinite(condition.value, "Boundary value");
+        boundary_conditions_[checkedIndex(boundary)] = condition;
+    }
+
+    void setBoundaryCondition(int boundary_id, const BoundaryCondition& condition) {
+        setBoundaryCondition(checkedBoundary(boundary_id), condition);
     }
 
     /**
-     * @brief Set a Neumann boundary condition on a face.
-     */
-    void setNeumannBoundary(Boundary3D boundary, double flux) {
-        boundary_conditions_[to_index(boundary)] = BoundaryCondition::Neumann(flux);
-    }
-
-    void setNeumannBoundary(int boundary_id, double flux) {
-        setNeumannBoundary(static_cast<Boundary3D>(boundary_id), flux);
-    }
-
-    /**
-     * @brief Set a boundary condition.
-     */
-    void setBoundaryCondition(Boundary3D boundary, const BoundaryCondition& bc) {
-        boundary_conditions_[to_index(boundary)] = bc;
-    }
-
-    void setBoundaryCondition(int boundary_id, const BoundaryCondition& bc) {
-        setBoundaryCondition(static_cast<Boundary3D>(boundary_id), bc);
-    }
-
-    /**
-     * @brief Check CFL stability condition for 3D explicit diffusion.
+     * @brief Diffusion-only Forward Euler stability certificate.
      *
-     * Stability requires: dt <= 1/(2*D*(1/dx² + 1/dy² + 1/dz²))
+     * For a generic reaction callback this does not certify reaction stability.
      */
     bool checkStability(double dt) const {
-        double stability_limit =
-            1.0 / (2.0 * diffusivity_ *
-                   (1.0 / (mesh_.dx() * mesh_.dx()) + 1.0 / (mesh_.dy() * mesh_.dy()) +
-                    1.0 / (mesh_.dz() * mesh_.dz())));
-        return dt <= stability_limit;
+        return std::isfinite(dt) && dt > 0.0 && dt <= maxStableTimeStep();
     }
 
-    /**
-     * @brief Get maximum stable time step.
-     */
     double maxStableTimeStep() const {
-        return 0.9 / (2.0 * diffusivity_ *
+        return 1.0 / (2.0 * diffusivity_ *
                       (1.0 / (mesh_.dx() * mesh_.dx()) + 1.0 / (mesh_.dy() * mesh_.dy()) +
                        1.0 / (mesh_.dz() * mesh_.dz())));
     }
 
-    /**
-     * @brief Run the solver for the specified number of steps.
-     */
     void solve(double dt, int num_steps) {
-        if (dt <= 0.0 || num_steps <= 0) {
-            throw std::invalid_argument("Time step and number of steps must be positive");
+        requirePositiveFinite(dt, "Time step");
+        if (num_steps < 0) {
+            throw std::invalid_argument("Number of steps must be non-negative");
         }
-
         if (!checkStability(dt)) {
-            throw std::runtime_error(
-                "Time step may be too large for stability. "
-                "Use checkStability(dt) or maxStableTimeStep() to verify.");
+            throw std::invalid_argument("Time step exceeds the 3D explicit diffusion limit of " +
+                                        std::to_string(maxStableTimeStep()));
         }
 
-        for (int step = 0; step < num_steps; ++step) {
-            derived().preStep(step, dt);
-
-            // Compute updates for all interior nodes
-            iterator_.forEachInterior([this, dt](int idx, int i, int j, int k) {
-                derived().computeNodeUpdate(idx, i, j, k, stencil_ops_, dt);
-            });
-
-            // Apply boundary conditions
-            applyBoundaryConditions(scratch_);
-
-            // Swap buffers
+        validateDirichletCompatibility();
+        imposeDirichlet(solution_);
+        for (int step_index = 0; step_index < num_steps; ++step_index) {
+            derived().preStep(step_index, dt);
+            for (int k = 0; k <= mesh_.nz(); ++k) {
+                for (int j = 0; j <= mesh_.ny(); ++j) {
+                    for (int i = 0; i <= mesh_.nx(); ++i) {
+                        const std::size_t index = nodeIndex(i, j, k);
+                        if (const auto fixed = dirichletValue(i, j, k)) {
+                            scratch_[index] = *fixed;
+                            continue;
+                        }
+                        derived().computeNodeUpdate(index, i, j, k, diffusionRate(i, j, k), dt);
+                    }
+                }
+            }
+            requireFiniteResult(scratch_, "3D explicit solution");
             solution_.swap(scratch_);
-
-            derived().postStep(step, dt);
+            derived().postStep(step_index, dt);
         }
     }
 
-    /**
-     * @brief Get the current solution.
-     */
     const std::vector<double>& solution() const { return solution_; }
-
-    /**
-     * @brief Get the mesh.
-     */
     const StructuredMesh3D& mesh() const { return mesh_; }
-
-    /**
-     * @brief Get diffusivity.
-     */
     double diffusivity() const { return diffusivity_; }
-
-    /**
-     * @brief Get current simulation time.
-     */
     double time() const { return time_; }
 
 protected:
@@ -167,116 +185,167 @@ protected:
     std::vector<double> solution_;
     std::vector<double> scratch_;
     std::array<BoundaryCondition, 6> boundary_conditions_;
-
-    MeshIterator3D iterator_;
-    StencilOps3D stencil_ops_;
-
     double time_ = 0.0;
 
-    // Default implementations for hooks
-    void preStep(int /*step*/, double /*dt*/) {}
-    void postStep(int /*step*/, double dt) { time_ += dt; }
-
-    /**
-     * @brief Apply boundary conditions to a solution vector.
-     */
-    void applyBoundaryConditions(std::vector<double>& u) {
-        const int nx = mesh_.nx();
-        const int ny = mesh_.ny();
-        const int nz = mesh_.nz();
-        const int stride_j = mesh_.strideJ();
-        const int stride_k = mesh_.strideK();
-
-        // XMin face (i=0)
-        applyBCFace(
-            u, boundary_conditions_[to_index(Boundary3D::XMin)],
-            [&](int j, int k) {
-                int idx = k * stride_k + j * stride_j + 0;
-                int interior = k * stride_k + j * stride_j + 1;
-                return std::make_pair(idx, interior);
-            },
-            ny, nz, mesh_.dx());
-
-        // XMax face (i=nx)
-        applyBCFace(
-            u, boundary_conditions_[to_index(Boundary3D::XMax)],
-            [&](int j, int k) {
-                int idx = k * stride_k + j * stride_j + nx;
-                int interior = k * stride_k + j * stride_j + (nx - 1);
-                return std::make_pair(idx, interior);
-            },
-            ny, nz, mesh_.dx());
-
-        // YMin face (j=0)
-        applyBCFace(
-            u, boundary_conditions_[to_index(Boundary3D::YMin)],
-            [&](int i, int k) {
-                int idx = k * stride_k + 0 * stride_j + i;
-                int interior = k * stride_k + 1 * stride_j + i;
-                return std::make_pair(idx, interior);
-            },
-            nx, nz, mesh_.dy());
-
-        // YMax face (j=ny)
-        applyBCFace(
-            u, boundary_conditions_[to_index(Boundary3D::YMax)],
-            [&](int i, int k) {
-                int idx = k * stride_k + ny * stride_j + i;
-                int interior = k * stride_k + (ny - 1) * stride_j + i;
-                return std::make_pair(idx, interior);
-            },
-            nx, nz, mesh_.dy());
-
-        // ZMin face (k=0)
-        applyBCFace(
-            u, boundary_conditions_[to_index(Boundary3D::ZMin)],
-            [&](int i, int j) {
-                int idx = 0 * stride_k + j * stride_j + i;
-                int interior = 1 * stride_k + j * stride_j + i;
-                return std::make_pair(idx, interior);
-            },
-            nx, ny, mesh_.dz());
-
-        // ZMax face (k=nz)
-        applyBCFace(
-            u, boundary_conditions_[to_index(Boundary3D::ZMax)],
-            [&](int i, int j) {
-                int idx = nz * stride_k + j * stride_j + i;
-                int interior = (nz - 1) * stride_k + j * stride_j + i;
-                return std::make_pair(idx, interior);
-            },
-            nx, ny, mesh_.dz());
-    }
+    void preStep(int, double) {}
+    void postStep(int, double dt) { time_ += dt; }
 
 private:
     Derived& derived() { return static_cast<Derived&>(*this); }
-    const Derived& derived() const { return static_cast<const Derived&>(*this); }
 
-    template <typename IndexFunc>
-    void applyBCFace(std::vector<double>& u, const BoundaryCondition& bc, IndexFunc&& indexFunc,
-                     int n1, int n2, double h) {
-        for (int idx2 = 0; idx2 <= n2; ++idx2) {
-            for (int idx1 = 0; idx1 <= n1; ++idx1) {
-                auto [boundary_idx, interior_idx] = indexFunc(idx1, idx2);
+    static void requirePositiveFinite(double value, const char* name) {
+        if (!std::isfinite(value) || value <= 0.0)
+            throw std::invalid_argument(std::string(name) + " must be finite and positive");
+    }
 
-                if (bc.type == BoundaryType::DIRICHLET) {
-                    u[boundary_idx] = bc.value;
-                } else if (bc.type == BoundaryType::NEUMANN) {
-                    // Ghost node approach: u_boundary = u_interior + flux * h
-                    u[boundary_idx] = u[interior_idx] + bc.value * h;
+    static void requireFinite(double value, const char* name) {
+        if (!std::isfinite(value))
+            throw std::invalid_argument(std::string(name) + " must be finite");
+    }
+
+    static void requireFiniteInput(const std::vector<double>& values, const char* name) {
+        for (double value : values) {
+            requireFinite(value, name);
+        }
+    }
+
+    static void requireFiniteResult(const std::vector<double>& values, const char* name) {
+        for (double value : values) {
+            if (!std::isfinite(value)) {
+                throw std::runtime_error(std::string(name) + " contains a non-finite value");
+            }
+        }
+    }
+
+    static Boundary3D checkedBoundary(int boundary_id) {
+        if (boundary_id < 0 || boundary_id >= 6)
+            throw std::invalid_argument("3D boundary identifier is outside [0, 5]");
+        return static_cast<Boundary3D>(boundary_id);
+    }
+
+    static std::size_t checkedIndex(Boundary3D boundary) {
+        const int index = to_index(boundary);
+        if (index < 0 || index >= 6)
+            throw std::invalid_argument("3D boundary identifier is outside [0, 5]");
+        return static_cast<std::size_t>(index);
+    }
+
+    std::size_t nodeIndex(int i, int j, int k) const {
+        return static_cast<std::size_t>(mesh_.index(i, j, k));
+    }
+
+    std::optional<double> dirichletValue(int i, int j, int k) const {
+        double sum = 0.0;
+        int count = 0;
+        double reference = 0.0;
+        const auto add = [&](Boundary3D face) {
+            const auto& bc = boundary_conditions_[checkedIndex(face)];
+            if (bc.type == BoundaryType::DIRICHLET) {
+                if (count == 0) {
+                    reference = bc.value;
+                } else {
+                    const double scale = std::max({1.0, std::abs(reference), std::abs(bc.value)});
+                    if (std::abs(reference - bc.value) >
+                        64.0 * std::numeric_limits<double>::epsilon() * scale) {
+                        throw std::invalid_argument(
+                            "Conflicting Dirichlet values meet at a three-dimensional edge or "
+                            "corner");
+                    }
+                }
+                sum += bc.value;
+                ++count;
+            }
+        };
+        if (i == 0)
+            add(Boundary3D::XMin);
+        if (i == mesh_.nx())
+            add(Boundary3D::XMax);
+        if (j == 0)
+            add(Boundary3D::YMin);
+        if (j == mesh_.ny())
+            add(Boundary3D::YMax);
+        if (k == 0)
+            add(Boundary3D::ZMin);
+        if (k == mesh_.nz())
+            add(Boundary3D::ZMax);
+        if (count == 0)
+            return std::nullopt;
+        return sum / static_cast<double>(count);
+    }
+
+    void validateDirichletCompatibility() const {
+        for (int k = 0; k <= mesh_.nz(); ++k) {
+            for (int j = 0; j <= mesh_.ny(); ++j) {
+                for (int i = 0; i <= mesh_.nx(); ++i)
+                    (void)dirichletValue(i, j, k);
+            }
+        }
+    }
+
+    void imposeDirichlet(std::vector<double>& values) const {
+        for (int k = 0; k <= mesh_.nz(); ++k) {
+            for (int j = 0; j <= mesh_.ny(); ++j) {
+                for (int i = 0; i <= mesh_.nx(); ++i) {
+                    if (const auto fixed = dirichletValue(i, j, k))
+                        values[nodeIndex(i, j, k)] = *fixed;
                 }
             }
         }
     }
+
+    double xWidth(int i) const { return mesh_.dx() * ((i == 0 || i == mesh_.nx()) ? 0.5 : 1.0); }
+    double yWidth(int j) const { return mesh_.dy() * ((j == 0 || j == mesh_.ny()) ? 0.5 : 1.0); }
+    double zWidth(int k) const { return mesh_.dz() * ((k == 0 || k == mesh_.nz()) ? 0.5 : 1.0); }
+
+    double diffusionRate(int i, int j, int k) const {
+        const std::size_t index = nodeIndex(i, j, k);
+        const double value = solution_[index];
+        const double wx = xWidth(i);
+        const double wy = yWidth(j);
+        const double wz = zWidth(k);
+        const double volume = wx * wy * wz;
+        double integrated_flux = 0.0;
+
+        const double gx = diffusivity_ * wy * wz / mesh_.dx();
+        if (i > 0)
+            integrated_flux += gx * (solution_[nodeIndex(i - 1, j, k)] - value);
+        if (i < mesh_.nx())
+            integrated_flux += gx * (solution_[nodeIndex(i + 1, j, k)] - value);
+
+        const double gy = diffusivity_ * wx * wz / mesh_.dy();
+        if (j > 0)
+            integrated_flux += gy * (solution_[nodeIndex(i, j - 1, k)] - value);
+        if (j < mesh_.ny())
+            integrated_flux += gy * (solution_[nodeIndex(i, j + 1, k)] - value);
+
+        const double gz = diffusivity_ * wx * wy / mesh_.dz();
+        if (k > 0)
+            integrated_flux += gz * (solution_[nodeIndex(i, j, k - 1)] - value);
+        if (k < mesh_.nz())
+            integrated_flux += gz * (solution_[nodeIndex(i, j, k + 1)] - value);
+
+        const auto add_boundary_flux = [&](Boundary3D face, double area) {
+            const auto& bc = boundary_conditions_[checkedIndex(face)];
+            if (bc.type == BoundaryType::NEUMANN)
+                integrated_flux += diffusivity_ * bc.value * area;
+        };
+        if (i == 0)
+            add_boundary_flux(Boundary3D::XMin, wy * wz);
+        if (i == mesh_.nx())
+            add_boundary_flux(Boundary3D::XMax, wy * wz);
+        if (j == 0)
+            add_boundary_flux(Boundary3D::YMin, wx * wz);
+        if (j == mesh_.ny())
+            add_boundary_flux(Boundary3D::YMax, wx * wz);
+        if (k == 0)
+            add_boundary_flux(Boundary3D::ZMin, wx * wy);
+        if (k == mesh_.nz())
+            add_boundary_flux(Boundary3D::ZMax, wx * wy);
+
+        return integrated_flux / volume;
+    }
 };
 
-// =============================================================================
-// DiffusionSolver3D - Pure 3D diffusion
-// =============================================================================
-
-/**
- * @brief Solver for 3D diffusion equation: ∂u/∂t = D∇²u
- */
 class DiffusionSolver3D : public ExplicitSolverBase3D<DiffusionSolver3D> {
 public:
     using Base = ExplicitSolverBase3D<DiffusionSolver3D>;
@@ -284,20 +353,19 @@ public:
 
     DiffusionSolver3D(const StructuredMesh3D& mesh, double diffusivity) : Base(mesh, diffusivity) {}
 
-    void computeNodeUpdate(int idx, int /*i*/, int /*j*/, int /*k*/, const StencilOps3D& ops,
-                           double dt) {
-        scratch_[idx] = solution_[idx] + ops.diffusionTerm(solution_, idx, diffusivity_, dt);
+private:
+    void computeNodeUpdate(std::size_t index, int, int, int, double diffusion_rate, double dt) {
+        scratch_[index] = solution_[index] + dt * diffusion_rate;
     }
 };
 
-// =============================================================================
-// LinearReactionDiffusionSolver3D - With decay term
-// =============================================================================
-
 /**
- * @brief 3D solver for: ∂u/∂t = D∇²u - k*u
+ * @brief IMEX solver for du/dt = D laplacian(u) - k u.
  *
- * Uses implicit treatment of decay for stability.
+ * Diffusion is Forward Euler and decay is Backward Euler.  The method is first
+ * order in time; the diffusion CFL limit still applies.  This concentration
+ * solver rejects negative initial/Dirichlet data and transactionally rejects
+ * any negative or non-finite complete update; it never clips values.
  */
 class LinearReactionDiffusionSolver3D
     : public ExplicitSolverBase3D<LinearReactionDiffusionSolver3D> {
@@ -308,30 +376,79 @@ public:
     LinearReactionDiffusionSolver3D(const StructuredMesh3D& mesh, double diffusivity,
                                     double decay_rate)
         : Base(mesh, diffusivity), decay_rate_(decay_rate) {
-        if (decay_rate_ < 0.0) {
-            throw std::invalid_argument("Decay rate must be non-negative");
-        }
+        if (!std::isfinite(decay_rate_) || decay_rate_ < 0.0)
+            throw std::invalid_argument("Decay rate must be finite and non-negative");
     }
 
-    void computeNodeUpdate(int idx, int /*i*/, int /*j*/, int /*k*/, const StencilOps3D& ops,
-                           double dt) {
-        double u = solution_[idx];
-        double diffusion = ops.diffusionTerm(solution_, idx, diffusivity_, dt);
-        scratch_[idx] = (u + diffusion) / (1.0 + decay_rate_ * dt);
+    void setInitialCondition(const std::vector<double>& values) {
+        legacy_reaction_3d_detail::requireNonnegativeField(values, "Initial concentration");
+        Base::setInitialCondition(values);
+    }
+
+    void setDirichletBoundary(Boundary3D boundary, double value) {
+        legacy_reaction_3d_detail::requireNonnegativeFinite(value, "Dirichlet concentration");
+        Base::setDirichletBoundary(boundary, value);
+    }
+
+    void setDirichletBoundary(int boundary_id, double value) {
+        legacy_reaction_3d_detail::requireNonnegativeFinite(value, "Dirichlet concentration");
+        Base::setDirichletBoundary(boundary_id, value);
+    }
+
+    void setBoundaryCondition(Boundary3D boundary, const BoundaryCondition& condition) {
+        if (condition.type == BoundaryType::DIRICHLET)
+            legacy_reaction_3d_detail::requireNonnegativeFinite(condition.value,
+                                                                "Dirichlet concentration");
+        Base::setBoundaryCondition(boundary, condition);
+    }
+
+    void setBoundaryCondition(int boundary_id, const BoundaryCondition& condition) {
+        if (condition.type == BoundaryType::DIRICHLET)
+            legacy_reaction_3d_detail::requireNonnegativeFinite(condition.value,
+                                                                "Dirichlet concentration");
+        Base::setBoundaryCondition(boundary_id, condition);
+    }
+
+    void solve(double dt, int num_steps) {
+        const std::vector<double> original_solution = this->solution_;
+        const double original_time = this->time_;
+        try {
+            Base::solve(dt, num_steps);
+        } catch (...) {
+            this->solution_ = original_solution;
+            this->time_ = original_time;
+            throw;
+        }
     }
 
     double decayRate() const { return decay_rate_; }
 
 private:
     double decay_rate_;
+
+    void computeNodeUpdate(std::size_t index, int, int, int, double diffusion_rate, double dt) {
+        const double candidate =
+            (this->solution_[index] + dt * diffusion_rate) / (1.0 + decay_rate_ * dt);
+        legacy_reaction_3d_detail::validateCandidate(candidate, true,
+                                                     "LinearReactionDiffusionSolver3D");
+        this->scratch_[index] = candidate;
+    }
+
+    void postStep(int, double dt) {
+        legacy_reaction_3d_detail::validateState(this->solution_, true, "Updated concentration");
+        this->time_ += dt;
+    }
 };
 
-// =============================================================================
-// ReactionDiffusionSolver3D - Generic with callable
-// =============================================================================
-
 /**
- * @brief 3D solver for: ∂u/∂t = D∇²u + R(u, x, y, z, t)
+ * @brief Explicit solver for du/dt = D laplacian(u) + R(u,x,y,z,t).
+ *
+ * maxStableTimeStep() certifies only the diffusion term.  Every callback rate
+ * must be finite and every proposed complete update is checked before the
+ * public state advances.  The default concentration policy transactionally
+ * rejects negative initial, Dirichlet, boundary-result, and update values, so
+ * a reaction-unsafe time step fails rather than being clipped.  C++ callers
+ * modeling a signed scalar may explicitly disable that policy.
  */
 class ReactionDiffusionSolver3D : public ExplicitSolverBase3D<ReactionDiffusionSolver3D> {
 public:
@@ -341,42 +458,107 @@ public:
     friend Base;
 
     ReactionDiffusionSolver3D(const StructuredMesh3D& mesh, double diffusivity,
-                              ReactionFunction reaction)
-        : Base(mesh, diffusivity), reaction_(std::move(reaction)) {
+                              ReactionFunction reaction, bool require_nonnegative_state = true)
+        : Base(mesh, diffusivity),
+          reaction_(std::move(reaction)),
+          require_nonnegative_state_(require_nonnegative_state) {
+        if (!reaction_)
+            throw std::invalid_argument("Reaction callback must be callable");
         cacheCoordinates();
     }
 
-    void computeNodeUpdate(int idx, int i, int j, int k, const StencilOps3D& ops, double dt) {
-        double u = solution_[idx];
-        double x = x_coords_[i];
-        double y = y_coords_[j];
-        double z = z_coords_[k];
+    void setInitialCondition(const std::vector<double>& values) {
+        if (require_nonnegative_state_)
+            legacy_reaction_3d_detail::requireNonnegativeField(values, "Initial concentration");
+        Base::setInitialCondition(values);
+    }
 
-        double diffusion = ops.diffusionTerm(solution_, idx, diffusivity_, dt);
-        double reaction = dt * reaction_(u, x, y, z, time_);
+    void setDirichletBoundary(Boundary3D boundary, double value) {
+        if (require_nonnegative_state_)
+            legacy_reaction_3d_detail::requireNonnegativeFinite(value, "Dirichlet concentration");
+        Base::setDirichletBoundary(boundary, value);
+    }
 
-        scratch_[idx] = u + diffusion + reaction;
+    void setDirichletBoundary(int boundary_id, double value) {
+        if (require_nonnegative_state_)
+            legacy_reaction_3d_detail::requireNonnegativeFinite(value, "Dirichlet concentration");
+        Base::setDirichletBoundary(boundary_id, value);
+    }
+
+    void setBoundaryCondition(Boundary3D boundary, const BoundaryCondition& condition) {
+        validateBoundary(condition);
+        Base::setBoundaryCondition(boundary, condition);
+    }
+
+    void setBoundaryCondition(int boundary_id, const BoundaryCondition& condition) {
+        validateBoundary(condition);
+        Base::setBoundaryCondition(boundary_id, condition);
+    }
+
+    ReactionDiffusionSolver3D& setRequireNonnegativeState(bool required) {
+        if (required)
+            legacy_reaction_3d_detail::requireNonnegativeField(this->solution_,
+                                                               "Current concentration");
+        require_nonnegative_state_ = required;
+        return *this;
+    }
+
+    bool requiresNonnegativeState() const { return require_nonnegative_state_; }
+
+    void solve(double dt, int num_steps) {
+        const std::vector<double> original_solution = this->solution_;
+        const double original_time = this->time_;
+        try {
+            Base::solve(dt, num_steps);
+        } catch (...) {
+            this->solution_ = original_solution;
+            this->time_ = original_time;
+            throw;
+        }
     }
 
 private:
     ReactionFunction reaction_;
-    std::vector<double> x_coords_;
-    std::vector<double> y_coords_;
-    std::vector<double> z_coords_;
+    std::vector<double> x_coordinates_;
+    std::vector<double> y_coordinates_;
+    std::vector<double> z_coordinates_;
+    bool require_nonnegative_state_;
+
+    void computeNodeUpdate(std::size_t index, int i, int j, int k, double diffusion_rate,
+                           double dt) {
+        const double reaction = reaction_(solution_[index], x_coordinates_[i], y_coordinates_[j],
+                                          z_coordinates_[k], time_);
+        if (!std::isfinite(reaction))
+            throw std::runtime_error("Reaction callback returned a non-finite rate");
+        const double candidate = this->solution_[index] + dt * (diffusion_rate + reaction);
+        legacy_reaction_3d_detail::validateCandidate(candidate, require_nonnegative_state_,
+                                                     "ReactionDiffusionSolver3D");
+        this->scratch_[index] = candidate;
+    }
+
+    void postStep(int, double dt) {
+        legacy_reaction_3d_detail::validateState(this->solution_, require_nonnegative_state_,
+                                                 "Updated concentration");
+        this->time_ += dt;
+    }
+
+    void validateBoundary(const BoundaryCondition& condition) const {
+        if (require_nonnegative_state_ && condition.type == BoundaryType::DIRICHLET) {
+            legacy_reaction_3d_detail::requireNonnegativeFinite(condition.value,
+                                                                "Dirichlet concentration");
+        }
+    }
 
     void cacheCoordinates() {
-        x_coords_.resize(mesh_.nx() + 1);
-        for (int i = 0; i <= mesh_.nx(); ++i) {
-            x_coords_[i] = mesh_.x(i);
-        }
-        y_coords_.resize(mesh_.ny() + 1);
-        for (int j = 0; j <= mesh_.ny(); ++j) {
-            y_coords_[j] = mesh_.y(j);
-        }
-        z_coords_.resize(mesh_.nz() + 1);
-        for (int k = 0; k <= mesh_.nz(); ++k) {
-            z_coords_[k] = mesh_.z(k);
-        }
+        x_coordinates_.resize(mesh_.nx() + 1);
+        y_coordinates_.resize(mesh_.ny() + 1);
+        z_coordinates_.resize(mesh_.nz() + 1);
+        for (int i = 0; i <= mesh_.nx(); ++i)
+            x_coordinates_[i] = mesh_.x(i);
+        for (int j = 0; j <= mesh_.ny(); ++j)
+            y_coordinates_[j] = mesh_.y(j);
+        for (int k = 0; k <= mesh_.nz(); ++k)
+            z_coordinates_[k] = mesh_.z(k);
     }
 };
 

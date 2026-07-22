@@ -154,7 +154,7 @@ v = (2z³ - y)î + (-4x + 7z)ĵ + (-3x)k̂
         |∂/∂x  ∂/∂y   ∂/∂z  |
         |2z³-y  -4x+7z  -3x  |
 
-∇ × v = (0)î + (2)ĵ + (-4)k̂
+∇ × v = (-7)î + (6z² + 3)ĵ + (-3)k̂
 ```
 
 **Implementation Status**: Current mesh classes support structured grids. Need:
@@ -316,9 +316,9 @@ public:
 Bi = hm × (V/A) / Di = hm × L_char / Di
 ```
 
-Physical meaning: External mass transfer / Internal diffusion
-- Bi << 1: Internal diffusion dominates → uniform concentration (lumped parameter OK)
-- Bi >> 1: External resistance dominates
+Physical meaning: internal diffusive resistance / external convective resistance
+- Bi << 1: External resistance dominates and internal gradients are small → lumped parameter may be valid
+- Bi >> 1: Internal diffusion resistance dominates and internal gradients matter
 
 **Fourier Modulus:**
 ```
@@ -752,7 +752,7 @@ At depth D below surface: **p = patm + ρgzD**
 
 ### 3.7 Special Flow Solutions
 
-#### 3.7.1 Couette Flow (Parallel Plates)
+#### 3.7.1 Plane Poiseuille Flow (Parallel Plates)
 
 **From HW6 Problem 2c - Pressure-Driven Flow:**
 
@@ -775,7 +775,7 @@ z-Mom: 0 = ∂p/∂z
 
 **Solution (origin at centerline, y ∈ [-h/2, h/2]):**
 ```
-vx(y) = (1/2μ)(dp/dx)(h²/4 - y²)
+vx(y) = (1/2μ)(-dp/dx)(h²/4 - y²)
 ```
 
 **Maximum Velocity (at centerline):**
@@ -1645,13 +1645,17 @@ Based on the course structure:
 
 ## 9. Summary (Status)
 
-BMEN 341 topic coverage is complete in the current library.
+The library covers much of the computational core used in BMEN 341, but topic
+coverage is not the same as numerical or biological validation.
 
 - Dimensionless groups and analytical references exist in C++ (and are exposed to Python where appropriate).
 - Core PDE solvers for the course (diffusion, reaction-diffusion, advection–diffusion, Darcy flow, membrane diffusion) are implemented.
 - Time-step stability helpers are available (see the stability utilities documented in `docs/notes/FOOTPRINT.md`).
 
-No open action items remain from this analysis. For any future/optional extensions, use `docs/notes/ROADMAP.md` as the living planning document.
+Open work remains for problem-specific verification of specialized solvers,
+validated cylindrical flow, application-model calibration, parameter provenance,
+and uncertainty/sensitivity analysis.  The verified scope of each numerical path
+must be read before it is used for scientific inference.
 
 ---
 
@@ -1738,14 +1742,15 @@ Power Law:        σᵢⱼ = k|γ̇|^(n-1) γ̇ᵢⱼ
 Re = ρvL/μ        (inertia/viscous)
 Sc = μ/(ρD)       (momentum/mass diffusion)
 Pe = vL/D = Re×Sc (convection/diffusion)
-Bi = hL/D         (external/internal)
+Bi = hL/D         (internal diffusive resistance / external convective resistance)
 Fo = Dt/L²        (dimensionless time)
 ```
 
 ### Analytical Solutions
 ```
 Poiseuille:       vz(r) = (a²/4μ)(-dp/dz)(1 - r²/a²)
-Couette:          vx(y) = (1/2μ)(dp/dx)(h²/4 - y²)
+Plane Poiseuille: vx(y) = (1/2μ)(-dp/dx)(h²/4 - y²)
+Couette:          vx(y) = U*y/h  (one fixed and one moving plate, no pressure gradient)
 Taylor-Couette:   vθ(r) = Ar + B/r  (constants from BCs)
 ```
 

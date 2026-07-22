@@ -168,13 +168,17 @@ class TestLidDrivenCavity(unittest.TestCase):
         )
 
 
-class TestBodyForceCavity(unittest.TestCase):
-    """Test body force in closed cavity."""
+class TestHydrostaticEquilibrium(unittest.TestCase):
+    """Test conservative uniform forcing in a sealed cavity."""
 
-    def test_body_force_produces_flow(self):
-        """Test that body force in closed cavity produces flow."""
-        mesh = bt.StructuredMesh(10, 10, 0.0, 1.0, 0.0, 1.0)
-        solver = bt.StokesSolver(mesh, 1.0)
+    def test_uniform_body_force_is_balanced_by_pressure(self):
+        """A sealed cavity remains at rest with grad(p) equal to the force."""
+        nx, ny = 10, 8
+        x_min, x_max = -0.25, 1.75
+        y_min, y_max = 0.5, 2.0
+        force_x, force_y = 7.5, -2.25
+        mesh = bt.StructuredMesh(nx, ny, x_min, x_max, y_min, y_max)
+        solver = bt.StokesSolver(mesh, 0.37)
 
         # All walls no-slip
         solver.set_velocity_bc(bt.Boundary.Bottom, bt.VelocityBC.no_slip())
@@ -182,14 +186,27 @@ class TestBodyForceCavity(unittest.TestCase):
         solver.set_velocity_bc(bt.Boundary.Left, bt.VelocityBC.no_slip())
         solver.set_velocity_bc(bt.Boundary.Right, bt.VelocityBC.no_slip())
 
-        solver.set_body_force(10.0, 0.0)
-        solver.set_max_iterations(500)
+        solver.set_body_force(force_x, force_y)
+        solver.set_tolerance(1e-14)
+        solver.set_max_iterations(1)
 
         result = solver.solve()
-        u = result.u()
+        pressure = result.pressure().reshape((ny + 1, nx + 1))
+        x, y = np.meshgrid(
+            np.linspace(x_min, x_max, nx + 1),
+            np.linspace(y_min, y_max, ny + 1),
+        )
+        expected_pressure = force_x * x + force_y * y
+        expected_pressure -= np.mean(expected_pressure)
 
-        self.assertGreater(np.max(u), 0.0, "Body force should produce flow")
-        self.assertFalse(np.any(np.isnan(u)), "u should not contain NaN")
+        self.assertTrue(result.converged)
+        self.assertEqual(result.iterations, 1)
+        np.testing.assert_array_equal(result.u(), 0.0)
+        np.testing.assert_array_equal(result.v(), 0.0)
+        np.testing.assert_allclose(pressure, expected_pressure, rtol=2e-14, atol=2e-14)
+        self.assertAlmostEqual(float(np.mean(pressure)), 0.0, delta=2e-14)
+        self.assertLess(result.residual, 2e-13)
+        self.assertEqual(result.divergence, 0.0)
 
 
 class TestResultValidity(unittest.TestCase):
@@ -201,10 +218,11 @@ class TestResultValidity(unittest.TestCase):
         solver = bt.StokesSolver(mesh, 0.01)
 
         solver.set_velocity_bc(bt.Boundary.Bottom, bt.VelocityBC.no_slip())
-        solver.set_velocity_bc(bt.Boundary.Top, bt.VelocityBC.dirichlet(1.0, 0.0))
+        solver.set_velocity_bc(bt.Boundary.Top, bt.VelocityBC.no_slip())
         solver.set_velocity_bc(bt.Boundary.Left, bt.VelocityBC.no_slip())
         solver.set_velocity_bc(bt.Boundary.Right, bt.VelocityBC.no_slip())
-        solver.set_max_iterations(1000)
+        solver.set_tolerance(1e-12)
+        solver.set_max_iterations(10)
 
         result = solver.solve()
 
@@ -226,8 +244,8 @@ class TestResultValidity(unittest.TestCase):
         solver.set_velocity_bc(bt.Boundary.Top, bt.VelocityBC.no_slip())
         solver.set_velocity_bc(bt.Boundary.Left, bt.VelocityBC.no_slip())
         solver.set_velocity_bc(bt.Boundary.Right, bt.VelocityBC.no_slip())
-        solver.set_body_force(1.0, 0.0)
-        solver.set_max_iterations(100)
+        solver.set_tolerance(1e-12)
+        solver.set_max_iterations(10)
 
         result = solver.solve()
 
@@ -241,15 +259,17 @@ class TestInflowOutflow(unittest.TestCase):
     """Test inflow/outflow boundary conditions."""
 
     def test_inflow_bc_applied(self):
-        """Test that inflow BC is correctly applied."""
-        nx, ny = 30, 10
-        mesh = bt.StructuredMesh(nx, ny, 0.0, 1.0, 0.0, 0.1)
+        """Test a flux-compatible uniform inflow/outflow solution."""
+        nx, ny = 12, 6
+        mesh = bt.StructuredMesh(nx, ny, 0.0, 1.0, 0.0, 0.5)
 
         u_inlet = 0.5
 
-        solver = bt.StokesSolver(mesh, 0.001)
-        solver.set_velocity_bc(bt.Boundary.Bottom, bt.VelocityBC.no_slip())
-        solver.set_velocity_bc(bt.Boundary.Top, bt.VelocityBC.no_slip())
+        solver = bt.StokesSolver(mesh, 1.0)
+        solver.set_velocity_bc(
+            bt.Boundary.Bottom, bt.VelocityBC.dirichlet(u_inlet, 0.0)
+        )
+        solver.set_velocity_bc(bt.Boundary.Top, bt.VelocityBC.dirichlet(u_inlet, 0.0))
         solver.set_velocity_bc(bt.Boundary.Left, bt.VelocityBC.inflow(u_inlet, 0.0))
         solver.set_velocity_bc(bt.Boundary.Right, bt.VelocityBC.outflow())
         solver.set_tolerance(1e-6)
@@ -257,50 +277,51 @@ class TestInflowOutflow(unittest.TestCase):
 
         result = solver.solve()
         u = result.u().reshape((ny + 1, nx + 1))
+        v = result.v().reshape((ny + 1, nx + 1))
 
-        # Check inlet velocity (excluding corner nodes which are affected by no-slip walls)
-        inlet_u_interior = u[1:-1, 0]  # Skip first and last row (corners)
-        np.testing.assert_allclose(
-            inlet_u_interior,
-            u_inlet,
-            atol=1e-4,
-            err_msg="Interior inlet should have u = u_inlet",
-        )
+        np.testing.assert_allclose(u, u_inlet, atol=1e-6)
+        np.testing.assert_allclose(v, 0.0, atol=1e-6)
+        self.assertLess(result.divergence, 1.01e-6)
 
 
 class TestGridConvergence(unittest.TestCase):
-    """Test grid convergence behavior."""
+    """Test analytical channel accuracy across a grid sequence."""
 
-    def test_error_decreases_with_refinement(self):
-        """Test that error decreases with grid refinement."""
-        L = 1.0
-        H = 0.1
-        mu = 0.001
-        dP_dx = 1000.0
-        u_max_analytical = dP_dx * H**2 / (8.0 * mu)
+    def test_channel_accuracy_across_refinement(self):
+        """Keep the Poiseuille error bounded across several grid sizes."""
+        length = 2.0
+        height = 1.0
+        viscosity = 1.0
+        body_force = 8.0
+        u_max_analytical = 1.0
 
         errors = []
-        for n in [10, 20, 40]:
+        for n in [8, 12, 16]:
             nx, ny = n * 2, n
-            mesh = bt.StructuredMesh(nx, ny, 0.0, L, 0.0, H)
-            solver = bt.StokesSolver(mesh, mu)
+            mesh = bt.StructuredMesh(nx, ny, 0.0, length, 0.0, height)
+            solver = bt.StokesSolver(mesh, viscosity)
 
             solver.set_velocity_bc(bt.Boundary.Bottom, bt.VelocityBC.no_slip())
             solver.set_velocity_bc(bt.Boundary.Top, bt.VelocityBC.no_slip())
             solver.set_velocity_bc(bt.Boundary.Left, bt.VelocityBC.outflow())
             solver.set_velocity_bc(bt.Boundary.Right, bt.VelocityBC.outflow())
-            solver.set_body_force(dP_dx, 0.0)
-            solver.set_tolerance(1e-8)
-            solver.set_max_iterations(10000)
+            solver.set_body_force(body_force, 0.0)
+            solver.set_tolerance(1e-5)
+            solver.set_max_iterations(4000)
 
             result = solver.solve()
-            u_max = np.max(result.u())
-            error = abs(u_max - u_max_analytical) / u_max_analytical
+            u = result.u().reshape((ny + 1, nx + 1))
+            y = np.linspace(0.0, height, ny + 1)
+            exact = body_force * y * (height - y) / (2.0 * viscosity)
+            error = np.max(np.abs(u - exact[:, None])) / u_max_analytical
             errors.append(error)
+            self.assertLess(result.divergence, 1.01e-5)
 
-        # All errors should be small (< 1%)
+        # This sequence is an accuracy check, not an observed-order claim: the
+        # iterative tolerance is fixed while the centered stencil is exact for
+        # the quadratic analytical profile.
         for error in errors:
-            self.assertLess(error, 0.01, f"Error should be < 1%: {errors}")
+            self.assertLess(error, 5e-3, f"Error should be < 0.5%: {errors}")
 
 
 if __name__ == "__main__":

@@ -3,12 +3,41 @@ Solvers
 
 .. currentmodule:: biotransport
 
+Canonical conservative scalar transport
+---------------------------------------
+
+Use :class:`Problem` and :func:`solve` for the primary 1D/2D Cartesian path.
+It advances diffusion, conservative advection, and reaction together in C++ and
+returns stability and balance diagnostics.  See :doc:`../science_contract` for
+the exact verified scope.
+
+The classes below are specialized numerical surfaces.  Their benchmarks apply
+only to their stated equation, dimensions, coefficients, and boundary
+conditions; they do not inherit the canonical solver's evidence automatically.
+
 Diffusion
 ---------
 
 .. autoclass:: DiffusionSolver
    :members:
-   :undoc-members:
+
+.. autoclass:: DiffusionSolver3D
+   :members:
+
+.. autoclass:: CrankNicolsonDiffusion
+   :members:
+
+.. autoclass:: ADIDiffusion2D
+   :members:
+
+.. autoclass:: ADIDiffusion3D
+   :members:
+
+.. autoclass:: ImplicitDiffusion2D
+   :members:
+
+.. autoclass:: ImplicitDiffusion3D
+   :members:
 
 
 Reaction-Diffusion
@@ -16,27 +45,21 @@ Reaction-Diffusion
 
 .. autoclass:: ReactionDiffusionSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: LinearReactionDiffusionSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: LogisticReactionDiffusionSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: MichaelisMentenReactionDiffusionSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: ConstantSourceReactionDiffusionSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: MaskedMichaelisMentenReactionDiffusionSolver
    :members:
-   :undoc-members:
 
 
 Advection-Diffusion
@@ -44,11 +67,9 @@ Advection-Diffusion
 
 .. autoclass:: AdvectionDiffusionSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: AdvectionScheme
    :members:
-   :undoc-members:
 
 
 Darcy Flow
@@ -56,11 +77,9 @@ Darcy Flow
 
 .. autoclass:: DarcyFlowSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: DarcyFlowResult
    :members:
-   :undoc-members:
 
 
 Membrane Diffusion
@@ -68,17 +87,35 @@ Membrane Diffusion
 
 .. autoclass:: MembraneDiffusion1DSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: MultiLayerMembraneSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: MembraneDiffusionResult
    :members:
-   :undoc-members:
 
-.. autofunction:: renkin_hindrance
+The Renkin helper and its pore-model limitations are documented in
+:doc:`applications`.
+
+
+Electrochemical transport
+-------------------------
+
+.. autoclass:: IonSpecies
+   :members:
+
+.. autoclass:: NernstPlanckSolver
+   :members:
+
+.. autoclass:: MultiIonSolver
+   :members:
+
+
+Multi-species reaction--diffusion
+---------------------------------
+
+.. autoclass:: MultiSpeciesSolver
+   :members:
 
 
 Fluid Dynamics
@@ -89,37 +126,30 @@ Stokes Flow
 
 .. autoclass:: StokesSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: StokesResult
    :members:
-   :undoc-members:
 
 Navier-Stokes
 ~~~~~~~~~~~~~
 
 .. autoclass:: NavierStokesSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: NavierStokesResult
    :members:
-   :undoc-members:
 
 .. autoclass:: ConvectionScheme
    :members:
-   :undoc-members:
 
 Velocity Boundary Conditions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autoclass:: VelocityBCType
    :members:
-   :undoc-members:
 
 .. autoclass:: VelocityBC
    :members:
-   :undoc-members:
 
 
 Non-Newtonian Fluid Models
@@ -127,74 +157,61 @@ Non-Newtonian Fluid Models
 
 .. autoclass:: ViscosityModel
    :members:
-   :undoc-members:
 
 .. autoclass:: NewtonianModel
    :members:
-   :undoc-members:
 
 .. autoclass:: PowerLawModel
    :members:
-   :undoc-members:
 
 .. autoclass:: CarreauModel
    :members:
-   :undoc-members:
 
 .. autoclass:: CarreauYasudaModel
    :members:
-   :undoc-members:
 
 .. autoclass:: CrossModel
    :members:
-   :undoc-members:
 
 .. autoclass:: BinghamModel
    :members:
-   :undoc-members:
 
 .. autoclass:: HerschelBulkleyModel
    :members:
-   :undoc-members:
 
 .. autoclass:: CassonModel
    :members:
-   :undoc-members:
 
 
 Blood Rheology Utilities
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autofunction:: blood_casson_model
-
-.. autofunction:: blood_carreau_model
-
-.. autofunction:: pipe_wall_shear_rate
+The blood-model helpers and their evidence ranges are documented in
+:doc:`applications`.
 
 
 Multi-Physics Solvers
 ---------------------
 
+These are mechanistic application models, not clinical models.  Defaults are
+demonstrations, and Arrhenius heat-injury output is not a cryogenic cell-death
+law.  Record parameter provenance, calibration domain, uncertainty, grid/time
+convergence, and balance residuals for any scientific result.
+
 .. autoclass:: BioheatCryotherapySolver
    :members:
-   :undoc-members:
 
 .. autoclass:: BioheatSaved
    :members:
-   :undoc-members:
 
 .. autoclass:: TumorDrugDeliverySolver
    :members:
-   :undoc-members:
 
 .. autoclass:: TumorDrugDeliverySaved
    :members:
-   :undoc-members:
 
 .. autoclass:: GrayScottSolver
    :members:
-   :undoc-members:
 
 .. autoclass:: GrayScottRunResult
    :members:
-   :undoc-members:

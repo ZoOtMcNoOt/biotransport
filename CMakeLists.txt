@@ -1,10 +1,12 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.16)
 project(
   biotransport
   VERSION 0.1.0
   LANGUAGES CXX)
 
 include(CTest)
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -12,35 +14,28 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Options
-option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
+option(BUILD_PYTHON_BINDINGS "Build Python bindings" OFF)
 option(BUILD_BENCHMARKS "Build performance benchmarks" OFF)
-option(BIOTRANSPORT_OPENMP "Enable OpenMP parallelization" ON)
+option(BIOTRANSPORT_OPENMP "Enable validated OpenMP parallelization" OFF)
 option(BIOTRANSPORT_EIGEN "Enable Eigen for sparse matrices" ON)
 
 # OpenMP configuration
 if(BIOTRANSPORT_OPENMP)
-  find_package(OpenMP REQUIRED)
+  find_package(OpenMP QUIET)
   if(OpenMP_CXX_FOUND)
     message(STATUS "OpenMP found: version ${OpenMP_CXX_VERSION}")
-    add_compile_definitions(BIOTRANSPORT_ENABLE_OPENMP)
+  else()
+    message(
+      WARNING
+        "BIOTRANSPORT_OPENMP was requested, but OpenMP is unavailable. Building the deterministic serial implementation."
+    )
   endif()
 endif()
 
 # Eigen configuration (header-only library for sparse matrices)
 if(BIOTRANSPORT_EIGEN)
-  include(FetchContent)
-  FetchContent_Declare(
-    eigen
-    GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-    GIT_TAG 3.4.0
-    GIT_SHALLOW TRUE)
-  # Eigen is header-only, just make it available
-  FetchContent_GetProperties(eigen)
-  if(NOT eigen_POPULATED)
-    FetchContent_Populate(eigen)
-  endif()
-  add_compile_definitions(BIOTRANSPORT_ENABLE_EIGEN)
-  message(STATUS "Eigen enabled: ${eigen_SOURCE_DIR}")
+  find_package(Eigen3 3.4 CONFIG REQUIRED)
+  message(STATUS "Eigen sparse backend enabled")
 endif()
 
 # Prefer the active virtual environment when present (but do not require one)
@@ -66,13 +61,12 @@ if(BUILD_PYTHON_BINDINGS)
       ${Python_VERSION}
       CACHE STRING "Python version" FORCE)
 
-  # Add pybind11 (download if not available)
-  include(FetchContent)
-  FetchContent_Declare(
-    pybind11
-    GIT_REPOSITORY https://github.com/pybind/pybind11.git
-    GIT_TAG v2.13.6)
-  FetchContent_MakeAvailable(pybind11)
+  # Python package builds declare pybind11 as a PEP 517 build dependency and
+  # pass its CMake directory explicitly. Standalone native builds therefore
+  # fail with an actionable dependency error instead of cloning undeclared
+  # source code during configuration.
+  set(PYBIND11_FINDPYTHON ON)
+  find_package(pybind11 2.13.6 CONFIG REQUIRED)
 
   # Add the bindings directory
   add_subdirectory(python/bindings)
@@ -83,9 +77,34 @@ if(BUILD_BENCHMARKS)
   add_subdirectory(cpp/benchmarks)
 endif()
 
-# Install targets
+# Install a consumable C++ package.
 install(
   TARGETS biotransport
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin)
+  EXPORT biotransportTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+install(DIRECTORY cpp/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+configure_package_config_file(
+  cmake/biotransportConfig.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/biotransportConfig.cmake"
+  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/biotransport")
+
+write_basic_package_version_file(
+  "${CMAKE_CURRENT_BINARY_DIR}/biotransportConfigVersion.cmake"
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY SameMajorVersion)
+
+install(
+  EXPORT biotransportTargets
+  FILE biotransportTargets.cmake
+  NAMESPACE biotransport::
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/biotransport")
+
+install(
+  FILES "${CMAKE_CURRENT_BINARY_DIR}/biotransportConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/biotransportConfigVersion.cmake"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/biotransport")

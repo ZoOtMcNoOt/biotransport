@@ -7,7 +7,10 @@ set(SOURCES
     src/core/mesh/structured_mesh.cpp
     src/core/mesh/structured_mesh_3d.cpp
     src/core/mesh/cylindrical_mesh.cpp
+    src/core/mesh/nonuniform_mesh_1d.cpp
     src/core/utils.cpp
+    # Solvers with compiled implementations
+    src/solvers/nonuniform_diffusion_1d.cpp
     # Mass transport (specialized solvers only - base solvers are header-only)
     src/physics/mass_transport/gray_scott.cpp
     src/physics/mass_transport/tumor_drug_delivery.cpp
@@ -20,6 +23,14 @@ set(SOURCES
 
 # Create the library
 add_library(biotransport ${SOURCES})
+add_library(biotransport::biotransport ALIAS biotransport)
+set_target_properties(biotransport PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# Public headers and compiled sources both throw typed exceptions. MSVC needs
+# /EHsc for correct C++ stack unwinding; propagate it to native consumers and
+# to the Python extension that links this target.
+target_compile_options(
+  biotransport PUBLIC $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/EHsc>)
 
 # Set include directories for users of the library
 target_include_directories(
@@ -29,11 +40,13 @@ target_include_directories(
 # Link OpenMP if enabled
 if(BIOTRANSPORT_OPENMP AND OpenMP_CXX_FOUND)
   target_link_libraries(biotransport PUBLIC OpenMP::OpenMP_CXX)
+  target_compile_definitions(biotransport PUBLIC BIOTRANSPORT_ENABLE_OPENMP)
 endif()
 
 # Add Eigen include directories if enabled
 if(BIOTRANSPORT_EIGEN)
-  target_include_directories(biotransport PUBLIC ${eigen_SOURCE_DIR})
+  target_link_libraries(biotransport PUBLIC Eigen3::Eigen)
+  target_compile_definitions(biotransport PUBLIC BIOTRANSPORT_ENABLE_EIGEN)
 endif()
 
 # Add tests if needed

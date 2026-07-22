@@ -1,102 +1,129 @@
-/**
- * @file bench_linear_reaction_diffusion.cpp
- * @brief Benchmark for linear reaction-diffusion solver performance
- *
- * Tests LinearReactionDiffusionSolver (diffusion with first-order decay)
- * on grids of increasing size.
- */
+/** Benchmark canonical scalar linear reaction-diffusion. */
 
 #include "bench_utils.hpp"
+#include <algorithm>
+#include <biotransport/core/boundary.hpp>
 #include <biotransport/core/mesh/structured_mesh.hpp>
-#include <biotransport/physics/mass_transport/linear_reaction_diffusion.hpp>
+#include <biotransport/core/problems/transport_problem.hpp>
+#include <biotransport/solvers/transport_solver.hpp>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <numeric>
+#include <string>
 #include <vector>
 
-using namespace biotransport;
-using namespace biotransport::bench;
+namespace {
 
-// Generate initial condition: uniform concentration
-std::vector<double> uniformIC(const StructuredMesh& mesh, double value) {
-    return std::vector<double>(mesh.numNodes(), value);
-}
+using biotransport::Boundary;
+using biotransport::SolveOptions;
+using biotransport::StructuredMesh;
+using biotransport::TransportProblem;
+using biotransport::TransportResult;
+using biotransport::bench::BenchmarkCase;
+using biotransport::bench::BenchmarkOptions;
+using biotransport::bench::BenchmarkResult;
+using biotransport::bench::RunOutcome;
 
-BenchmarkResult benchmarkSize(int n, int num_warmup, int num_runs) {
-    // Square grid n x n
-    const double L = 1.0;
-    const double D = 0.01;
-    const double k = 0.1;  // Decay rate
+BenchmarkResult benchmarkSize(int cells_per_axis, const BenchmarkOptions& options) {
+    constexpr double diffusivity = 0.01;
+    constexpr double decay_rate = 0.1;
+    constexpr double initial_concentration = 1.0;
+    constexpr double cfl_fraction = 0.2;
+    constexpr double final_step_fraction = 0.5;
+    constexpr double solution_tolerance = 5.0e-12;
 
-    StructuredMesh mesh(n, n, 0.0, L, 0.0, L);
+    const StructuredMesh mesh(cells_per_axis, cells_per_axis, 0.0, 1.0, 0.0, 1.0);
+    const double time_step = cfl_fraction * mesh.dx() * mesh.dx() / (4.0 * diffusivity);
+    const double final_time =
+        time_step * (static_cast<double>(options.steps - 1) + final_step_fraction);
+    const double expected_concentration =
+        initial_concentration * std::pow(1.0 - decay_rate * time_step, options.steps - 1) *
+        (1.0 - decay_rate * final_step_fraction * time_step);
 
-    // Stability condition: dt <= dx^2 / (4 * D)
-    const double dx = mesh.dx();
-    const double dt = 0.2 * dx * dx / (4.0 * D);  // 20% safety factor
+    BenchmarkCase workload;
+    workload.name = "linear_reaction_diffusion_" + std::to_string(cells_per_axis) + "x" +
+                    std::to_string(cells_per_axis);
+    workload.description =
+        "Uniform closed-domain diffusion with first-order decay; discrete Euler decay is checked";
+    workload.implementation = "canonical TransportProblem plus conservative solve";
+    workload.parallel_kernel = "none (canonical scalar transport is serial)";
+    workload.openmp_effective_for_workload = false;
+    workload.cells_x = cells_per_axis;
+    workload.cells_y = cells_per_axis;
+    workload.cell_count =
+        static_cast<std::uint64_t>(cells_per_axis) * static_cast<std::uint64_t>(cells_per_axis);
+    workload.node_count = static_cast<std::uint64_t>(mesh.numNodes());
+    workload.species_count = 1;
+    workload.step_count = options.steps;
+    workload.maximum_time_step = time_step;
+    workload.final_time = final_time;
+    workload.parameters = {{"diffusivity", diffusivity},
+                           {"decay_rate", decay_rate},
+                           {"initial_concentration", initial_concentration},
+                           {"cfl_fraction", cfl_fraction},
+                           {"final_step_fraction", final_step_fraction}};
 
-    // Fixed number of steps for consistent comparison
-    const int num_steps = 100;
+    auto run = [&]() -> RunOutcome {
+        TransportProblem problem(mesh);
+        problem.diffusivity(diffusivity)
+            .linearDecay(decay_rate)
+            .initialCondition(initial_concentration)
+            .neumann(Boundary::Left, 0.0)
+            .neumann(Boundary::Right, 0.0)
+            .neumann(Boundary::Bottom, 0.0)
+            .neumann(Boundary::Top, 0.0);
+        SolveOptions solve_options;
+        solve_options.final_time = final_time;
+        solve_options.time_step = time_step;
+        solve_options.max_steps = static_cast<std::size_t>(options.steps);
+        const TransportResult result = biotransport::solve(problem, solve_options);
+        if (result.diagnostics.steps != static_cast<std::size_t>(options.steps)) {
+            throw std::runtime_error("canonical solver did not execute the declared step count");
+        }
 
-    auto ic = uniformIC(mesh, 1.0);
-
-    auto benchFunc = [&]() {
-        LinearReactionDiffusionSolver solver(mesh, D, k);
-        solver.setInitialCondition(ic);
-        solver.setDirichletBoundary(Boundary::Left, 0.0);
-        solver.setDirichletBoundary(Boundary::Right, 0.0);
-        solver.setDirichletBoundary(Boundary::Bottom, 0.0);
-        solver.setDirichletBoundary(Boundary::Top, 0.0);
-        solver.solve(dt, num_steps);
+        const double mean =
+            std::accumulate(result.concentration.begin(), result.concentration.end(), 0.0) /
+            static_cast<double>(result.concentration.size());
+        double maximum_error = 0.0;
+        for (double value : result.concentration) {
+            maximum_error = std::max(maximum_error, std::abs(value - expected_concentration));
+        }
+        const double relative_error =
+            maximum_error / std::max(std::abs(expected_concentration), 1.0e-300);
+        return {biotransport::bench::makeCorrectnessEvidence(
+            "uniform_field_matches_discrete_forward_euler_linear_decay", expected_concentration,
+            mean, maximum_error, relative_error, solution_tolerance,
+            biotransport::bench::solutionChecksum(result.concentration))};
     };
 
-    std::string name = "linear_rxn_diff_" + std::to_string(n) + "x" + std::to_string(n);
-    std::string desc = "Linear reaction-diffusion on " + std::to_string(n) + "x" +
-                       std::to_string(n) + " grid, D=" + std::to_string(D) +
-                       ", k=" + std::to_string(k);
-
-    return runBenchmark(name, desc, n, n, num_steps, dt, num_warmup, num_runs, benchFunc);
+    return biotransport::bench::runBenchmark(workload, options.warmup_runs, options.timed_runs,
+                                             run);
 }
 
+}  // namespace
+
 int main(int argc, char* argv[]) {
-    std::cout << "=================================================\n";
-    std::cout << " BioTransport Linear Reaction-Diffusion Benchmark\n";
-    std::cout << "=================================================\n";
+    try {
+        const BenchmarkOptions options = biotransport::bench::parseOptions(
+            argc, argv, "bench_linear_reaction_diffusion_results.json");
+        if (options.show_help) {
+            biotransport::bench::printUsage(
+                argv[0], "Canonical scalar linear reaction-diffusion performance evidence");
+            return 0;
+        }
 
-#ifdef BIOTRANSPORT_HAS_OPENMP
-    std::cout << "OpenMP: ENABLED\n";
-#else
-    std::cout << "OpenMP: DISABLED\n";
-#endif
-
-    const int num_warmup = 2;
-    const int num_runs = 5;
-
-    // Test various grid sizes
-    std::vector<int> grid_sizes = {32, 64, 128, 256, 512};
-
-    std::vector<BenchmarkResult> results;
-    results.reserve(grid_sizes.size());
-
-    for (int n : grid_sizes) {
-        std::cout << "\nBenchmarking " << n << "x" << n << " grid...\n";
-        auto result = benchmarkSize(n, num_warmup, num_runs);
-        printResult(result);
-        results.push_back(result);
+        std::vector<BenchmarkResult> results;
+        results.reserve(options.sizes.size());
+        for (int size : options.sizes) {
+            results.push_back(benchmarkSize(size, options));
+            biotransport::bench::printResult(results.back());
+        }
+        biotransport::bench::writeJson(results, options, "bench_linear_reaction_diffusion");
+        std::cout << "JSON evidence written to " << options.output_path << '\n';
+        return biotransport::bench::allCorrect(results) ? 0 : 2;
+    } catch (const std::exception& error) {
+        std::cerr << "benchmark error: " << error.what() << '\n';
+        return 1;
     }
-
-    // Write results to JSON
-    writeJSON(results, "bench_linear_reaction_diffusion_results.json");
-
-    // Summary table
-    std::cout << "\n=== Summary (median times) ===\n";
-    std::cout << std::setw(12) << "Grid" << std::setw(15) << "Time (ms)" << std::setw(18)
-              << "Cells/s" << "\n";
-    std::cout << std::string(45, '-') << "\n";
-
-    for (const auto& r : results) {
-        std::cout << std::setw(6) << r.nx << "x" << std::setw(4) << r.ny << std::fixed
-                  << std::setprecision(2) << std::setw(15) << r.stats.median_ms << std::scientific
-                  << std::setprecision(2) << std::setw(18) << r.cells_per_second << "\n";
-    }
-
-    return 0;
 }

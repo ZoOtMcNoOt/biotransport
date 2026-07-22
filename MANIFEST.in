@@ -1,0 +1,31 @@
+include CMakeLists.txt
+include LICENSE
+include readme.md
+include pyproject.toml
+include pytest.ini
+include setup.py
+
+graft cpp
+graft cmake
+graft docs
+graft examples
+graft python/bindings
+graft python/biotransport
+graft python/tests
+
+prune docs/_build
+prune docs/doxygen/html
+prune docs/generated
+
+global-exclude *.py[cod]
+global-exclude *.a
+global-exclude *.dll
+global-exclude *.dylib
+global-exclude *.exe
+global-exclude *.lib
+global-exclude *.o
+global-exclude *.obj
+global-exclude *.pyd
+global-exclude *.so
+global-exclude __pycache__
+global-exclude .DS_Store

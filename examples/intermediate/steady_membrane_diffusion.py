@@ -18,6 +18,13 @@ Physics:
 Key equation:
     j = D * Phi * (C_left - C_right) / L
     P = D * Phi / L  (membrane permeability)
+
+Concentrations must be expressed per cubic metre. The linear Fick model can
+use molar or mass concentration, but the same amount unit must be used
+throughout; the returned flux carries that amount unit per m² per second.
+
+All parameter sets below are illustrative teaching values, not validated
+patient-specific or device-design data.
 """
 
 import numpy as np
@@ -29,22 +36,23 @@ EXAMPLE_NAME = "steady_membrane_diffusion"
 
 def run_simple_membrane():
     """
-    Example 1: Simple membrane diffusion - Blood-Brain Barrier analog.
+    Example 1: Simple planar lipid-membrane diffusion.
 
-    Model a drug crossing a lipid membrane barrier similar to BBB.
+    This is a single homogeneous membrane, not a complete blood-brain barrier
+    model (which would require endothelial cells, junctions, and active uptake).
     """
     print("\n" + "=" * 60)
-    print("Example 1: Simple Membrane Diffusion (BBB analog)")
+    print("Example 1: Simple Planar Lipid-Membrane Diffusion")
     print("=" * 60)
 
-    # Membrane parameters (typical for lipophilic drug crossing BBB)
+    # Illustrative membrane parameters
     L = 5e-9  # Membrane thickness ~ 5 nm (lipid bilayer)
     D = 1e-12  # Diffusion in membrane (m^2/s) - slower than in water
     Phi = 0.5  # Partition coefficient - drug is moderately lipophilic
 
     # Concentrations
-    C_plasma = 10.0  # Drug concentration in blood plasma (arbitrary units)
-    C_brain = 1.0  # Drug concentration in brain tissue
+    C_left = 10.0  # mol/m³ (numerically 10 mM)
+    C_right = 1.0  # mol/m³ (numerically 1 mM)
 
     # Create solver with fluent API
     solver = (
@@ -52,8 +60,8 @@ def run_simple_membrane():
         .set_membrane_thickness(L)
         .set_diffusivity(D)
         .set_partition_coefficient(Phi)
-        .set_left_concentration(C_plasma)
-        .set_right_concentration(C_brain)
+        .set_left_concentration(C_left)
+        .set_right_concentration(C_right)
         .set_num_nodes(51)
     )
 
@@ -67,19 +75,19 @@ def run_simple_membrane():
     print(f"  Partition coefficient: {Phi:.2f}")
 
     print("\nBoundary Concentrations:")
-    print(f"  Plasma (left): {C_plasma:.1f} units")
-    print(f"  Brain (right): {C_brain:.1f} units")
+    print(f"  Left solution: {C_left:.1f} mol/m^3")
+    print(f"  Right solution: {C_right:.1f} mol/m^3")
 
     print("\nResults:")
-    print(f"  Steady-state flux: {result.flux:.4e} units/(m^2*s)")
+    print(f"  Steady-state flux: {result.flux:.4e} mol/(m^2*s)")
     print(f"  Membrane permeability: {result.permeability:.4e} m/s")
     print(f"  Permeability: {result.permeability * 100:.4f} cm/s")
 
     # Analytical verification
-    j_analytical = D * Phi * (C_plasma - C_brain) / L
+    j_analytical = D * Phi * (C_left - C_right) / L
     P_analytical = D * Phi / L
     print("\nAnalytical verification:")
-    print(f"  j = D*Phi*deltaC/L = {j_analytical:.4e} units/(m^2*s)")
+    print(f"  j = D*Phi*deltaC/L = {j_analytical:.4e} mol/(m^2*s)")
     print(f"  P = D*Phi/L = {P_analytical:.4e} m/s")
     print(f"  Match: {np.isclose(result.flux, j_analytical)}")
 
@@ -91,35 +99,35 @@ def run_simple_membrane():
     ax1 = axes[0]
     ax1.plot(x_nm, result.concentration(), "b-", linewidth=2)
     ax1.set_xlabel("Position in membrane (nm)")
-    ax1.set_ylabel("Concentration (units)")
+    ax1.set_ylabel("Concentration (mol/m³)")
     ax1.set_title("Concentration Profile Inside Membrane")
     ax1.grid(True, alpha=0.3)
 
     # Add annotations for partition
     ax1.axhline(
-        y=Phi * C_plasma,
+        y=Phi * C_left,
         color="r",
         linestyle="--",
         alpha=0.5,
-        label=f"Phi*C_plasma = {Phi * C_plasma:.1f}",
+        label=f"Phi*C_left = {Phi * C_left:.1f}",
     )
     ax1.axhline(
-        y=Phi * C_brain,
+        y=Phi * C_right,
         color="g",
         linestyle="--",
         alpha=0.5,
-        label=f"Phi*C_brain = {Phi * C_brain:.1f}",
+        label=f"Phi*C_right = {Phi * C_right:.1f}",
     )
     ax1.legend()
 
     # Full picture including external solutions
     ax2 = axes[1]
     x_full = [-2, 0] + list(x_nm) + [x_nm[-1], x_nm[-1] + 2]
-    C_full = [C_plasma, C_plasma] + list(result.concentration()) + [C_brain, C_brain]
+    C_full = [C_left, C_left] + list(result.concentration()) + [C_right, C_right]
     ax2.plot(x_full, C_full, "b-", linewidth=2)
     ax2.axvspan(0, L * 1e9, alpha=0.2, color="gray", label="Membrane")
     ax2.set_xlabel("Position (nm)")
-    ax2.set_ylabel("Concentration (units)")
+    ax2.set_ylabel("Concentration (mol/m³)")
     ax2.set_title("Full Concentration Profile with Partition Jump")
     ax2.legend()
     ax2.grid(True, alpha=0.3)
@@ -150,9 +158,11 @@ def run_hindered_diffusion():
     # Albumin hydrodynamic radius ~ 3.5 nm
     solute_radius = 3.5e-9
 
-    # Concentrations
-    C_blood = 40.0  # g/L (typical serum albumin)
-    C_dialysate = 0.0  # Pure dialysate
+    # Convert the illustrative albumin mass concentration to the solver's
+    # mol/m³ convention. 40 g/L = 40 kg/m³.
+    albumin_molar_mass = 66.5  # kg/mol (approximate)
+    C_blood = 40.0 / albumin_molar_mass  # mol/m³
+    C_dialysate = 0.0  # mol/m³, ideal sink
 
     # Calculate hindrance factor
     lambda_ratio = solute_radius / pore_radius
@@ -187,13 +197,21 @@ def run_hindered_diffusion():
 
     print("\nResults comparison:")
     print("  Without hindrance:")
-    print(f"    D_eff = {result_bulk.effective_diffusivity:.4e} m^2/s")
-    print(f"    Flux = {result_bulk.flux:.4e} g/(m^2*s)")
+    print(f"    P*L = {result_bulk.effective_diffusivity:.4e} m^2/s")
+    print(
+        f"    Mass flux = {result_bulk.flux * albumin_molar_mass * 1000:.4e} g/(m^2*s)"
+    )
     print("  With hindrance:")
-    print(f"    D_eff = {result_hindered.effective_diffusivity:.4e} m^2/s")
-    print(f"    Flux = {result_hindered.flux:.4e} g/(m^2*s)")
+    print(f"    P*L = {result_hindered.effective_diffusivity:.4e} m^2/s")
+    print(
+        f"    Mass flux = {result_hindered.flux * albumin_molar_mass * 1000:.4e} g/(m^2*s)"
+    )
     print(
         f"  Flux reduction: {100 * (1 - result_hindered.flux / result_bulk.flux):.1f}%"
+    )
+    print(
+        "  The steady profiles coincide because fixed partitioned boundary "
+        "concentrations set the linear profile; hindrance changes the flux."
     )
 
     # Plot hindrance curve
@@ -223,11 +241,15 @@ def run_hindered_diffusion():
     ax2 = axes[1]
     x_um = result_bulk.x() * 1e6
     ax2.plot(
-        x_um, result_bulk.concentration(), "b-", linewidth=2, label="Bulk diffusion"
+        x_um,
+        np.asarray(result_bulk.concentration()) * albumin_molar_mass,
+        "b-",
+        linewidth=2,
+        label="Bulk diffusion",
     )
     ax2.plot(
         x_um,
-        result_hindered.concentration(),
+        np.asarray(result_hindered.concentration()) * albumin_molar_mass,
         "r--",
         linewidth=2,
         label="Hindered diffusion",
@@ -256,7 +278,7 @@ def run_multilayer_skin():
     print("Example 3: Multi-Layer Skin Permeation")
     print("=" * 60)
 
-    # Skin layer properties (simplified model)
+    # Illustrative layer properties; do not use these values for dosing.
     # Layer 1: Stratum corneum - main barrier
     L_sc = 15e-6  # 15 microns
     D_sc = 1e-13  # Very low diffusivity (lipophilic barrier)
@@ -273,8 +295,8 @@ def run_multilayer_skin():
     Phi_dermis = 1.0  # No barrier
 
     # Concentrations
-    C_patch = 100.0  # Drug in patch (mg/mL)
-    C_blood = 0.0  # Systemic blood (sink condition)
+    C_patch = 100.0  # kg/m³, numerically equal to 100 mg/mL
+    C_blood = 0.0  # kg/m³, ideal sink
 
     # Create multi-layer solver
     solver = (
@@ -297,8 +319,10 @@ def run_multilayer_skin():
     print(f"  Total thickness: {solver.total_thickness() * 1e3:.2f} mm")
 
     print("\nResults:")
-    print(f"  Steady-state flux: {result.flux:.4e} mg/(m^2*s)")
-    print(f"  Flux: {result.flux * 3600 * 1e-4:.4f} mg/(cm^2*hr)")
+    flux_mg_m2_s = result.flux * 1e6
+    flux_mg_cm2_hr = flux_mg_m2_s * 3600 / 1e4
+    print(f"  Steady-state flux: {flux_mg_m2_s:.4e} mg/(m^2*s)")
+    print(f"  Flux: {flux_mg_cm2_hr:.4f} mg/(cm^2*hr)")
     print(f"  Overall permeability: {result.permeability:.4e} m/s")
 
     # Calculate individual layer resistances
@@ -308,9 +332,9 @@ def run_multilayer_skin():
     R_total = R_sc + R_epi + R_dermis
 
     print("\nLayer resistances (s/m):")
-    print(f"  Stratum corneum: {R_sc:.2e} ({100*R_sc/R_total:.1f}%)")
-    print(f"  Epidermis: {R_epi:.2e} ({100*R_epi/R_total:.1f}%)")
-    print(f"  Dermis: {R_dermis:.2e} ({100*R_dermis/R_total:.1f}%)")
+    print(f"  Stratum corneum: {R_sc:.2e} ({100 * R_sc / R_total:.1f}%)")
+    print(f"  Epidermis: {R_epi:.2e} ({100 * R_epi / R_total:.1f}%)")
+    print(f"  Dermis: {R_dermis:.2e} ({100 * R_dermis / R_total:.1f}%)")
     print(f"  Total: {R_total:.2e}")
 
     # Plot concentration profile through all layers

@@ -1,0 +1,204 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install static-analysis tools
+        run: python -m pip install "ruff>=0.8,<1" "mypy>=1.10"
+      - name: Check Python source
+        run: python -m ruff check setup.py python
+      - name: Check native API typing contract
+        run: >-
+          python -m mypy --no-incremental --ignore-missing-imports
+          python/biotransport/_core/_core.pyi
+          python/tests/typing/api_smoke.py
+
+  python-tests:
+    name: Python ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      CMAKE_ARGS: >-
+        -DBIOTRANSPORT_OPENMP=OFF
+        -DBUILD_TESTING=OFF
+        -DBUILD_BENCHMARKS=OFF
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install package and test dependencies
+        run: python -m pip install --verbose ".[test]"
+      - name: Verify compiled extension and native build metadata
+        run: >-
+          python -c "import biotransport as bt;
+          info=bt.native_build_info();
+          assert info['compiler']['id'];
+          assert info['compiler']['version'];
+          assert info['cxx']['standard'] >= 201703;
+          assert set(info['features']) == {'eigen', 'openmp'};
+          print(bt.__version__, info)"
+      - name: Run Python tests
+        run: python -m pytest
+
+  native-debug-tests:
+    name: Native Debug ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure native Debug build
+        run: >-
+          cmake -S . -B build/native
+          -DCMAKE_BUILD_TYPE=Debug
+          -DBUILD_PYTHON_BINDINGS=OFF
+          -DBUILD_TESTING=ON
+          -DBUILD_BENCHMARKS=OFF
+          -DBIOTRANSPORT_EIGEN=OFF
+          -DBIOTRANSPORT_OPENMP=OFF
+      - name: Build native tests
+        run: cmake --build build/native --config Debug --parallel 2
+      - name: Run native tests with assertions enabled
+        run: ctest --test-dir build/native -C Debug --output-on-failure
+      - name: Install C++ package
+        run: cmake --install build/native --config Debug --prefix build/install
+      - name: Verify exported CMake package
+        run: >-
+          cmake -S cpp/tests/package_consumer -B build/consumer
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/install
+      - name: Build installed package consumer
+        run: cmake --build build/consumer --config Debug --parallel 2
+      - name: Run installed package consumer
+        run: ctest --test-dir build/consumer -C Debug --output-on-failure
+
+  native-release-eigen-openmp:
+    name: Native Release Eigen + OpenMP
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Eigen development package
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libeigen3-dev
+      - name: Configure native Release build
+        run: >-
+          cmake -S . -B build/native-release
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_REQUIRE_FIND_PACKAGE_Eigen3=ON
+          -DCMAKE_REQUIRE_FIND_PACKAGE_OpenMP=ON
+          -DBUILD_PYTHON_BINDINGS=OFF
+          -DBUILD_TESTING=ON
+          -DBUILD_BENCHMARKS=OFF
+          -DBIOTRANSPORT_EIGEN=ON
+          -DBIOTRANSPORT_OPENMP=ON
+      - name: Build native Release tests
+        run: cmake --build build/native-release --config Release --parallel 2
+      - name: Run full native suite with one OpenMP thread
+        env:
+          OMP_NUM_THREADS: "1"
+        run: >-
+          ctest --test-dir build/native-release -C Release
+          --output-on-failure
+      - name: Run full native suite with four OpenMP threads
+        env:
+          OMP_NUM_THREADS: "4"
+        run: >-
+          ctest --test-dir build/native-release -C Release
+          --output-on-failure
+      - name: Install Release C++ package
+        run: >-
+          cmake --install build/native-release --config Release
+          --prefix build/install-release
+      - name: Configure installed package consumer
+        run: >-
+          cmake -S cpp/tests/package_consumer -B build/consumer-release
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/install-release
+      - name: Build installed package consumer
+        run: >-
+          cmake --build build/consumer-release --config Release --parallel 2
+      - name: Run installed package consumer
+        run: >-
+          ctest --test-dir build/consumer-release -C Release
+          --output-on-failure
+
+  documentation:
+    name: Sphinx warnings as errors
+    runs-on: ubuntu-latest
+    env:
+      CMAKE_ARGS: >-
+        -DBIOTRANSPORT_EIGEN=ON
+        -DBIOTRANSPORT_OPENMP=OFF
+        -DBUILD_TESTING=OFF
+        -DBUILD_BENCHMARKS=OFF
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install package and documentation dependencies
+        run: python -m pip install --verbose ".[docs]"
+      - name: Build documentation with warnings treated as errors
+        run: >-
+          python -m sphinx -W --keep-going -E -b html
+          docs/sphinx build/docs-html
+
+  source-distribution:
+    name: Source distribution and wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install packaging tools
+        run: python -m pip install "build>=1.2" "twine>=5.0"
+      - name: Build source distribution
+        run: python -m build --sdist
+      - name: Build wheel from source distribution
+        run: python -m pip wheel --no-deps --wheel-dir dist/wheel dist/*.tar.gz
+      - name: Check package metadata
+        run: python -m twine check dist/*.tar.gz dist/wheel/*
+      - name: Verify native build sources are present
+        run: >-
+          python -c "import glob,tarfile;
+          p=glob.glob('dist/*.tar.gz')[0];
+          n=tarfile.open(p).getnames();
+          r=['/CMakeLists.txt','/cpp/CMakeLists.txt','/python/bindings/CMakeLists.txt','/cmake/biotransportConfig.cmake.in','/LICENSE'];
+          m=[x for x in r if not any(y.endswith(x) for y in n)];
+          assert not m, f'missing from sdist: {m}'"

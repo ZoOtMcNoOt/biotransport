@@ -84,12 +84,14 @@ class TestCrankNicolson1D:
 
         solution = solver.solution()
 
-        # Total mass should be conserved (up to numerical precision)
+        # Vertex-centred endpoints own half control volumes.
         dx = mesh.dx()
-        initial_mass = np.sum(u0) * dx
-        final_mass = np.sum(solution) * dx
+        weights = np.ones_like(u0)
+        weights[[0, -1]] = 0.5
+        initial_mass = np.sum(weights * u0) * dx
+        final_mass = np.sum(weights * solution) * dx
 
-        assert np.isclose(initial_mass, final_mass, rtol=1e-3)
+        assert np.isclose(initial_mass, final_mass, rtol=0.0, atol=2e-10)
 
     def test_convergence_to_steady_state(self):
         """Test convergence to steady state for 1D diffusion."""
@@ -242,7 +244,7 @@ class TestCrankNicolson2D:
 
         # Point source at center
         u0 = np.zeros(mesh.num_nodes())
-        center_idx = (mesh.ny() // 2) * mesh.nx() + (mesh.nx() // 2)
+        center_idx = mesh.index(mesh.nx() // 2, mesh.ny() // 2)
         u0[center_idx] = 1.0
         solver.set_initial_condition(u0)
 
@@ -265,7 +267,7 @@ class TestCrankNicolson2D:
 
         # Max should be near center
         max_idx = np.argmax(solution)
-        center_idx = (mesh.ny() // 2) * mesh.nx() + (mesh.nx() // 2)
+        center_idx = mesh.index(mesh.nx() // 2, mesh.ny() // 2)
         # Should be close to center
         assert abs(max_idx - center_idx) < mesh.nx()
 
@@ -278,13 +280,11 @@ class TestCrankNicolson2D:
 
         # Smooth initial condition - create on mesh grid
         u0 = np.zeros(mesh.num_nodes())
-        for i in range(mesh.num_nodes()):
-            # Get position (approximation)
-            ix = i % mesh.nx()
-            iy = i // mesh.nx()
-            x = ix * mesh.dx()
-            y = iy * mesh.dy()
-            u0[i] = np.exp(-50 * ((x - 0.5) ** 2 + (y - 0.5) ** 2))
+        for iy in range(mesh.ny() + 1):
+            for ix in range(mesh.nx() + 1):
+                x = mesh.x(ix)
+                y = mesh.y(ix, iy)
+                u0[mesh.index(ix, iy)] = np.exp(-50 * ((x - 0.5) ** 2 + (y - 0.5) ** 2))
 
         solver.set_initial_condition(u0)
 
@@ -302,7 +302,56 @@ class TestCrankNicolson2D:
 
         # Should remain stable
         assert np.all(np.isfinite(solution))
-        assert np.all(solution >= -1e-10)
+        # Crank-Nicolson is A-stable, but not L-stable or monotonicity
+        # preserving for arbitrarily large time steps.  Its contraction is in
+        # the finite-volume (trapezoidal) norm, not the unweighted node norm.
+        weights = np.ones((mesh.ny() + 1, mesh.nx() + 1))
+        weights[:, [0, -1]] *= 0.5
+        weights[[0, -1], :] *= 0.5
+        initial_norm = np.sqrt(np.sum(weights.ravel() * u0**2))
+        final_norm = np.sqrt(np.sum(weights.ravel() * solution**2))
+        assert final_norm <= initial_norm + 1e-10
+
+    def test_linear_field_with_outward_neumann_data_is_stationary(self):
+        mesh = bt.StructuredMesh(13, 9, -0.2, 1.4, 0.0, 0.8)
+        solver = bt.CrankNicolsonDiffusion(mesh, 0.25)
+        exact = np.empty(mesh.num_nodes())
+        for j in range(mesh.ny() + 1):
+            for i in range(mesh.nx() + 1):
+                exact[mesh.index(i, j)] = 3 + 1.5 * mesh.x(i) - 0.75 * mesh.y(i, j)
+        solver.set_initial_condition(exact)
+        solver.set_neumann_boundary(bt.Boundary.Left, -1.5)
+        solver.set_neumann_boundary(bt.Boundary.Right, 1.5)
+        solver.set_neumann_boundary(bt.Boundary.Bottom, 0.75)
+        solver.set_neumann_boundary(bt.Boundary.Top, -0.75)
+        result = solver.step(0.9)
+        assert result.converged
+        np.testing.assert_allclose(solver.solution(), exact, rtol=0.0, atol=3e-11)
+
+    def test_nonconvergence_does_not_advance_public_state(self):
+        mesh = bt.StructuredMesh(30, 24, 0.0, 1.0, 0.0, 1.0)
+        solver = bt.CrankNicolsonDiffusion(mesh, 0.2)
+        initial = np.empty(mesh.num_nodes())
+        for j in range(mesh.ny() + 1):
+            for i in range(mesh.nx() + 1):
+                initial[mesh.index(i, j)] = np.sin(2.1 * mesh.x(i)) * np.cos(
+                    1.7 * mesh.y(i, j)
+                )
+        solver.set_initial_condition(initial)
+        for face in (
+            bt.Boundary.Left,
+            bt.Boundary.Right,
+            bt.Boundary.Bottom,
+            bt.Boundary.Top,
+        ):
+            solver.set_neumann_boundary(face, 0.0)
+        solver.set_tolerance(1e-15)
+        solver.set_max_iterations(1)
+        result = solver.step(0.5)
+        assert not result.converged
+        assert result.iterations == 1
+        np.testing.assert_array_equal(solver.solution(), initial)
+        assert solver.time() == 0.0
 
 
 class TestCrankNicolsonSecondOrderAccuracy:
@@ -313,7 +362,7 @@ class TestCrankNicolsonSecondOrderAccuracy:
         # Use analytical solution: u(x, t) = exp(-π²Dt) * sin(πx)
         # with u(0,t) = u(1,t) = 0
 
-        D = 1e-3
+        D = 0.2
         nx = 100
         mesh = bt.StructuredMesh(nx, 0.0, 1.0)
 
@@ -323,26 +372,28 @@ class TestCrankNicolsonSecondOrderAccuracy:
         def analytical_solution(t):
             return np.exp(-(np.pi**2) * D * t) * np.sin(np.pi * x)
 
-        # Just test with one dt value to verify it works
-        dt = 0.01
-        solver = bt.CrankNicolsonDiffusion(mesh, D)
         u0 = analytical_solution(0)
-        solver.set_initial_condition(u0)
 
-        solver.set_dirichlet_boundary(bt.Boundary.Left, 0.0)
-        solver.set_dirichlet_boundary(bt.Boundary.Right, 0.0)
+        def run(num_steps):
+            solver = bt.CrankNicolsonDiffusion(mesh, D)
+            solver.set_initial_condition(u0)
+            solver.set_dirichlet_boundary(bt.Boundary.Left, 0.0)
+            solver.set_dirichlet_boundary(bt.Boundary.Right, 0.0)
+            solver.solve(T_final / num_steps, num_steps)
+            return np.asarray(solver.solution())
 
-        num_steps = int(T_final / dt)
-        solver.solve(dt, num_steps)
+        # Compare at fixed spatial resolution against a fine-step reference,
+        # so the spatial truncation error cancels from the observed ratio.
+        reference = run(512)
+        coarse_error = np.linalg.norm(run(4) - reference)
+        medium_error = np.linalg.norm(run(8) - reference)
+        assert coarse_error / medium_error > 3.8
 
-        u_numerical = solver.solution()
-        u_exact = analytical_solution(T_final)
-
-        # Check that solution is reasonably close
-        error = np.linalg.norm(u_numerical - u_exact) / np.linalg.norm(u_exact)
-
-        # Should have reasonable accuracy (not testing convergence rate)
-        assert error < 0.1  # 10% relative error
+        # The numerical mode should also agree with the continuum solution.
+        relative_error = np.linalg.norm(
+            run(10) - analytical_solution(T_final)
+        ) / np.linalg.norm(analytical_solution(T_final))
+        assert relative_error < 1e-4
 
 
 if __name__ == "__main__":

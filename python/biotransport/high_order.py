@@ -1,200 +1,308 @@
-"""
-Higher-Order Finite Difference Schemes for Improved Spatial Accuracy.
+"""Validated high-order finite differences and explicit time integration.
 
-This module provides 4th-order and 6th-order accurate finite difference
-operators for spatial derivatives, significantly improving accuracy compared
-to standard 2nd-order schemes.
+The expensive spatial loops and diffusion time loop in this module run in C++.
+The stated fourth- and sixth-order accuracies apply where the full centered
+stencil fits.  Boundary nodes have no derivative value and nearby nodes use a
+second-order closure (with a fourth-order transition for the sixth-order
+stencil).  Consequently, a full boundary-value problem is not automatically
+globally fourth- or sixth-order accurate.
 
-Standard 2nd-order central difference:
-    d²u/dx² ≈ (u[i+1] - 2*u[i] + u[i-1]) / dx²
-    Truncation error: O(dx²)
-
-4th-order central difference:
-    d²u/dx² ≈ (-u[i+2] + 16*u[i+1] - 30*u[i] + 16*u[i-1] - u[i-2]) / (12*dx²)
-    Truncation error: O(dx⁴)
-
-6th-order central difference:
-    d²u/dx² ≈ (2*u[i+3] - 27*u[i+2] + 270*u[i+1] - 490*u[i]
-              + 270*u[i-1] - 27*u[i-2] + 2*u[i-3]) / (180*dx²)
-    Truncation error: O(dx⁶)
-
-Higher-order stencil operations are implemented in C++ for performance.
-
-Example:
-    >>> import biotransport as bt
-    >>> from biotransport.high_order import HighOrderDiffusionSolver
-    >>>
-    >>> mesh = bt.mesh_1d(50, 0, 1)
-    >>> solver = HighOrderDiffusionSolver(mesh, D=0.01, order=4)
-    >>> result = solver.solve(initial, t_end=1.0)
+``HighOrderDiffusionSolver`` uses Forward Euler in time.  Its temporal order is
+one even when a higher-order spatial stencil is selected.  The separate Heun
+and classical RK4 adapter is intended for carefully validated Python ODE
+callbacks; callback execution still crosses the Python GIL at every stage, so
+it is a correctness convenience rather than a callback-acceleration claim.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Callable, Tuple
+from numbers import Integral
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple, cast
+
 import numpy as np
 
-from ._core import StructuredMesh, Boundary, StencilOps
+from ._core import Boundary, StructuredMesh
+from ._core._core import (
+    _high_order_gradient_1d,
+    _high_order_laplacian_1d,
+    _high_order_laplacian_2d,
+    _high_order_stable_dt,
+    _integrate_explicit_runge_kutta,
+    _solve_high_order_diffusion,
+)
 
 
-# =============================================================================
-# Finite Difference Stencils (C++ implementations)
-# =============================================================================
+_NUMERIC_KINDS = frozenset("iuf")
+
+
+def _finite_scalar(value: object, name: str) -> float:
+    if isinstance(value, (bool, np.bool_, str, bytes, complex, np.complexfloating)):
+        raise TypeError(f"{name} must be a real number")
+    try:
+        result = float(cast(Any, value))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise TypeError(f"{name} must be a real number") from exc
+    if not np.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _positive_scalar(value: object, name: str) -> float:
+    result = _finite_scalar(value, name)
+    if result <= 0.0:
+        raise ValueError(f"{name} must be positive")
+    return result
+
+
+def _order(value: object, allowed: Tuple[int, ...], name: str = "order") -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral):
+        choices = ", ".join(str(item) for item in allowed)
+        raise ValueError(f"{name} must be one of {choices}")
+    result = int(value)
+    if result not in allowed:
+        choices = ", ".join(str(item) for item in allowed)
+        raise ValueError(f"{name} must be one of {choices}")
+    return result
+
+
+def _field_array(
+    value: object,
+    name: str = "field",
+    allowed_dimensions: Optional[Tuple[int, ...]] = (1, 2),
+) -> np.ndarray:
+    raw = np.asarray(value)
+    if raw.dtype.kind not in _NUMERIC_KINDS:
+        raise TypeError(f"{name} must contain real numeric values")
+    if allowed_dimensions is None and raw.ndim == 0:
+        raise ValueError(f"{name} must have at least one dimension")
+    if allowed_dimensions is not None and raw.ndim not in allowed_dimensions:
+        dimensions = " or ".join(f"{dimension}D" for dimension in allowed_dimensions)
+        raise ValueError(f"{name} must be a {dimensions} array")
+    if raw.size == 0:
+        raise ValueError(f"{name} must not be empty")
+    result = np.ascontiguousarray(raw, dtype=np.float64)
+    if not np.all(np.isfinite(result)):
+        raise ValueError(f"{name} must contain finite values only")
+    return result
+
+
+def _validate_mesh(mesh: object) -> StructuredMesh:
+    if not isinstance(mesh, StructuredMesh):
+        raise TypeError("mesh must be a StructuredMesh")
+    return mesh
+
+
+def _spacing_matches(actual: float, supplied: float, name: str) -> None:
+    tolerance = 64.0 * np.finfo(float).eps * max(1.0, abs(actual), abs(supplied))
+    if abs(actual - supplied) > tolerance:
+        raise ValueError(
+            f"{name}={supplied!r} does not match the mesh spacing {actual!r}"
+        )
+
+
+def _operator_grid(
+    field_or_mesh: object,
+    spacing_or_field: object,
+    dy: Optional[float],
+    mesh: Optional[StructuredMesh],
+    operation: str,
+) -> Tuple[np.ndarray, int, int, float, float]:
+    """Resolve preferred ``(field, dx)`` and legacy ``(mesh, field)`` calls."""
+    mesh_object: Optional[StructuredMesh]
+    legacy_mesh = isinstance(field_or_mesh, StructuredMesh)
+    if legacy_mesh:
+        if mesh is not None:
+            raise TypeError(f"{operation} received mesh twice")
+        mesh_object = _validate_mesh(field_or_mesh)
+        if spacing_or_field is None:
+            raise TypeError(f"{operation}(mesh, field) is missing field")
+        field = _field_array(spacing_or_field)
+        if dy is not None:
+            raise TypeError("dy is inferred from mesh in the legacy call form")
+        supplied_dx = None
+    else:
+        field = _field_array(field_or_mesh)
+        mesh_object = _validate_mesh(mesh) if mesh is not None else None
+        supplied_dx = (
+            None
+            if spacing_or_field is None
+            else _positive_scalar(spacing_or_field, "dx")
+        )
+
+    if mesh_object is None:
+        if supplied_dx is None:
+            raise TypeError(f"{operation}(field, dx) is missing dx")
+        dx = supplied_dx
+        if field.ndim == 1:
+            if dy is not None:
+                raise ValueError("dy is only valid for a two-dimensional field")
+            return field, field.size - 1, 0, dx, dx
+        resolved_dy = dx if dy is None else _positive_scalar(dy, "dy")
+        ny, nx = field.shape[0] - 1, field.shape[1] - 1
+        return field, nx, ny, dx, resolved_dy
+
+    dx = _positive_scalar(mesh_object.dx(), "mesh.dx()")
+    if supplied_dx is not None:
+        _spacing_matches(dx, supplied_dx, "dx")
+
+    nx = int(mesh_object.nx())
+    if mesh_object.is_1d():
+        if field.ndim != 1 or field.size != nx + 1:
+            raise ValueError(f"field must have shape ({nx + 1},) for this 1D mesh")
+        if dy is not None:
+            raise ValueError("dy is only valid for a two-dimensional mesh")
+        return field, nx, 0, dx, dx
+
+    ny = int(mesh_object.ny())
+    expected_shape = (ny + 1, nx + 1)
+    if field.ndim == 2 and field.shape != expected_shape:
+        raise ValueError(f"field must have shape {expected_shape} for this 2D mesh")
+    if field.ndim == 1 and field.size != (nx + 1) * (ny + 1):
+        raise ValueError("flat field size must equal (mesh.nx() + 1) * (mesh.ny() + 1)")
+    resolved_dy = _positive_scalar(mesh_object.dy(), "mesh.dy()")
+    if dy is not None:
+        supplied_dy = _positive_scalar(dy, "dy")
+        _spacing_matches(resolved_dy, supplied_dy, "dy")
+    return field, nx, ny, dx, resolved_dy
+
+
+def _laplacian(
+    field_or_mesh: object,
+    spacing_or_field: object,
+    order: int,
+    dy: Optional[float] = None,
+    mesh: Optional[StructuredMesh] = None,
+) -> np.ndarray:
+    field, nx, ny, dx, resolved_dy = _operator_grid(
+        field_or_mesh,
+        spacing_or_field,
+        dy,
+        mesh,
+        f"laplacian_{order}th_order",
+    )
+    original_shape = field.shape
+    flat = field.reshape(-1)
+    if ny == 0:
+        result = _high_order_laplacian_1d(flat, dx, order)
+    else:
+        if order == 6:
+            raise ValueError("sixth-order Laplacian is available for 1D fields only")
+        result = _high_order_laplacian_2d(flat, nx, ny, dx, resolved_dy, order)
+    return np.asarray(result, dtype=np.float64).reshape(original_shape)
 
 
 def laplacian_2nd_order(
-    u: np.ndarray, dx: float, dy: Optional[float] = None
+    field_or_mesh: object,
+    spacing_or_field: object = None,
+    dy: Optional[float] = None,
+    *,
+    mesh: Optional[StructuredMesh] = None,
 ) -> np.ndarray:
+    """Return the second-order centered Laplacian.
+
+    The preferred forms are ``laplacian_2nd_order(field, dx)`` for 1D and
+    ``laplacian_2nd_order(field_2d, dx, dy)`` for 2D.  Supplying
+    ``mesh=mesh`` validates both dimensions and spacing.  The historical
+    ``laplacian_2nd_order(mesh, field)`` form is also accepted.
+
+    Boundary entries are zero because no derivative is inferred outside the
+    domain.
     """
-    Compute Laplacian using 2nd-order central differences.
+    return _laplacian(field_or_mesh, spacing_or_field, 2, dy, mesh)
 
-    ∇²u ≈ (u[i+1] - 2*u[i] + u[i-1]) / dx²
 
-    Args:
-        u: Solution field (1D or 2D array)
-        dx: Grid spacing in x
-        dy: Grid spacing in y (for 2D, defaults to dx)
+def laplacian_4th_order(
+    field_or_mesh: object,
+    spacing_or_field: object = None,
+    dy: Optional[float] = None,
+    *,
+    mesh: Optional[StructuredMesh] = None,
+) -> np.ndarray:
+    """Return a fourth-order centered Laplacian in the stencil interior.
 
-    Returns:
-        Laplacian field (interior values only)
+    Prefer ``laplacian_4th_order(field, dx[, dy])``.  The legacy
+    ``laplacian_4th_order(mesh, field)`` call remains supported.  A
+    second-order closure is used next to the boundary, so fourth order is an
+    interior claim, not an unconditional global convergence claim.
     """
-    if u.ndim == 1:
-        lap = np.zeros_like(u)
-        inv_dx2 = 1.0 / (dx * dx)
-        lap[1:-1] = (u[2:] - 2 * u[1:-1] + u[:-2]) * inv_dx2
-        return lap
-    else:
-        dy = dy or dx
-        inv_dx2 = 1.0 / (dx * dx)
-        inv_dy2 = 1.0 / (dy * dy)
-        lap = np.zeros_like(u)
-        lap[1:-1, 1:-1] = (u[1:-1, 2:] - 2 * u[1:-1, 1:-1] + u[1:-1, :-2]) * inv_dx2 + (
-            u[2:, 1:-1] - 2 * u[1:-1, 1:-1] + u[:-2, 1:-1]
-        ) * inv_dy2
-        return lap
+    return _laplacian(field_or_mesh, spacing_or_field, 4, dy, mesh)
 
 
-def laplacian_4th_order(mesh: StructuredMesh, u: np.ndarray) -> np.ndarray:
+def laplacian_6th_order(
+    field_or_mesh: object,
+    spacing_or_field: object = None,
+    *,
+    mesh: Optional[StructuredMesh] = None,
+) -> np.ndarray:
+    """Return a sixth-order centered 1D Laplacian in the stencil interior.
+
+    Prefer ``laplacian_6th_order(field, dx)``.  The legacy
+    ``laplacian_6th_order(mesh, field)`` call remains supported.  The two
+    transition layers use fourth- and second-order closures.
     """
-    Compute Laplacian using 4th-order central differences (C++ implementation).
+    return _laplacian(field_or_mesh, spacing_or_field, 6, None, mesh)
 
-    d²u/dx² ≈ (-u[i+2] + 16*u[i+1] - 30*u[i] + 16*u[i-1] - u[i-2]) / (12*dx²)
 
-    Truncation error: O(dx⁴)
+def gradient_4th_order(
+    field_or_mesh: object,
+    spacing_or_field: object = None,
+    *,
+    mesh: Optional[StructuredMesh] = None,
+) -> np.ndarray:
+    """Return a fourth-order centered 1D first derivative in the interior.
 
-    Uses 2nd-order stencil at boundary-adjacent nodes where 4th-order
-    stencil would exceed array bounds.
-
-    Args:
-        mesh: The structured mesh
-        u: Solution field (1D or 2D array)
-
-    Returns:
-        Laplacian field
+    Prefer ``gradient_4th_order(field, dx)``.  The legacy
+    ``gradient_4th_order(mesh, field)`` form remains supported.  Boundary
+    entries are zero and boundary-adjacent entries use a second-order closure.
     """
-    stencil = StencilOps(mesh)
-    u_flat = np.asarray(u).flatten() if u.ndim > 1 else np.asarray(u)
-
-    if mesh.is_1d():
-        return np.asarray(stencil.laplacian_4th_order_bulk_1d(u_flat.tolist()))
-    else:
-        return np.asarray(stencil.laplacian_4th_order_bulk_2d(u_flat.tolist()))
-
-
-def laplacian_6th_order(mesh: StructuredMesh, u: np.ndarray) -> np.ndarray:
-    """
-    Compute Laplacian using 6th-order central differences (C++ implementation).
-
-    d²u/dx² ≈ (2*u[i+3] - 27*u[i+2] + 270*u[i+1] - 490*u[i]
-              + 270*u[i-1] - 27*u[i-2] + 2*u[i-3]) / (180*dx²)
-
-    Truncation error: O(dx⁶)
-
-    Only available for 1D meshes. Uses lower-order stencils at boundary-adjacent
-    nodes where 6th-order stencil would exceed array bounds.
-
-    Args:
-        mesh: The structured mesh (must be 1D)
-        u: Solution field (1D array)
-
-    Returns:
-        Laplacian field
-
-    Raises:
-        ValueError: If mesh is not 1D
-    """
-    if not mesh.is_1d():
-        raise ValueError("6th-order Laplacian only implemented for 1D meshes")
-
-    stencil = StencilOps(mesh)
-    u_flat = np.asarray(u).flatten()
-    return np.asarray(stencil.laplacian_6th_order_bulk_1d(u_flat.tolist()))
+    field, nx, ny, dx, _ = _operator_grid(
+        field_or_mesh,
+        spacing_or_field,
+        None,
+        mesh,
+        "gradient_4th_order",
+    )
+    if ny != 0 or field.ndim != 1:
+        raise ValueError("gradient_4th_order requires a one-dimensional field")
+    if field.size != nx + 1:
+        raise ValueError("field size does not match the one-dimensional grid")
+    return np.asarray(_high_order_gradient_1d(field, dx, 4), dtype=np.float64)
 
 
-def gradient_4th_order(mesh: StructuredMesh, u: np.ndarray) -> np.ndarray:
-    """
-    Compute first derivative using 4th-order central differences (C++ implementation).
-
-    du/dx ≈ (-u[i+2] + 8*u[i+1] - 8*u[i-1] + u[i-2]) / (12*dx)
-
-    Truncation error: O(dx⁴)
-
-    Args:
-        mesh: The structured mesh (must be 1D)
-        u: Solution field (1D array)
-
-    Returns:
-        Gradient field
-
-    Raises:
-        ValueError: If mesh is not 1D
-    """
-    if not mesh.is_1d():
-        raise ValueError("4th-order gradient only implemented for 1D meshes")
-
-    stencil = StencilOps(mesh)
-    u_flat = np.asarray(u).flatten()
-    return np.asarray(stencil.gradient_4th_order_bulk_1d(u_flat.tolist()))
-
-
-# =============================================================================
-# High-Order Diffusion Solver
-# =============================================================================
-
-
-@dataclass
+@dataclass(frozen=True)
 class HighOrderResult:
-    """Result from high-order solver.
+    """Result from the native explicit diffusion solver.
 
-    Attributes:
-        solution: Final solution field
-        time: Final simulation time
-        steps: Number of time steps taken
-        dt: Time step used
-        order: Spatial accuracy order used
+    ``order`` is the formal centered-stencil interior order,
+    ``boundary_order`` describes the lowest-order near-boundary closure, and
+    ``temporal_order`` is the Forward Euler time order.  ``dt`` is the nominal
+    step while ``last_dt`` is the possibly shortened final step.
     """
 
     solution: np.ndarray
     time: float
     steps: int
     dt: float
+    last_dt: float
     order: int
+    boundary_order: int = 2
+    temporal_order: int = 1
+
+    @property
+    def interior_order(self) -> int:
+        """Alias spelling out what ``order`` represents."""
+        return self.order
 
 
 class HighOrderDiffusionSolver:
-    """
-    Diffusion solver with selectable spatial accuracy order.
+    """Native explicit solver for ``du/dt = D * Laplacian(u)``.
 
-    Supports 2nd, 4th, and 6th-order accurate spatial discretization
-    for improved accuracy on smooth solutions.
+    The solution loop runs in C++ and ends exactly at ``t_end`` by shortening
+    the final step.  Spatial orders 2, 4, and 6 are available in 1D; 2 and 4
+    are available in 2D.  All boundaries are constant Dirichlet values.
 
-    The CFL stability condition is adjusted for higher-order schemes:
-    - 2nd-order: dt <= safety * dx² / (2*D)
-    - 4th-order: dt <= safety * dx² / (2.5*D)
-    - 6th-order: dt <= safety * dx² / (3*D)
-
-    Example:
-        >>> solver = HighOrderDiffusionSolver(mesh, D=0.01, order=4)
-        >>> result = solver.solve(initial, t_end=1.0)
+    The method is first-order Forward Euler in time.  Selecting a fourth- or
+    sixth-order stencil does not change that temporal order, and the
+    near-boundary closure remains second order.
     """
 
     def __init__(
@@ -203,293 +311,418 @@ class HighOrderDiffusionSolver:
         D: float,
         order: int = 4,
         safety_factor: float = 0.4,
-    ):
-        """
-        Initialize high-order diffusion solver.
+    ) -> None:
+        self.mesh = _validate_mesh(mesh)
+        self.D = _positive_scalar(D, "D")
+        self.order = _order(order, (2, 4, 6))
+        self.safety_factor = _finite_scalar(safety_factor, "safety_factor")
+        if not 0.0 < self.safety_factor <= 1.0:
+            raise ValueError("safety_factor must be in (0, 1]")
 
-        Args:
-            mesh: Computational mesh
-            D: Diffusion coefficient
-            order: Spatial accuracy order (2, 4, or 6)
-            safety_factor: CFL safety factor (default 0.4)
-        """
-        if order not in (2, 4, 6):
-            raise ValueError("Order must be 2, 4, or 6")
-        if D <= 0:
-            raise ValueError("Diffusion coefficient must be positive")
-
-        self.mesh = mesh
-        self.D = D
-        self.order = order
-        self.safety_factor = safety_factor
-
-        # Extract mesh info
-        self.nx = mesh.nx()
-        self.dx = mesh.dx()
-        self.is_1d = mesh.is_1d()  # Note: is_1d is a method, not property
-
-        if not self.is_1d:
-            self.ny = mesh.ny()
-            self.dy = mesh.dy()
-        else:
+        self.nx = int(self.mesh.nx())
+        self.dx = _positive_scalar(self.mesh.dx(), "mesh.dx()")
+        self.is_1d = bool(self.mesh.is_1d())
+        if self.is_1d:
             self.ny = 0
             self.dy = self.dx
+        else:
+            self.ny = int(self.mesh.ny())
+            self.dy = _positive_scalar(self.mesh.dy(), "mesh.dy()")
+            if self.order == 6:
+                raise ValueError(
+                    "sixth-order diffusion is available for 1D meshes only"
+                )
 
-        # Default boundary conditions (Dirichlet = 0)
+        if self.nx < self.order or (not self.is_1d and self.ny < self.order):
+            raise ValueError("mesh is too small for the requested centered stencil")
+
         self.bc_left = 0.0
         self.bc_right = 0.0
         self.bc_bottom = 0.0
         self.bc_top = 0.0
 
-        # Store order for selecting Laplacian function
-        self._order = order
-
-    def _compute_laplacian(self, u: np.ndarray) -> np.ndarray:
-        """Compute Laplacian using the appropriate order stencil."""
-        if self._order == 2:
-            if self.is_1d:
-                return laplacian_2nd_order(u, self.dx)
-            else:
-                return laplacian_2nd_order(u, self.dx, self.dy)
-        elif self._order == 4:
-            return laplacian_4th_order(self.mesh, u)
-        else:  # order == 6
-            return laplacian_6th_order(self.mesh, u)
-
     def set_boundary(
         self, boundary: Boundary, value: float
     ) -> "HighOrderDiffusionSolver":
-        """Set Dirichlet boundary condition value."""
+        """Set one constant Dirichlet boundary and return ``self``.
+
+        In 2D, bottom/top values own the four corners when adjacent boundary
+        values disagree.  Bottom and top are invalid for a 1D mesh.
+        """
+        resolved = _finite_scalar(value, "boundary value")
         if boundary == Boundary.Left:
-            self.bc_left = value
+            self.bc_left = resolved
         elif boundary == Boundary.Right:
-            self.bc_right = value
+            self.bc_right = resolved
         elif boundary == Boundary.Bottom:
-            self.bc_bottom = value
+            if self.is_1d:
+                raise ValueError("Bottom is not a boundary of a 1D mesh")
+            self.bc_bottom = resolved
         elif boundary == Boundary.Top:
-            self.bc_top = value
+            if self.is_1d:
+                raise ValueError("Top is not a boundary of a 1D mesh")
+            self.bc_top = resolved
+        else:
+            raise ValueError("boundary must be Left, Right, Bottom, or Top")
         return self
 
     def compute_stable_dt(self) -> float:
-        """Compute stable time step for explicit integration."""
-        # Higher-order schemes have stricter stability requirements
-        stability_factor = {2: 2.0, 4: 2.5, 6: 3.0}[self.order]
+        """Return the safety-scaled Forward Euler diffusion limit.
 
-        if self.is_1d:
-            dt = self.safety_factor * self.dx * self.dx / (stability_factor * self.D)
-        else:
-            dx2 = self.dx * self.dx
-            dy2 = self.dy * self.dy
-            dt = self.safety_factor / (
-                stability_factor * self.D * (1.0 / dx2 + 1.0 / dy2)
+        The exact centered-stencil spectral radii are used: 4, 16/3, and
+        272/45 for spatial orders 2, 4, and 6 respectively.
+        """
+        return float(
+            _high_order_stable_dt(
+                self.D,
+                self.dx,
+                self.dy,
+                self.order,
+                self.safety_factor,
+                not self.is_1d,
             )
-
-        return dt
+        )
 
     def solve(
         self,
-        initial: np.ndarray,
+        initial: object,
         t_end: float,
         dt: Optional[float] = None,
         callback: Optional[Callable[[float, np.ndarray], None]] = None,
     ) -> HighOrderResult:
+        """Advance the diffusion equation from time zero to ``t_end``.
+
+        ``dt=None`` uses :meth:`compute_stable_dt`.  A supplied step larger
+        than that safety-scaled bound is rejected.  ``callback(time, state)``
+        receives an isolated copy after every accepted step; mutating it cannot
+        alter the native solution.  Because a Python callback reacquires the
+        GIL once per step, omit it for maximum throughput.
         """
-        Solve the diffusion equation with high-order spatial accuracy.
+        end_time = _finite_scalar(t_end, "t_end")
+        if end_time < 0.0:
+            raise ValueError("t_end must be nonnegative")
+        requested_dt = None if dt is None else _positive_scalar(dt, "dt")
+        if callback is not None and not callable(callback):
+            raise TypeError("callback must be callable or None")
 
-        Args:
-            initial: Initial condition
-            t_end: End time
-            dt: Time step (if None, computes stable dt)
-            callback: Optional callback(t, u) called each step
-
-        Returns:
-            HighOrderResult with solution and statistics
-        """
-        # Compute stable timestep if not provided
-        if dt is None:
-            dt = self.compute_stable_dt()
-
-        # Initialize solution
+        field = _field_array(initial)
+        expected_shape: Tuple[int, ...]
+        output_shape: Tuple[int, ...]
+        callback_shape: Tuple[int, ...]
         if self.is_1d:
-            u = np.array(initial, dtype=np.float64).copy()
+            expected_shape = (self.nx + 1,)
+            if field.shape != expected_shape:
+                raise ValueError(f"initial must have shape {expected_shape}")
+            output_shape = expected_shape
+            callback_shape = expected_shape
         else:
-            u = (
-                np.array(initial, dtype=np.float64)
-                .reshape(self.ny + 1, self.nx + 1)
-                .copy()
-            )
+            expected_shape = (self.ny + 1, self.nx + 1)
+            expected_size = expected_shape[0] * expected_shape[1]
+            if field.ndim == 2 and field.shape != expected_shape:
+                raise ValueError(f"initial must have shape {expected_shape}")
+            if field.ndim == 1 and field.size != expected_size:
+                raise ValueError(
+                    "flat initial size must equal (mesh.nx() + 1) * (mesh.ny() + 1)"
+                )
+            output_shape = field.shape
+            callback_shape = expected_shape
 
-        t = 0.0
-        step = 0
+        native_callback = None
+        if callback is not None:
 
-        while t < t_end:
-            # Adjust final step
-            if t + dt > t_end:
-                dt = t_end - t
+            def native_callback(time: float, state: np.ndarray) -> None:
+                callback(float(time), np.asarray(state).reshape(callback_shape))
 
-            # Compute Laplacian
-            lap = self._compute_laplacian(u)
-
-            # Reshape for 2D if needed
-            if not self.is_1d and lap.ndim == 1:
-                lap = lap.reshape(self.ny + 1, self.nx + 1)
-
-            # Forward Euler update
-            u = u + self.D * dt * lap
-
-            # Apply boundary conditions
-            if self.is_1d:
-                u[0] = self.bc_left
-                u[-1] = self.bc_right
-            else:
-                u[:, 0] = self.bc_left
-                u[:, -1] = self.bc_right
-                u[0, :] = self.bc_bottom
-                u[-1, :] = self.bc_top
-
-            t += dt
-            step += 1
-
-            if callback is not None:
-                callback(t, u)
-
+        native_result = _solve_high_order_diffusion(
+            field.reshape(-1),
+            self.nx,
+            self.ny,
+            self.dx,
+            self.dy,
+            self.D,
+            self.order,
+            self.safety_factor,
+            end_time,
+            requested_dt,
+            self.bc_left,
+            self.bc_right,
+            self.bc_bottom,
+            self.bc_top,
+            native_callback,
+        )
+        solution = np.asarray(native_result["solution"], dtype=np.float64).reshape(
+            output_shape
+        )
         return HighOrderResult(
-            solution=u.flatten() if not self.is_1d else u,
-            time=t,
-            steps=step,
-            dt=dt,
-            order=self.order,
+            solution=solution,
+            time=float(native_result["time"]),
+            steps=int(native_result["steps"]),
+            dt=float(native_result["dt"]),
+            last_dt=float(native_result["last_dt"]),
+            order=int(native_result["order"]),
+            boundary_order=int(native_result["boundary_order"]),
         )
 
 
-# =============================================================================
-# Convenience Functions for Computing Derivatives
-# =============================================================================
-
-
 def d2dx2(
-    u: np.ndarray, dx: float, order: int = 4, mesh: Optional[StructuredMesh] = None
+    u: object,
+    dx: float,
+    order: int = 4,
+    mesh: Optional[StructuredMesh] = None,
 ) -> np.ndarray:
-    """
-    Compute second derivative d²u/dx² with specified accuracy order.
-
-    Args:
-        u: Solution field
-        dx: Grid spacing
-        order: Accuracy order (2, 4, or 6)
-        mesh: Optional mesh (created automatically if not provided)
-
-    Returns:
-        Second derivative field
-    """
-    if order == 2:
-        return laplacian_2nd_order(u, dx)
-    elif order == 4:
-        if mesh is None:
-            n = len(u) - 1
-            mesh = StructuredMesh(n, 0.0, n * dx)
-        return laplacian_4th_order(mesh, u)
-    elif order == 6:
-        if mesh is None:
-            n = len(u) - 1
-            mesh = StructuredMesh(n, 0.0, n * dx)
-        return laplacian_6th_order(mesh, u)
-    else:
-        raise ValueError(f"Unsupported order: {order}. Use 2, 4, or 6.")
+    """Return the 1D second derivative with the selected interior order."""
+    field = _field_array(u, "u", (1,))
+    resolved_order = _order(order, (2, 4, 6))
+    if mesh is not None and not _validate_mesh(mesh).is_1d():
+        raise ValueError("d2dx2 requires a one-dimensional mesh")
+    if resolved_order == 2:
+        return laplacian_2nd_order(field, dx, mesh=mesh)
+    if resolved_order == 4:
+        return laplacian_4th_order(field, dx, mesh=mesh)
+    return laplacian_6th_order(field, dx, mesh=mesh)
 
 
 def ddx(
-    u: np.ndarray, dx: float, order: int = 4, mesh: Optional[StructuredMesh] = None
+    u: object,
+    dx: float,
+    order: int = 4,
+    mesh: Optional[StructuredMesh] = None,
 ) -> np.ndarray:
-    """
-    Compute first derivative du/dx with specified accuracy order.
+    """Return the 1D first derivative with interior order two or four."""
+    field = _field_array(u, "u", (1,))
+    resolved_order = _order(order, (2, 4))
+    if mesh is not None and not _validate_mesh(mesh).is_1d():
+        raise ValueError("ddx requires a one-dimensional mesh")
+    resolved_dx = _positive_scalar(dx, "dx")
+    if mesh is not None:
+        mesh_dx = _positive_scalar(mesh.dx(), "mesh.dx()")
+        _spacing_matches(mesh_dx, resolved_dx, "dx")
+        if field.size != int(mesh.nx()) + 1:
+            raise ValueError("u size does not match the one-dimensional mesh")
+    return np.asarray(
+        _high_order_gradient_1d(field, resolved_dx, resolved_order),
+        dtype=np.float64,
+    )
 
-    Args:
-        u: Solution field
-        dx: Grid spacing
-        order: Accuracy order (2 or 4)
-        mesh: Optional mesh (created automatically if not provided)
 
-    Returns:
-        First derivative field
+@dataclass(frozen=True)
+class RungeKuttaResult:
+    """Result from the validated explicit Runge--Kutta adapter."""
+
+    solution: np.ndarray
+    initial_time: float
+    time: float
+    steps: int
+    dt: float
+    last_dt: float
+    method: str
+    order: int
+
+
+def _canonical_runge_kutta_method(method: object) -> str:
+    if not isinstance(method, str):
+        raise TypeError("method must be a string")
+    normalized = method.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "heun": "heun",
+        "rk2": "heun",
+        "improved_euler": "heun",
+        "rk4": "rk4",
+        "classical_rk4": "rk4",
+        "classic_rk4": "rk4",
+    }
+    try:
+        return aliases[normalized]
+    except KeyError as exc:
+        raise ValueError("method must be 'heun'/'rk2' or 'rk4'") from exc
+
+
+def integrate_explicit_runge_kutta(
+    initial: object,
+    rhs: Callable[..., object],
+    t_end: float,
+    dt: float,
+    *,
+    t_start: float = 0.0,
+    method: str = "rk4",
+    autonomous: bool = False,
+    maximum_steps: int = 10_000_000,
+) -> RungeKuttaResult:
+    """Integrate a non-stiff ODE with validated Heun or classical RK4.
+
+    With the default ``autonomous=False``, ``rhs(state, time)`` is called at
+    the mathematically correct stage times.  Set ``autonomous=True`` to call
+    ``rhs(state)`` explicitly.  The callback must return the same shape as the
+    initial state and finite values.  Stage arrays never alias the accepted
+    state, the caller's initial array is not mutated, and the final step is
+    shortened to end exactly at ``t_end``.
+
+    The stages and vector updates are orchestrated in C++, but a Python
+    callback still executes under the GIL two times per Heun step or four times
+    per RK4 step.  Use a fully native model solver when callback overhead is a
+    performance concern.
     """
-    if order == 2:
-        grad = np.zeros_like(u)
-        grad[1:-1] = (u[2:] - u[:-2]) / (2 * dx)
-        return grad
-    elif order == 4:
-        if mesh is None:
-            n = len(u) - 1
-            mesh = StructuredMesh(n, 0.0, n * dx)
-        return gradient_4th_order(mesh, u)
-    else:
-        raise ValueError(f"Unsupported order: {order}. Use 2 or 4.")
+    if not callable(rhs):
+        raise TypeError("rhs must be callable")
+    if not isinstance(autonomous, bool):
+        raise TypeError("autonomous must be bool")
+    if (
+        isinstance(maximum_steps, bool)
+        or not isinstance(maximum_steps, Integral)
+        or int(maximum_steps) <= 0
+    ):
+        raise ValueError("maximum_steps must be a positive integer")
+
+    state = _field_array(initial, "initial state", None)
+    shape = state.shape
+    initial_time = _finite_scalar(t_start, "t_start")
+    end_time = _finite_scalar(t_end, "t_end")
+    if end_time < initial_time:
+        raise ValueError("t_end must not precede t_start")
+    step = _positive_scalar(dt, "dt")
+    canonical_method = _canonical_runge_kutta_method(method)
+
+    def checked_rhs(flat_state: np.ndarray, *time: float) -> np.ndarray:
+        shaped_state = np.asarray(flat_state, dtype=np.float64).reshape(shape)
+        value = rhs(shaped_state) if autonomous else rhs(shaped_state, float(time[0]))
+        derivative = _field_array(value, "rhs result", (len(shape),))
+        if derivative.shape != shape:
+            raise ValueError(
+                f"rhs result shape {derivative.shape} does not match state shape {shape}"
+            )
+        return derivative.reshape(-1).copy()
+
+    native_result = _integrate_explicit_runge_kutta(
+        state.reshape(-1),
+        checked_rhs,
+        initial_time,
+        end_time,
+        step,
+        canonical_method,
+        autonomous,
+        int(maximum_steps),
+    )
+    return RungeKuttaResult(
+        solution=np.asarray(native_result["solution"], dtype=np.float64).reshape(shape),
+        initial_time=float(native_result["initial_time"]),
+        time=float(native_result["time"]),
+        steps=int(native_result["steps"]),
+        dt=float(native_result["dt"]),
+        last_dt=float(native_result["last_dt"]),
+        method=canonical_method,
+        order=2 if canonical_method == "heun" else 4,
+    )
 
 
 def verify_order_of_accuracy(
-    solver_factory: Callable[[int], Callable[[np.ndarray], np.ndarray]],
-    exact_solution: Callable[[np.ndarray], np.ndarray],
+    operator_factory: Callable[[int], Callable[[np.ndarray], np.ndarray]],
+    field: Callable[[np.ndarray], object],
+    exact_derivative: Callable[[np.ndarray], object],
     x_range: Tuple[float, float] = (0.0, 1.0),
-    grid_sizes: Tuple[int, ...] = (20, 40, 80, 160),
-) -> dict:
+    grid_sizes: Sequence[int] = (20, 40, 80, 160),
+    interior_margin: int = 3,
+) -> Dict[str, object]:
+    """Measure spatial convergence against an independently known derivative.
+
+    ``field(x)`` supplies the function sampled on each mesh and
+    ``exact_derivative(x)`` supplies the exact quantity returned by the
+    operator.  Requiring the exact derivative avoids circular verification by
+    a second finite-difference approximation.  The infinity norm is measured
+    after excluding ``interior_margin`` nodes at each boundary.
     """
-    Verify the order of accuracy of a finite difference scheme.
+    if not callable(operator_factory):
+        raise TypeError("operator_factory must be callable")
+    if not callable(field):
+        raise TypeError("field must be callable")
+    if not callable(exact_derivative):
+        raise TypeError("exact_derivative must be callable")
+    if not isinstance(interior_margin, Integral) or isinstance(interior_margin, bool):
+        raise ValueError("interior_margin must be a nonnegative integer")
+    margin = int(interior_margin)
+    if margin < 0:
+        raise ValueError("interior_margin must be a nonnegative integer")
 
-    Uses Richardson extrapolation to compute the observed order of accuracy.
+    if len(x_range) != 2:
+        raise ValueError("x_range must contain exactly two bounds")
+    x_min = _finite_scalar(x_range[0], "x_range[0]")
+    x_max = _finite_scalar(x_range[1], "x_range[1]")
+    if x_max <= x_min:
+        raise ValueError("x_range upper bound must exceed its lower bound")
 
-    Args:
-        solver_factory: Function(n) -> solver that returns a solver for n grid points
-        exact_solution: Function(x) -> u_exact that returns exact solution
-        x_range: (x_min, x_max) domain
-        grid_sizes: Tuple of grid sizes to test
+    sizes = list(grid_sizes)
+    if len(sizes) < 2:
+        raise ValueError("grid_sizes must contain at least two grids")
+    validated_sizes = []
+    previous = 0
+    for value in sizes:
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            raise ValueError("grid_sizes must contain integers")
+        cells = int(value)
+        if cells <= previous:
+            raise ValueError("grid_sizes must be strictly increasing")
+        if cells + 1 <= 2 * margin:
+            raise ValueError("a grid is too small for the requested interior_margin")
+        validated_sizes.append(cells)
+        previous = cells
 
-    Returns:
-        Dict with errors, observed_orders, and grid_sizes
-
-    Example:
-        >>> def factory(n):
-        ...     x = np.linspace(0, 1, n+1)
-        ...     return lambda u: laplacian_4th_order(u, 1.0/n)
-        >>> exact = lambda x: np.sin(2*np.pi*x)
-        >>> results = verify_order_of_accuracy(factory, exact)
-        >>> print(f"Observed order: {results['observed_orders'][-1]:.2f}")
-    """
     errors = []
-    dxs = []
+    spacings = []
+    for cells in validated_sizes:
+        x = np.linspace(x_min, x_max, cells + 1)
+        spacing = (x_max - x_min) / cells
+        sampled_field = _field_array(field(x), "field(x)", (1,))
+        exact = _field_array(exact_derivative(x), "exact_derivative(x)", (1,))
+        if sampled_field.shape != x.shape or exact.shape != x.shape:
+            raise ValueError("field and exact_derivative must preserve the grid shape")
 
-    for n in grid_sizes:
-        x = np.linspace(x_range[0], x_range[1], n + 1)
-        dx = (x_range[1] - x_range[0]) / n
-        dxs.append(dx)
+        operator = operator_factory(cells)
+        if not callable(operator):
+            raise TypeError("operator_factory must return a callable")
+        numerical = _field_array(
+            operator(sampled_field.copy()), "operator result", (1,)
+        )
+        if numerical.shape != x.shape:
+            raise ValueError("operator result must preserve the grid shape")
 
-        # Get exact solution and apply numerical operator
-        u_exact = exact_solution(x)
-        solver = solver_factory(n)
-        u_numerical = solver(u_exact)
+        interior = slice(margin, -margin) if margin else slice(None)
+        errors.append(float(np.max(np.abs(numerical[interior] - exact[interior]))))
+        spacings.append(float(spacing))
 
-        # For Laplacian, compute exact d²u/dx² for comparison
-        # Assume exact_solution is smooth enough
-        h = 1e-5
-        u_plus = exact_solution(x + h)
-        u_minus = exact_solution(x - h)
-        d2u_exact = (u_plus - 2 * u_exact + u_minus) / (h * h)
-
-        # Compute error in interior (skip boundaries)
-        error = np.max(np.abs(u_numerical[2:-2] - d2u_exact[2:-2]))
-        errors.append(error)
-
-    # Compute observed orders
     observed_orders = []
-    for i in range(1, len(errors)):
-        if errors[i] > 0 and errors[i - 1] > 0:
-            order = np.log(errors[i - 1] / errors[i]) / np.log(dxs[i - 1] / dxs[i])
-            observed_orders.append(order)
-        else:
+    for coarse_error, fine_error, coarse_dx, fine_dx in zip(
+        errors[:-1], errors[1:], spacings[:-1], spacings[1:]
+    ):
+        if coarse_error == 0.0 and fine_error == 0.0:
             observed_orders.append(float("nan"))
+        elif fine_error == 0.0:
+            observed_orders.append(float("inf"))
+        elif coarse_error == 0.0:
+            observed_orders.append(float("-inf"))
+        else:
+            observed_orders.append(
+                float(np.log(coarse_error / fine_error) / np.log(coarse_dx / fine_dx))
+            )
 
     return {
-        "grid_sizes": list(grid_sizes),
-        "dx": dxs,
+        "grid_sizes": validated_sizes,
+        "dx": spacings,
         "errors": errors,
         "observed_orders": observed_orders,
+        "norm": "L_inf",
+        "interior_margin": margin,
     }
+
+
+__all__ = [
+    "HighOrderDiffusionSolver",
+    "HighOrderResult",
+    "RungeKuttaResult",
+    "d2dx2",
+    "ddx",
+    "gradient_4th_order",
+    "integrate_explicit_runge_kutta",
+    "laplacian_2nd_order",
+    "laplacian_4th_order",
+    "laplacian_6th_order",
+    "verify_order_of_accuracy",
+]

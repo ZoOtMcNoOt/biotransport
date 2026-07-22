@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath("../../python"))
 
 # -- Project information -----------------------------------------------------
 project = "BioTransport"
-copyright = "2025, BioTransport Authors"
+copyright = "2026, BioTransport Authors"
 author = "BioTransport Authors"
 version = "0.1.0"
 release = "0.1.0"
@@ -61,13 +61,11 @@ source_suffix = {
     ".md": "markdown",
 }
 
-templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # -- Options for HTML output -------------------------------------------------
 html_theme = "furo"
 html_title = "BioTransport"
-html_static_path = ["_static"]
 html_css_files = []
 
 # Theme options
@@ -84,10 +82,9 @@ html_theme_options = {
 
 # -- Options for autodoc -----------------------------------------------------
 # Mock imports for C++ extension module
-autodoc_mock_imports = ["biotransport._core"]
+autodoc_mock_imports = ["biotransport._core._core"]
 
 # Suppress warnings for mocked objects (C++ extension not available during doc build)
 suppress_warnings = [
     "autodoc.mocked_object",
-    "autodoc",  # Suppress all autodoc warnings for mocked C++ extension
 ]

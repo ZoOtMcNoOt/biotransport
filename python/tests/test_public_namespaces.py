@@ -1,0 +1,82 @@
+"""Import-contract tests for the organized public API namespaces."""
+
+from importlib import import_module
+from types import ModuleType
+
+import pytest
+
+import biotransport as bt
+from biotransport.config.bioheat_cryotherapy import (
+    celsius_from_kelvin,
+    kelvin_from_celsius,
+)
+from biotransport.config.tumor_drug_delivery import MMHG_TO_PA
+
+
+APPLICATION_HELPERS = {
+    "kelvin_from_celsius": kelvin_from_celsius,
+    "celsius_from_kelvin": celsius_from_kelvin,
+    "MMHG_TO_PA": MMHG_TO_PA,
+}
+
+
+NAMESPACE_ANCHORS = {
+    "diffusion": (
+        "TransportProblem",
+        "solve",
+        "CrankNicolsonDiffusion",
+        "NonuniformDiffusion1D",
+        "MultiSpeciesSolver",
+        "MembraneDiffusion1DSolver",
+    ),
+    "electrochem": (
+        "IonSpecies",
+        "NernstPlanckSolver",
+        "MultiIonSolver",
+        "ghk",
+    ),
+    "flow": (
+        "DarcyFlowSolver",
+        "StokesSolver",
+        "NavierStokesSolver",
+        "CarreauYasudaModel",
+    ),
+    "applications": (
+        "BioheatCryotherapyConfig",
+        "BioheatCryotherapySolver",
+        "TumorDrugDeliveryConfig",
+        "TumorDrugDeliverySolver",
+    ),
+}
+
+
+@pytest.mark.parametrize("namespace_name", NAMESPACE_ANCHORS)
+def test_namespace_exports_are_explicit_and_discoverable(namespace_name: str) -> None:
+    namespace = import_module(f"biotransport.{namespace_name}")
+
+    assert isinstance(namespace, ModuleType)
+    assert namespace.__doc__
+    assert namespace.__all__
+    assert len(namespace.__all__) == len(set(namespace.__all__))
+    assert all(not name.startswith("_") for name in namespace.__all__)
+    assert all(hasattr(namespace, name) for name in namespace.__all__)
+    assert set(NAMESPACE_ANCHORS[namespace_name]).issubset(namespace.__all__)
+
+    for symbol_name in namespace.__all__:
+        expected = APPLICATION_HELPERS.get(symbol_name, getattr(bt, symbol_name, None))
+        assert expected is not None
+        assert getattr(namespace, symbol_name) is expected
+
+
+@pytest.mark.parametrize(
+    ("namespace_name", "symbol_name"),
+    [
+        (namespace_name, symbol_name)
+        for namespace_name, symbol_names in NAMESPACE_ANCHORS.items()
+        for symbol_name in symbol_names
+    ],
+)
+def test_namespace_symbols_are_reexports(namespace_name: str, symbol_name: str) -> None:
+    namespace = import_module(f"biotransport.{namespace_name}")
+
+    assert getattr(namespace, symbol_name) is getattr(bt, symbol_name)

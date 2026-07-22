@@ -1,304 +1,205 @@
+#!/usr/bin/env python3
+"""Crank--Nicolson stability, accuracy, and damping demonstration.
+
+For linear diffusion, Crank--Nicolson is A-stable: every eigenmode of the
+semi-discrete diffusion operator remains bounded for every positive time step.
+It is *not* L-stable.  A very stiff mode has an amplification factor approaching
+-1 rather than 0, so an oversized step can leave a bounded, sign-alternating
+mode and can violate positivity.  Linear stability is therefore not an accuracy
+or monotonicity guarantee.
+
+This script checks a smooth Dirichlet eigenmode against its analytical solution,
+shows that the conservative explicit API rejects a step beyond its certified CFL
+limit, and measures the large-step Crank--Nicolson amplification of a stiff mode.
 """
-Example: Crank-Nicolson vs Explicit Method Stability Comparison
 
-This example demonstrates the unconditional stability of the Crank-Nicolson (CN)
-implicit method compared to the explicit FTCS method. We solve a 1D diffusion
-problem with two different time step sizes:
+from __future__ import annotations
 
-1. Small dt (stable for both methods)
-2. Large dt (stable only for CN, explicit method blows up)
-
-Model:
-    dC/dt = D * d²C/dx²
-
-The explicit method (Forward-Time Central-Space) has a stability criterion:
-    dt ≤ dx²/(2*D)  (1D case)
-
-Crank-Nicolson is unconditionally stable and allows much larger time steps.
-
-BMEN 341 Reference: Numerical Methods for PDEs (Week 5)
-"""
+import math
 
 import matplotlib.pyplot as plt
 import numpy as np
+
 import biotransport as bt
 
 EXAMPLE_NAME = "crank_nicolson_stability"
 
-print("=" * 70)
-print("Crank-Nicolson Stability Demonstration")
-print("=" * 70)
 
-# Create mesh: 50 nodes from x=0 to x=1
-mesh = bt.mesh_1d(50)
-dx = mesh.dx()
-D = 0.01  # Diffusion coefficient
+def relative_l2(numerical: np.ndarray, reference: np.ndarray) -> float:
+    """Return the relative discrete L2 error."""
+    return float(np.linalg.norm(numerical - reference) / np.linalg.norm(reference))
 
-# Calculate stability limit for explicit method
-dt_stable = 0.4 * dx**2 / (2 * D)  # Use 40% of the theoretical limit for safety
-dt_unstable = 5.0 * dx**2 / (2 * D)  # 5x beyond stability limit
 
-print(f"\nMesh spacing: dx = {dx:.6f}")
-print(f"Diffusion coefficient: D = {D}")
-print(f"Explicit stability limit: dt <= {dx**2 / (2*D):.6f}")
-print(f"Safe stable dt: {dt_stable:.6f}")
-print(f"Deliberately unstable dt: {dt_unstable:.6f} (5x beyond limit)")
+def zero_dirichlet(problem_or_solver):
+    """Apply homogeneous Dirichlet data to a 1D problem or specialized solver."""
+    problem_or_solver.set_dirichlet_boundary(bt.Boundary.Left, 0.0)
+    problem_or_solver.set_dirichlet_boundary(bt.Boundary.Right, 0.0)
+    return problem_or_solver
 
-# Initial condition: Gaussian pulse
-initial = bt.gaussian(mesh, center=0.5, width=0.1)
-x = bt.x_nodes(mesh)
 
-# Simulation end time
-t_end = 0.1
+def run_cn(
+    mesh: bt.StructuredMesh,
+    diffusivity: float,
+    initial: np.ndarray,
+    dt: float,
+    steps: int,
+) -> tuple[np.ndarray, bt.CrankNicolsonDiffusion]:
+    """Advance the specialized native Crank--Nicolson solver."""
+    solver = bt.CrankNicolsonDiffusion(mesh, diffusivity)
+    solver.set_initial_condition(initial)
+    zero_dirichlet(solver)
+    solver.solve(dt=dt, num_steps=steps)
+    return np.asarray(solver.solution()), solver
 
-# ========================================================================
-# Test 1: Small time step (stable for both methods)
-# ========================================================================
-print(f"\n{'='*70}")
-print("Test 1: Small time step (dt = {:.6f})".format(dt_stable))
-print("Expected: Both methods should produce stable, similar results")
-print(f"{'='*70}")
 
-# Create fresh ICs for each test to avoid any state issues
-ic_explicit = bt.gaussian(mesh, center=0.5, width=0.1)
-ic_cn_small = bt.gaussian(mesh, center=0.5, width=0.1)
+def main() -> int:
+    plt.switch_backend("Agg")
+    length = 1.0
+    cells = 80
+    diffusivity = 0.01
+    final_time = 0.1
+    mesh = bt.StructuredMesh(cells, 0.0, length)
+    x = np.linspace(0.0, length, cells + 1)
+    dx = mesh.dx()
 
-# Explicit method with small dt
-problem_explicit = (
-    bt.Problem(mesh)
-    .diffusivity(D)
-    .initial_condition(ic_explicit)
-    .dirichlet(bt.Boundary.Left, 0.0)
-    .dirichlet(bt.Boundary.Right, 0.0)
-)
-result_explicit = bt.solve(problem_explicit, t=t_end, dt=dt_stable, method="explicit")
-solution_explicit_stable = result_explicit.solution()
+    # The standard 1D Forward Euler bound for this uniform diffusion problem.
+    explicit_limit = dx**2 / (2.0 * diffusivity)
+    small_target_dt = 0.4 * explicit_limit
+    small_steps = math.ceil(final_time / small_target_dt)
+    small_dt = final_time / small_steps
 
-print(f"Explicit method: {result_explicit.stats.steps} steps")
-print(
-    f"  Min: {solution_explicit_stable.min():.6f}, Max: {solution_explicit_stable.max():.6f}"
-)
-
-# Crank-Nicolson with small dt - pass IC explicitly to workaround binding issue
-problem_cn_small = (
-    bt.Problem(mesh)
-    .diffusivity(D)
-    .initial_condition(ic_cn_small)
-    .dirichlet(bt.Boundary.Left, 0.0)
-    .dirichlet(bt.Boundary.Right, 0.0)
-)
-result_cn = bt.solve(
-    problem_cn_small,
-    t=t_end,
-    dt=dt_stable,
-    method="crank_nicolson",
-    initial_condition=ic_cn_small,
-)
-solution_cn_stable = result_cn.solution()
-
-print(f"Crank-Nicolson: {result_cn.stats.steps} steps")
-print(f"  Min: {solution_cn_stable.min():.6f}, Max: {solution_cn_stable.max():.6f}")
-
-# ========================================================================
-# Test 2: Large time step (stable only for CN)
-# ========================================================================
-print(f"\n{'='*70}")
-print("Test 2: Large time step (dt = {:.6f})".format(dt_unstable))
-print("Expected: Explicit method blows up, CN remains stable")
-print(f"{'='*70}")
-
-# Create fresh ICs for Test 2
-ic_explicit_large = bt.gaussian(mesh, center=0.5, width=0.1)
-ic_cn_large = bt.gaussian(mesh, center=0.5, width=0.1)
-
-# Create fresh problems for Test 2
-problem_explicit_large = (
-    bt.Problem(mesh)
-    .diffusivity(D)
-    .initial_condition(ic_explicit_large)
-    .dirichlet(bt.Boundary.Left, 0.0)
-    .dirichlet(bt.Boundary.Right, 0.0)
-)
-
-try:
-    result_explicit_unstable = bt.solve(
-        problem_explicit_large, t=t_end, dt=dt_unstable, method="explicit"
+    smooth_initial = np.sin(np.pi * x / length)
+    smooth_reference = smooth_initial * np.exp(
+        -diffusivity * (np.pi / length) ** 2 * final_time
     )
-    solution_explicit_unstable = result_explicit_unstable.solution()
 
-    # Check if solution blew up
-    if np.any(np.abs(solution_explicit_unstable) > 1e10) or np.any(
-        np.isnan(solution_explicit_unstable)
-    ):
-        print("Explicit method: UNSTABLE (solution diverged)")
-        solution_explicit_unstable[:] = np.nan  # Mark as failed for plotting
-    else:
-        print(f"Explicit method: {result_explicit_unstable.stats.steps} steps")
-        print(
-            f"  Min: {solution_explicit_unstable.min():.6f}, Max: {solution_explicit_unstable.max():.6f}"
-        )
-except Exception as e:
-    print(f"Explicit method: FAILED - {str(e)}")
-    solution_explicit_unstable = np.full_like(x, np.nan)
-
-# Crank-Nicolson with large dt (should remain stable) - pass IC explicitly
-problem_cn_large = (
-    bt.Problem(mesh)
-    .diffusivity(D)
-    .initial_condition(ic_cn_large)
-    .dirichlet(bt.Boundary.Left, 0.0)
-    .dirichlet(bt.Boundary.Right, 0.0)
-)
-result_cn_unstable = bt.solve(
-    problem_cn_large,
-    t=t_end,
-    dt=dt_unstable,
-    method="crank_nicolson",
-    initial_condition=ic_cn_large,
-)
-solution_cn_unstable = result_cn_unstable.solution()
-
-print(f"Crank-Nicolson: {result_cn_unstable.stats.steps} steps")
-print(f"  Min: {solution_cn_unstable.min():.6f}, Max: {solution_cn_unstable.max():.6f}")
-
-# ========================================================================
-# Visualization
-# ========================================================================
-print(f"\n{'='*70}")
-print("Creating comparison plots...")
-print(f"{'='*70}")
-
-fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-fig.suptitle(
-    "Stability Comparison: Explicit vs Crank-Nicolson", fontsize=16, fontweight="bold"
-)
-
-# Plot 1: Small dt - Explicit
-ax1 = axes[0, 0]
-ax1.plot(x, initial, "k--", alpha=0.5, label="Initial", linewidth=2)
-ax1.plot(
-    x,
-    solution_explicit_stable,
-    "b-",
-    label=f"Explicit (dt={dt_stable:.6f})",
-    linewidth=2,
-)
-ax1.set_xlabel("Position x")
-ax1.set_ylabel("Concentration")
-ax1.set_title(
-    f"Explicit Method - Small Δt (Stable)\n{result_explicit.stats.steps} steps"
-)
-ax1.legend()
-ax1.grid(True, alpha=0.3)
-ax1.set_ylim([-0.1, 1.1])
-
-# Plot 2: Small dt - CN
-ax2 = axes[0, 1]
-ax2.plot(x, initial, "k--", alpha=0.5, label="Initial", linewidth=2)
-ax2.plot(x, solution_cn_stable, "r-", label=f"CN (dt={dt_stable:.6f})", linewidth=2)
-ax2.set_xlabel("Position x")
-ax2.set_ylabel("Concentration")
-ax2.set_title(f"Crank-Nicolson - Small Δt (Stable)\n{result_cn.stats.steps} steps")
-ax2.legend()
-ax2.grid(True, alpha=0.3)
-ax2.set_ylim([-0.1, 1.1])
-
-# Plot 3: Large dt - Explicit (unstable)
-ax3 = axes[1, 0]
-ax3.plot(x, initial, "k--", alpha=0.5, label="Initial", linewidth=2)
-if not np.all(np.isnan(solution_explicit_unstable)):
-    ax3.plot(
-        x,
-        solution_explicit_unstable,
-        "b-",
-        label=f"Explicit (dt={dt_unstable:.6f})",
-        linewidth=2,
+    explicit_problem = (
+        bt.Problem(mesh)
+        .diffusivity(diffusivity)
+        .initial_condition(smooth_initial)
+        .dirichlet(bt.Boundary.Left, 0.0)
+        .dirichlet(bt.Boundary.Right, 0.0)
     )
-ax3.set_xlabel("Position x")
-ax3.set_ylabel("Concentration")
-ax3.set_title(
-    f"Explicit Method - Large Δt (UNSTABLE)\ndt is {dt_unstable/dt_stable:.1f}x stability limit"
-)
-ax3.legend()
-ax3.grid(True, alpha=0.3)
-ax3.text(
-    0.5,
-    0.5,
-    "NUMERICAL\nINSTABILITY",
-    transform=ax3.transAxes,
-    fontsize=24,
-    color="red",
-    alpha=0.3,
-    ha="center",
-    va="center",
-    weight="bold",
-)
+    explicit_result = bt.solve(
+        explicit_problem,
+        end_time=final_time,
+        time_step=small_dt,
+    )
+    explicit_solution = np.asarray(explicit_result.concentration)
+    cn_small, cn_small_solver = run_cn(
+        mesh, diffusivity, smooth_initial, small_dt, small_steps
+    )
 
-# Plot 4: Large dt - CN (stable)
-ax4 = axes[1, 1]
-ax4.plot(x, initial, "k--", alpha=0.5, label="Initial", linewidth=2)
-ax4.plot(x, solution_cn_unstable, "r-", label=f"CN (dt={dt_unstable:.6f})", linewidth=2)
-ax4.set_xlabel("Position x")
-ax4.set_ylabel("Concentration")
-ax4.set_title(
-    f"Crank-Nicolson - Large Δt (STABLE)\n{result_cn_unstable.stats.steps} steps (only!)"
-)
-ax4.legend()
-ax4.grid(True, alpha=0.3)
-ax4.set_ylim([-0.1, 1.1])
+    explicit_error = relative_l2(explicit_solution, smooth_reference)
+    cn_error = relative_l2(cn_small, smooth_reference)
 
-plt.tight_layout()
-plt.savefig(bt.get_result_path("stability_comparison.png", EXAMPLE_NAME), dpi=150)
+    # Use a high-frequency discrete sine eigenmode.  For u_t = lambda*u, the
+    # Crank--Nicolson factor is (1 + lambda*dt/2)/(1 - lambda*dt/2).
+    mode = cells - 1
+    stiff_initial = np.sin(mode * np.pi * x / length)
+    large_dt = 20.0 * explicit_limit
+    stiff_cn, _ = run_cn(mesh, diffusivity, stiff_initial, large_dt, 1)
+    laplacian_eigenvalue = (
+        -4.0 * diffusivity * np.sin(mode * np.pi / (2.0 * cells)) ** 2 / dx**2
+    )
+    expected_factor = (1.0 + 0.5 * large_dt * laplacian_eigenvalue) / (
+        1.0 - 0.5 * large_dt * laplacian_eigenvalue
+    )
+    measured_factor = float(
+        np.dot(stiff_cn, stiff_initial) / np.dot(stiff_initial, stiff_initial)
+    )
+    modal_residual = relative_l2(stiff_cn, expected_factor * stiff_initial)
 
-# ========================================================================
-# Comparison plot: Both methods with small dt
-# ========================================================================
-fig2, ax = plt.subplots(figsize=(10, 6))
-ax.plot(x, initial, "k--", alpha=0.5, label="Initial", linewidth=2)
-ax.plot(
-    x,
-    solution_explicit_stable,
-    "b-",
-    label="Explicit (small dt)",
-    linewidth=2,
-    alpha=0.7,
-)
-ax.plot(
-    x,
-    solution_cn_stable,
-    "r--",
-    label="Crank-Nicolson (small dt)",
-    linewidth=2,
-    alpha=0.7,
-)
-ax.set_xlabel("Position x", fontsize=12)
-ax.set_ylabel("Concentration", fontsize=12)
-ax.set_title(
-    f"Method Comparison at t={t_end} (Both Stable)", fontsize=14, fontweight="bold"
-)
-ax.legend(fontsize=11)
-ax.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig(bt.get_result_path("method_comparison_stable.png", EXAMPLE_NAME), dpi=150)
+    # A-stability does not imply a discrete maximum principle. A concentrated,
+    # nonnegative field develops an undershoot under the same oversized step.
+    pulse_initial = np.zeros_like(x)
+    pulse_initial[cells // 2] = 1.0
+    pulse_cn, _ = run_cn(mesh, diffusivity, pulse_initial, large_dt, 1)
+    pulse_minimum = float(np.min(pulse_cn))
 
-plt.show()
+    # The friendly explicit API refuses a user-supplied step outside its
+    # certified range instead of silently producing an unstable trajectory.
+    rejected_unsafe_explicit_step = False
+    unsafe_problem = (
+        bt.Problem(mesh)
+        .diffusivity(diffusivity)
+        .initial_condition(stiff_initial)
+        .dirichlet(bt.Boundary.Left, 0.0)
+        .dirichlet(bt.Boundary.Right, 0.0)
+    )
+    try:
+        bt.solve(unsafe_problem, end_time=large_dt, time_step=large_dt)
+    except ValueError:
+        rejected_unsafe_explicit_step = True
 
-# ========================================================================
-# Summary
-# ========================================================================
-print(f"\n{'='*70}")
-print("SUMMARY")
-print(f"{'='*70}")
-print("\n[OK] Crank-Nicolson is unconditionally stable")
-print(f"  - Works with dt = {dt_unstable:.6f} (5x beyond explicit stability limit)")
-print(f"  - Completed simulation in only {result_cn_unstable.stats.steps} steps")
-print("\n[X] Explicit method is conditionally stable")
-print(f"  - Requires dt <= {dx**2 / (2*D):.6f}")
-print(f"  - Needed {result_explicit.stats.steps} steps for stable solution")
-print("  - Diverged when using large time step")
-print("\n[i] Use Crank-Nicolson when:")
-print("  - You need large time steps for efficiency")
-print("  - Problem is stiff (small diffusivity, fine mesh)")
-print("  - Accuracy at large dt is more important than speed per step")
-print(f"\nResults saved to: {bt.get_result_path('', EXAMPLE_NAME)}")
-print(f"{'='*70}")
+    checks = {
+        "explicit smooth-mode relative L2 error < 2e-4": explicit_error < 2.0e-4,
+        "CN smooth-mode relative L2 error < 2e-4": cn_error < 2.0e-4,
+        "CN solver reached the requested time": math.isclose(
+            cn_small_solver.time(), final_time, rel_tol=0.0, abs_tol=1.0e-14
+        ),
+        "large-step CN mode is bounded": np.linalg.norm(stiff_cn)
+        <= np.linalg.norm(stiff_initial) * (1.0 + 1.0e-10),
+        "large-step CN amplification matches theory": modal_residual < 1.0e-8,
+        "large-step CN mode changes sign (not L-stable)": measured_factor < 0.0,
+        "oversized CN step demonstrates loss of positivity": pulse_minimum < -1.0e-3,
+        "unsafe explicit step is rejected": rejected_unsafe_explicit_step,
+    }
+
+    print("Crank--Nicolson: stability is not accuracy")
+    print(f"  grid spacing                         {dx:.6g} m")
+    print(f"  explicit diffusion limit             {explicit_limit:.6g} s")
+    print(f"  resolved comparison step             {small_dt:.6g} s")
+    print(f"  explicit smooth-mode relative L2     {explicit_error:.3e}")
+    print(f"  CN smooth-mode relative L2           {cn_error:.3e}")
+    print(f"  oversized step / explicit limit      {large_dt / explicit_limit:.1f}")
+    print(f"  stiff-mode amplification, predicted  {expected_factor:.6f}")
+    print(f"  stiff-mode amplification, measured   {measured_factor:.6f}")
+    print(f"  stiff-mode shape residual             {modal_residual:.3e}")
+    print(f"  nonnegative-pulse minimum after CN    {pulse_minimum:.6f}")
+
+    for label, passed in checks.items():
+        print(f"  [{'PASS' if passed else 'FAIL'}] {label}")
+
+    figure, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+    axes[0].plot(x, smooth_reference, "k-", label="analytical")
+    axes[0].plot(x, explicit_solution, "--", label="explicit")
+    axes[0].plot(x, cn_small, ":", linewidth=2.2, label="Crank--Nicolson")
+    axes[0].set_title("Resolved smooth mode")
+    axes[0].set_xlabel("x [m]")
+    axes[0].set_ylabel("field")
+    axes[0].grid(alpha=0.3)
+    axes[0].legend()
+
+    axes[1].plot(x, stiff_initial, "k--", alpha=0.65, label="before step")
+    axes[1].plot(x, stiff_cn, color="tab:red", label="after oversized CN step")
+    axes[1].set_title("Bounded sign reversal: CN is not L-stable")
+    axes[1].set_xlabel("x [m]")
+    axes[1].set_ylabel("field")
+    axes[1].grid(alpha=0.3)
+    axes[1].legend()
+
+    axes[2].plot(x, pulse_initial, "k--", alpha=0.65, label="nonnegative initial")
+    axes[2].plot(x, pulse_cn, color="tab:purple", label="after oversized CN step")
+    axes[2].axhline(0.0, color="0.4", linewidth=0.8)
+    axes[2].set_title("Linear stability does not ensure positivity")
+    axes[2].set_xlabel("x [m]")
+    axes[2].set_ylabel("field")
+    axes[2].grid(alpha=0.3)
+    axes[2].legend()
+
+    figure.tight_layout()
+    output = bt.get_result_path("stability_and_damping.png", EXAMPLE_NAME)
+    figure.savefig(output, dpi=150)
+    plt.close(figure)
+    print(f"  figure                               {output}")
+    print(
+        "\nInterpretation: A-stability prevents unbounded linear growth. It does "
+        "not make an oversized step accurate, strongly damped, or positivity-preserving."
+    )
+
+    return 0 if all(checks.values()) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

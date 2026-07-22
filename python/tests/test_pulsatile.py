@@ -276,7 +276,12 @@ class TestSolvePulsatile:
         """solve_pulsatile correctly applies time-varying BC."""
         mesh = bt.mesh_1d(20, 0, 1)
         initial = np.zeros(21)
-        problem = bt.Problem(mesh).diffusivity(0.1).initial_condition(initial)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.1)
+            .initial_condition(initial)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
 
         # Step BC that turns on at t=0
         bc_left = bt.ConstantBC(value=1.0)
@@ -290,7 +295,7 @@ class TestSolvePulsatile:
 
         # Left boundary should be 1.0
         assert result.solution[0] == pytest.approx(1.0)
-        # Right boundary should still be 0 (default Dirichlet)
+        # Explicit fixed-zero right boundary should remain 0.
         assert result.solution[-1] == pytest.approx(0.0)
         # Interior should have some diffused concentration
         assert result.solution[5] > 0

@@ -19,29 +19,30 @@
  *   T   = temperature [K]
  *   φ   = electric potential [V]
  *
- * Applications:
- *   - Ion channels and membrane transport
- *   - Neural action potentials
- *   - Battery electrolytes
- *   - Electrophoresis
- *   - Drug iontophoresis
- *
- * This implementation supports:
- *   1. Single ion transport with prescribed electric field
- *   2. Multi-ion transport with electroneutrality constraint
- *   3. Full Poisson-Nernst-Planck (PNP) coupling (optional)
+ * This implementation advances one or more dilute, non-reacting ionic
+ * species in a prescribed electric-potential field. It is suitable for
+ * electrodiffusion and electrophoresis studies when that potential is known.
+ * It does not compute the potential from charge density, enforce
+ * electroneutrality, model ion-channel kinetics, or solve a full
+ * Poisson-Nernst-Planck system. Requests for the legacy electroneutrality mode
+ * therefore fail explicitly instead of silently running a different model.
  *
  * @author BioTransport Development Team
  * @date December 2025
  */
 
+#include <algorithm>
 #include <array>
 #include <biotransport/core/boundary.hpp>
-#include <biotransport/core/mesh/mesh_iterators.hpp>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <cmath>
 #include <functional>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 // Define M_PI if not available (MSVC doesn't define it by default)
@@ -63,6 +64,103 @@ constexpr double ELEMENTARY_CHARGE = 1.602176634e-19;     ///< [C]
 constexpr double VACUUM_PERMITTIVITY = 8.8541878128e-12;  ///< [F/m]
 }  // namespace constants
 
+namespace electrochem_detail {
+
+inline void requireFinite(double value, const char* name) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument(std::string(name) + " must be finite");
+    }
+}
+
+inline void requirePositive(double value, const char* name) {
+    requireFinite(value, name);
+    if (value <= 0.0) {
+        throw std::invalid_argument(std::string(name) + " must be positive");
+    }
+}
+
+inline void requireNonnegative(double value, const char* name) {
+    requireFinite(value, name);
+    if (value < 0.0) {
+        throw std::invalid_argument(std::string(name) + " must be non-negative");
+    }
+}
+
+/** Bernoulli function B(x)=x/(exp(x)-1), evaluated without cancellation/overflow. */
+inline double bernoulli(double x) {
+    requireFinite(x, "dimensionless electrochemical potential difference");
+    const double ax = std::abs(x);
+    if (ax < 1.0e-6) {
+        const double x2 = x * x;
+        return 1.0 - 0.5 * x + x2 / 12.0 - x2 * x2 / 720.0;
+    }
+    if (x > 50.0) {
+        const double em = std::exp(-x);
+        return x * em / (1.0 - em);
+    }
+    if (x < -50.0) {
+        return -x / (1.0 - std::exp(x));
+    }
+    return x / std::expm1(x);
+}
+
+struct FaceFluxCoefficients {
+    double from_left;
+    double from_right;
+};
+
+/**
+ * Scharfetter-Gummel face flux for
+ * N = -D (grad(c) + z*c*grad(phi)/V_T).
+ *
+ * The returned coefficients give N = from_left*c_left - from_right*c_right.
+ * Both coefficients are non-negative, which makes the fitted flux
+ * positivity-compatible and exactly preserves discrete Boltzmann equilibrium.
+ */
+inline FaceFluxCoefficients faceFluxCoefficients(double diffusivity, double z_over_vt,
+                                                 double phi_left, double phi_right,
+                                                 double spacing) {
+    const double delta_psi = z_over_vt * (phi_right - phi_left);
+    const double scale = diffusivity / spacing;
+    return {scale * bernoulli(delta_psi), scale * bernoulli(-delta_psi)};
+}
+
+inline double faceMolarFlux(double diffusivity, double z_over_vt, double c_left, double c_right,
+                            double phi_left, double phi_right, double spacing) {
+    const auto coeff = faceFluxCoefficients(diffusivity, z_over_vt, phi_left, phi_right, spacing);
+    return coeff.from_left * c_left - coeff.from_right * c_right;
+}
+
+inline int checkedBoundaryIndex(Boundary boundary, bool is_1d) {
+    const int index = to_index(boundary);
+    if (index < to_index(Boundary::Left) || index > to_index(Boundary::Top)) {
+        throw std::invalid_argument("Invalid boundary identifier");
+    }
+    if (is_1d && (boundary == Boundary::Bottom || boundary == Boundary::Top)) {
+        throw std::invalid_argument("Bottom and Top boundaries are not defined for a 1D mesh");
+    }
+    return index;
+}
+
+inline void validateConcentrationField(const std::vector<double>& values, const char* name) {
+    for (double value : values) {
+        if (!std::isfinite(value) || value < 0.0) {
+            throw std::invalid_argument(std::string(name) +
+                                        " must contain finite, non-negative concentrations");
+        }
+    }
+}
+
+inline void validatePotentialField(const std::vector<double>& values) {
+    for (double value : values) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument("Potential field must contain only finite values");
+        }
+    }
+}
+
+}  // namespace electrochem_detail
+
 // =============================================================================
 // Ion Species Definition
 // =============================================================================
@@ -71,10 +169,11 @@ constexpr double VACUUM_PERMITTIVITY = 8.8541878128e-12;  ///< [F/m]
  * @brief Represents a single ion species with its transport properties.
  */
 struct IonSpecies {
-    std::string name;    ///< Species name (e.g., "Na+", "K+", "Cl-")
-    int valence;         ///< Ion valence (z): +1 for Na+, -1 for Cl-, etc.
-    double diffusivity;  ///< Diffusion coefficient [m²/s]
-    double mobility;     ///< Electrical mobility [m²/(V·s)], computed from D
+    std::string name;             ///< Species name (e.g., "Na+", "K+", "Cl-")
+    int valence;                  ///< Ion valence (z): +1 for Na+, -1 for Cl-, etc.
+    double diffusivity;           ///< Diffusion coefficient [m²/s]
+    double mobility;              ///< Mobility magnitude at mobility_temperature [m²/(V·s)]
+    double mobility_temperature;  ///< Absolute temperature used for mobility [K]
 
     /**
      * @brief Create an ion species.
@@ -84,15 +183,21 @@ struct IonSpecies {
      * @param temperature Temperature [K] for mobility calculation (default 310K body temp)
      */
     IonSpecies(const std::string& name, int valence, double diffusivity, double temperature = 310.0)
-        : name(name), valence(valence), diffusivity(diffusivity) {
+        : name(name),
+          valence(valence),
+          diffusivity(diffusivity),
+          mobility(0.0),
+          mobility_temperature(temperature) {
+        if (name.empty()) {
+            throw std::invalid_argument("Ion species name cannot be empty");
+        }
         if (valence == 0) {
             throw std::invalid_argument("Ion valence cannot be zero - use regular diffusion");
         }
-        if (diffusivity <= 0.0) {
-            throw std::invalid_argument("Diffusion coefficient must be positive");
-        }
+        electrochem_detail::requirePositive(diffusivity, "Diffusion coefficient");
+        electrochem_detail::requirePositive(temperature, "Temperature");
         // Einstein relation: μ = |z|eD/(kT) = |z|FD/(RT)
-        mobility = std::abs(valence) * constants::FARADAY * diffusivity /
+        mobility = std::abs(static_cast<double>(valence)) * constants::FARADAY * diffusivity /
                    (constants::GAS_CONSTANT * temperature);
     }
 
@@ -100,7 +205,13 @@ struct IonSpecies {
      * @brief Get thermal voltage RT/F at given temperature.
      */
     static double thermalVoltage(double temperature) {
+        electrochem_detail::requirePositive(temperature, "Temperature");
         return constants::GAS_CONSTANT * temperature / constants::FARADAY;
+    }
+
+    /** @brief Mobility magnitude evaluated at a requested absolute temperature. */
+    double mobilityAt(double temperature) const {
+        return std::abs(static_cast<double>(valence)) * diffusivity / thermalVoltage(temperature);
     }
 };
 
@@ -109,7 +220,9 @@ struct IonSpecies {
 // =============================================================================
 
 namespace ions {
-// Diffusion coefficients at 37°C (310K) in aqueous solution [m²/s]
+// Representative aqueous infinite-dilution diffusivities [m²/s]. These
+// convenience values are approximate; quantitative studies should provide a
+// coefficient measured or corrected at the model temperature.
 inline IonSpecies sodium() {
     return IonSpecies("Na+", +1, 1.33e-9);
 }
@@ -173,7 +286,10 @@ public:
      * @param Ex Electric field in x-direction [V/m] (negative of potential gradient)
      * @param Ey Electric field in y-direction [V/m]
      */
-    UniformField(double Ex, double Ey = 0.0) : Ex_(Ex), Ey_(Ey) {}
+    UniformField(double Ex, double Ey = 0.0) : Ex_(Ex), Ey_(Ey) {
+        electrochem_detail::requireFinite(Ex, "Electric field Ex");
+        electrochem_detail::requireFinite(Ey, "Electric field Ey");
+    }
 
     double operator()(double x, double y, double /*t*/) const override {
         return -Ex_ * x - Ey_ * y;
@@ -201,7 +317,13 @@ public:
      * @param direction 0=x, 1=y
      */
     ACField(double amplitude, double frequency, int direction = 0)
-        : amplitude_(amplitude), omega_(2.0 * M_PI * frequency), dir_(direction) {}
+        : amplitude_(amplitude), omega_(2.0 * M_PI * frequency), dir_(direction) {
+        electrochem_detail::requireFinite(amplitude, "AC field amplitude");
+        electrochem_detail::requireNonnegative(frequency, "AC field frequency");
+        if (direction != 0 && direction != 1) {
+            throw std::invalid_argument("AC field direction must be 0 (x) or 1 (y)");
+        }
+    }
 
     double operator()(double x, double y, double t) const override {
         double coord = (dir_ == 0) ? x : y;
@@ -232,13 +354,22 @@ public:
      * @brief Create custom potential with analytical gradients.
      */
     CustomPotential(PotentialFunc phi, PotentialFunc grad_x, PotentialFunc grad_y)
-        : phi_(std::move(phi)), grad_x_(std::move(grad_x)), grad_y_(std::move(grad_y)) {}
+        : phi_(std::move(phi)), grad_x_(std::move(grad_x)), grad_y_(std::move(grad_y)) {
+        if (!phi_ || !grad_x_ || !grad_y_) {
+            throw std::invalid_argument("Potential and analytical gradient functions are required");
+        }
+    }
 
     /**
      * @brief Create custom potential with numerical gradient.
      */
     explicit CustomPotential(PotentialFunc phi, double eps = 1e-8)
-        : phi_(std::move(phi)), eps_(eps), use_numerical_grad_(true) {}
+        : phi_(std::move(phi)), eps_(eps), use_numerical_grad_(true) {
+        if (!phi_) {
+            throw std::invalid_argument("Potential function is required");
+        }
+        electrochem_detail::requirePositive(eps, "Numerical-gradient spacing");
+    }
 
     double operator()(double x, double y, double t) const override { return phi_(x, y, t); }
 
@@ -276,10 +407,10 @@ private:
  * Expanding the electromigration term:
  *   ∇·(c ∇φ) = ∇c · ∇φ + c ∇²φ
  *
- * Using finite differences:
- *   dc/dt = D ∇²c + (zFD/RT) [∇c · ∇φ + c ∇²φ]
- *
- * The electromigration is discretized using upwind differencing for stability.
+ * The conservative molar flux N = -D(grad(c) + z*c*grad(phi)/V_T) is
+ * discretized with exponentially fitted Scharfetter-Gummel face fluxes. This
+ * preserves a discrete Boltzmann equilibrium exactly and remains robust when
+ * electrical drift dominates ordinary diffusion.
  */
 class NernstPlanckSolver {
 public:
@@ -291,7 +422,8 @@ public:
      */
     NernstPlanckSolver(const StructuredMesh& mesh, const IonSpecies& ion,
                        double temperature = 310.0)
-        : mesh_(mesh), ion_(ion), temperature_(temperature), iterator_(mesh), stencil_ops_(mesh) {
+        : mesh_(mesh), ion_(ion) {
+        electrochem_detail::requirePositive(temperature, "Temperature");
         solution_.resize(mesh.numNodes(), 0.0);
         scratch_.resize(mesh.numNodes(), 0.0);
         potential_.resize(mesh.numNodes(), 0.0);
@@ -300,9 +432,9 @@ public:
         Vt_ = IonSpecies::thermalVoltage(temperature);
         zeta_ = static_cast<double>(ion_.valence) / Vt_;  // z*F/(R*T)
 
-        // Default boundary conditions
+        // An isolated domain is the least surprising and conservative default.
         for (int i = 0; i < 4; ++i) {
-            boundary_conditions_[i] = BoundaryCondition::Dirichlet(0.0);
+            boundary_conditions_[i] = BoundaryCondition::Neumann(0.0);
         }
     }
 
@@ -317,6 +449,7 @@ public:
         if (values.size() != solution_.size()) {
             throw std::invalid_argument("Initial condition size mismatch");
         }
+        electrochem_detail::validateConcentrationField(values, "Initial condition");
         solution_ = values;
     }
 
@@ -327,6 +460,7 @@ public:
         if (phi.size() != potential_.size()) {
             throw std::invalid_argument("Potential field size mismatch");
         }
+        electrochem_detail::validatePotentialField(phi);
         potential_ = phi;
         use_potential_function_ = false;
     }
@@ -335,6 +469,9 @@ public:
      * @brief Set electric potential from analytical function.
      */
     void setPotentialField(std::shared_ptr<PotentialField> field) {
+        if (!field) {
+            throw std::invalid_argument("Potential field cannot be null");
+        }
         potential_func_ = std::move(field);
         use_potential_function_ = true;
         updatePotentialFromFunction(0.0);
@@ -353,7 +490,9 @@ public:
      * @brief Set Dirichlet (fixed concentration) boundary.
      */
     void setDirichletBoundary(Boundary boundary, double value) {
-        boundary_conditions_[to_index(boundary)] = BoundaryCondition::Dirichlet(value);
+        electrochem_detail::requireNonnegative(value, "Boundary concentration");
+        const int index = electrochem_detail::checkedBoundaryIndex(boundary, mesh_.is1D());
+        boundary_conditions_[index] = BoundaryCondition::Dirichlet(value);
     }
 
     void setDirichletBoundary(int boundary_id, double value) {
@@ -361,10 +500,16 @@ public:
     }
 
     /**
-     * @brief Set Neumann (flux) boundary.
+     * @brief Set prescribed outward total molar flux boundary.
+     *
+     * The value is N dot n [mol/(m^2 s)], where
+     * N = -D(grad(c) + z*c*grad(phi)/V_T). Positive values leave the domain.
+     * This is intentionally a physical flux, not merely dc/dn.
      */
     void setNeumannBoundary(Boundary boundary, double flux) {
-        boundary_conditions_[to_index(boundary)] = BoundaryCondition::Neumann(flux);
+        electrochem_detail::requireFinite(flux, "Boundary molar flux");
+        const int index = electrochem_detail::checkedBoundaryIndex(boundary, mesh_.is1D());
+        boundary_conditions_[index] = BoundaryCondition::Neumann(flux);
     }
 
     void setNeumannBoundary(int boundary_id, double flux) {
@@ -379,32 +524,30 @@ public:
      * @brief Run simulation for specified time steps.
      */
     void solve(double dt, int num_steps) {
-        if (dt <= 0.0 || num_steps <= 0) {
+        if (!std::isfinite(dt) || dt <= 0.0 || num_steps <= 0) {
             throw std::invalid_argument("Time step and steps must be positive");
         }
 
-        if (!checkStability(dt)) {
-            throw std::runtime_error(
-                "Time step too large for Nernst-Planck stability. "
-                "Consider the electromigration CFL condition.");
-        }
-
         for (int step = 0; step < num_steps; ++step) {
-            // Update potential if time-varying
             if (use_potential_function_) {
                 updatePotentialFromFunction(time_);
             }
+            applyDirichletBoundaryValues(solution_);
 
-            // Compute updates for interior nodes
-            iterator_.forEachInterior(
-                [this, dt](int idx, int i, int j) { computeNodeUpdate(idx, i, j, dt); });
+            if (!checkStability(dt)) {
+                throw std::runtime_error(
+                    "Time step is too large for the positivity-preserving "
+                    "Scharfetter-Gummel Nernst-Planck update");
+            }
+            computeStep(dt);
 
-            // Apply boundary conditions
-            applyBoundaryConditions(scratch_);
-
-            // Swap buffers
             solution_.swap(scratch_);
             time_ += dt;
+        }
+
+        // Keep the exposed potential synchronized with the exposed final time.
+        if (use_potential_function_) {
+            updatePotentialFromFunction(time_);
         }
     }
 
@@ -438,79 +581,99 @@ public:
      */
     double thermalVoltage() const { return Vt_; }
 
+    /** @brief Mobility magnitude at this solver's temperature [m²/(V·s)]. */
+    double electricalMobility() const {
+        return std::abs(static_cast<double>(ion_.valence)) * ion_.diffusivity / Vt_;
+    }
+
     /**
      * @brief Check stability condition for given dt.
      *
-     * For Nernst-Planck, we need to consider both diffusion and drift:
-     *   dt < min(dx²/(2D), dx/(|z|μ|E|))
+     * The bound is assembled from the actual outgoing coefficients of the
+     * exponentially fitted face-flux operator, including half control volumes
+     * at non-Dirichlet boundaries.
      */
     bool checkStability(double dt) const {
-        double dx = mesh_.dx();
-        double D = ion_.diffusivity;
-
-        // Diffusion stability
-        double dt_diff = dx * dx / (2.0 * D);
-        if (!mesh_.is1D()) {
-            double dy = mesh_.dy();
-            dt_diff = 1.0 / (2.0 * D * (1.0 / (dx * dx) + 1.0 / (dy * dy)));
-        }
-
-        if (dt > dt_diff)
+        if (!std::isfinite(dt) || dt <= 0.0) {
             return false;
-
-        // Electromigration stability (estimate max E field)
-        double max_grad_phi = estimateMaxGradPhi();
-        if (max_grad_phi > 1e-12) {
-            double velocity = ion_.mobility * max_grad_phi;
-            double dt_drift = dx / velocity;
-            if (dt > dt_drift)
-                return false;
         }
+        const double max_rate = maximumDepletionRate();
+        return std::isfinite(max_rate) && (max_rate == 0.0 || dt * max_rate <= 1.0 + 1.0e-14);
+    }
 
-        return true;
+    /**
+     * @brief Largest explicit step allowed by the fitted transport operator.
+     *
+     * This is the positivity bound for the homogeneous face-flux operator.
+     * A prescribed outward boundary flux is a concentration-independent sink
+     * and can require a smaller step; solve() rejects a step if that sink
+     * would make a concentration negative.
+     */
+    double maximumStableTimeStep() const {
+        const double max_rate = maximumDepletionRate();
+        if (!std::isfinite(max_rate)) {
+            throw std::runtime_error(
+                "Unable to determine a finite electrochemical stability bound");
+        }
+        return max_rate == 0.0 ? std::numeric_limits<double>::infinity() : 1.0 / max_rate;
+    }
+
+    /** @brief Conservative explicit step suggestion as a fraction of the bound. */
+    double recommendedTimeStep(double safety = 0.9) const {
+        electrochem_detail::requirePositive(safety, "Stability safety factor");
+        if (safety > 1.0) {
+            throw std::invalid_argument("Stability safety factor must not exceed one");
+        }
+        return safety * maximumStableTimeStep();
     }
 
     /**
      * @brief Compute the total ionic current density [A/m²].
      *
-     * J = -D ∇c - (zFD/RT) c ∇φ
-     *   = F * z * (-D ∇c - D*z*c*∇φ/Vt)
+     * N = -D (∇c + z*c*∇φ/Vt) is molar flux [mol/(m² s)], and
+     * i = z*F*N is electrical current density [A/m²].
      */
     std::vector<double> computeCurrentDensity() const {
         std::vector<double> current(mesh_.numNodes() * 2, 0.0);  // Jx, Jy pairs
-        double D = ion_.diffusivity;
-        double z = ion_.valence;
-        double dx = mesh_.dx();
-        double dy = mesh_.is1D() ? 1.0 : mesh_.dy();
+        const double charge_per_mole = constants::FARADAY * static_cast<double>(ion_.valence);
+        const int nx = mesh_.nx();
+        const int ny = mesh_.is1D() ? 0 : mesh_.ny();
+        const int stride = nx + 1;
 
-        iterator_.forEachInterior([&](int idx, int i, int j) {
-            // Concentration gradients
-            double dc_dx, dc_dy;
-            int nx = mesh_.nx();
-            int stride = mesh_.is1D() ? 1 : (nx + 1);
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                const int idx = j * stride + i;
+                double flux_x = 0.0;
+                if (i == 0) {
+                    const auto& bc = boundary_conditions_[to_index(Boundary::Left)];
+                    flux_x = bc.type == BoundaryType::NEUMANN ? -bc.value : xFaceFlux(idx, idx + 1);
+                } else if (i == nx) {
+                    const auto& bc = boundary_conditions_[to_index(Boundary::Right)];
+                    flux_x = bc.type == BoundaryType::NEUMANN ? bc.value : xFaceFlux(idx - 1, idx);
+                } else {
+                    flux_x = 0.5 * (xFaceFlux(idx - 1, idx) + xFaceFlux(idx, idx + 1));
+                }
 
-            dc_dx = (solution_[idx + 1] - solution_[idx - 1]) / (2.0 * dx);
-            if (!mesh_.is1D()) {
-                dc_dy = (solution_[idx + stride] - solution_[idx - stride]) / (2.0 * dy);
-            } else {
-                dc_dy = 0.0;
+                double flux_y = 0.0;
+                if (!mesh_.is1D()) {
+                    if (j == 0) {
+                        const auto& bc = boundary_conditions_[to_index(Boundary::Bottom)];
+                        flux_y = bc.type == BoundaryType::NEUMANN ? -bc.value
+                                                                  : yFaceFlux(idx, idx + stride);
+                    } else if (j == ny) {
+                        const auto& bc = boundary_conditions_[to_index(Boundary::Top)];
+                        flux_y = bc.type == BoundaryType::NEUMANN ? bc.value
+                                                                  : yFaceFlux(idx - stride, idx);
+                    } else {
+                        flux_y =
+                            0.5 * (yFaceFlux(idx - stride, idx) + yFaceFlux(idx, idx + stride));
+                    }
+                }
+
+                current[2 * idx] = charge_per_mole * flux_x;
+                current[2 * idx + 1] = charge_per_mole * flux_y;
             }
-
-            // Potential gradients
-            double dphi_dx = (potential_[idx + 1] - potential_[idx - 1]) / (2.0 * dx);
-            double dphi_dy =
-                mesh_.is1D() ? 0.0
-                             : (potential_[idx + stride] - potential_[idx - stride]) / (2.0 * dy);
-
-            double c = solution_[idx];
-
-            // Current density: J = F*z*(-D*∇c - D*z*c*∇φ/Vt)
-            double Jx = constants::FARADAY * z * (-D * dc_dx - D * zeta_ * c * dphi_dx);
-            double Jy = constants::FARADAY * z * (-D * dc_dy - D * zeta_ * c * dphi_dy);
-
-            current[2 * idx] = Jx;
-            current[2 * idx + 1] = Jy;
-        });
+        }
 
         return current;
     }
@@ -518,7 +681,6 @@ public:
 private:
     const StructuredMesh& mesh_;
     IonSpecies ion_;
-    double temperature_;
     double Vt_;    // Thermal voltage RT/F
     double zeta_;  // z*F/(R*T) = z/Vt
     double time_ = 0.0;
@@ -531,78 +693,156 @@ private:
     bool use_potential_function_ = false;
 
     std::array<BoundaryCondition, 4> boundary_conditions_;
-    MeshIterator iterator_;
-    StencilOps stencil_ops_;
 
-    /**
-     * @brief Compute the Nernst-Planck update for a single node.
-     */
-    void computeNodeUpdate(int idx, int i, int j, double dt) {
-        double D = ion_.diffusivity;
-        double dx = mesh_.dx();
-        double dy = mesh_.is1D() ? 1.0 : mesh_.dy();
-        int nx = mesh_.nx();
-        int stride = mesh_.is1D() ? 1 : (nx + 1);
+    double xFaceFlux(int left_idx, int right_idx) const {
+        return electrochem_detail::faceMolarFlux(ion_.diffusivity, zeta_, solution_[left_idx],
+                                                 solution_[right_idx], potential_[left_idx],
+                                                 potential_[right_idx], mesh_.dx());
+    }
 
-        double c = solution_[idx];
+    double yFaceFlux(int bottom_idx, int top_idx) const {
+        return electrochem_detail::faceMolarFlux(ion_.diffusivity, zeta_, solution_[bottom_idx],
+                                                 solution_[top_idx], potential_[bottom_idx],
+                                                 potential_[top_idx], mesh_.dy());
+    }
 
-        // 1. Diffusion term: D ∇²c
-        double laplacian_c;
-        if (mesh_.is1D()) {
-            laplacian_c = (solution_[idx - 1] - 2.0 * c + solution_[idx + 1]) / (dx * dx);
-        } else {
-            double d2c_dx2 = (solution_[idx - 1] - 2.0 * c + solution_[idx + 1]) / (dx * dx);
-            double d2c_dy2 =
-                (solution_[idx - stride] - 2.0 * c + solution_[idx + stride]) / (dy * dy);
-            laplacian_c = d2c_dx2 + d2c_dy2;
+    std::optional<double> dirichletValueAt(int i, int j) const {
+        std::optional<double> value;
+        auto consider = [&](Boundary boundary) {
+            const auto& bc = boundary_conditions_[to_index(boundary)];
+            if (bc.type != BoundaryType::DIRICHLET) {
+                return;
+            }
+            if (value && std::abs(*value - bc.value) >
+                             64.0 * std::numeric_limits<double>::epsilon() *
+                                 std::max({1.0, std::abs(*value), std::abs(bc.value)})) {
+                throw std::invalid_argument(
+                    "Conflicting Dirichlet concentrations meet at a corner");
+            }
+            value = bc.value;
+        };
+
+        if (i == 0)
+            consider(Boundary::Left);
+        if (i == mesh_.nx())
+            consider(Boundary::Right);
+        if (!mesh_.is1D()) {
+            if (j == 0)
+                consider(Boundary::Bottom);
+            if (j == mesh_.ny())
+                consider(Boundary::Top);
         }
-        double diffusion = D * laplacian_c;
+        return value;
+    }
 
-        // 2. Electromigration term: ∇·(c * mobility * ∇φ)
-        //    = mobility * (∇c · ∇φ + c * ∇²φ)
-        //    Using upwind differencing for stability
+    void applyDirichletBoundaryValues(std::vector<double>& field) const {
+        const int nx = mesh_.nx();
+        const int ny = mesh_.is1D() ? 0 : mesh_.ny();
+        const int stride = nx + 1;
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                if (const auto value = dirichletValueAt(i, j)) {
+                    field[j * stride + i] = *value;
+                }
+            }
+        }
+    }
 
-        // Potential gradients (central difference)
-        double dphi_dx = (potential_[idx + 1] - potential_[idx - 1]) / (2.0 * dx);
-        double dphi_dy =
-            mesh_.is1D() ? 0.0 : (potential_[idx + stride] - potential_[idx - stride]) / (2.0 * dy);
+    double nodeDepletionRate(int i, int j) const {
+        if (dirichletValueAt(i, j)) {
+            return 0.0;
+        }
+        const int nx = mesh_.nx();
+        const int ny = mesh_.is1D() ? 0 : mesh_.ny();
+        const int stride = nx + 1;
+        const int idx = j * stride + i;
+        const double width_x = mesh_.dx() * ((i == 0 || i == nx) ? 0.5 : 1.0);
+        double rate = 0.0;
 
-        // Electric field components (E = -∇φ)
-        double Ex = -dphi_dx;
-        double Ey = -dphi_dy;
-
-        // Drift velocity: v = z*D/Vt * E = zeta * D * E
-        double vx = zeta_ * D * Ex;
-        double vy = zeta_ * D * Ey;
-
-        // Upwind scheme for advection: ∇·(c*v) ≈ v · ∇c (if ∇·v = 0)
-        double dc_dx, dc_dy;
-
-        // Upwind in x
-        if (vx > 0) {
-            dc_dx = (c - solution_[idx - 1]) / dx;  // backward difference
-        } else {
-            dc_dx = (solution_[idx + 1] - c) / dx;  // forward difference
+        if (i > 0) {
+            const auto coeff = electrochem_detail::faceFluxCoefficients(
+                ion_.diffusivity, zeta_, potential_[idx - 1], potential_[idx], mesh_.dx());
+            rate += coeff.from_right / width_x;
+        }
+        if (i < nx) {
+            const auto coeff = electrochem_detail::faceFluxCoefficients(
+                ion_.diffusivity, zeta_, potential_[idx], potential_[idx + 1], mesh_.dx());
+            rate += coeff.from_left / width_x;
         }
 
-        // Upwind in y
-        if (mesh_.is1D()) {
-            dc_dy = 0.0;
-        } else if (vy > 0) {
-            dc_dy = (c - solution_[idx - stride]) / dy;
-        } else {
-            dc_dy = (solution_[idx + stride] - c) / dy;
+        if (!mesh_.is1D()) {
+            const double width_y = mesh_.dy() * ((j == 0 || j == ny) ? 0.5 : 1.0);
+            if (j > 0) {
+                const auto coeff = electrochem_detail::faceFluxCoefficients(
+                    ion_.diffusivity, zeta_, potential_[idx - stride], potential_[idx], mesh_.dy());
+                rate += coeff.from_right / width_y;
+            }
+            if (j < ny) {
+                const auto coeff = electrochem_detail::faceFluxCoefficients(
+                    ion_.diffusivity, zeta_, potential_[idx], potential_[idx + stride], mesh_.dy());
+                rate += coeff.from_left / width_y;
+            }
         }
+        return rate;
+    }
 
-        // Advection term (negative because we're computing dc/dt, not flux divergence)
-        double advection = -(vx * dc_dx + vy * dc_dy);
+    double maximumDepletionRate() const {
+        double maximum = 0.0;
+        const int ny = mesh_.is1D() ? 0 : mesh_.ny();
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i <= mesh_.nx(); ++i) {
+                maximum = std::max(maximum, nodeDepletionRate(i, j));
+            }
+        }
+        return maximum;
+    }
 
-        // 3. Full update
-        scratch_[idx] = c + dt * (diffusion + advection);
+    void computeStep(double dt) {
+        const int nx = mesh_.nx();
+        const int ny = mesh_.is1D() ? 0 : mesh_.ny();
+        const int stride = nx + 1;
 
-        // Enforce positivity (concentration can't be negative)
-        if (scratch_[idx] < 0.0) {
-            scratch_[idx] = 0.0;
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                const int idx = j * stride + i;
+                if (const auto value = dirichletValueAt(i, j)) {
+                    scratch_[idx] = *value;
+                    continue;
+                }
+
+                const double width_x = mesh_.dx() * ((i == 0 || i == nx) ? 0.5 : 1.0);
+                const double flux_left = i == 0
+                                             ? -boundary_conditions_[to_index(Boundary::Left)].value
+                                             : xFaceFlux(idx - 1, idx);
+                const double flux_right =
+                    i == nx ? boundary_conditions_[to_index(Boundary::Right)].value
+                            : xFaceFlux(idx, idx + 1);
+                double derivative = -(flux_right - flux_left) / width_x;
+
+                if (!mesh_.is1D()) {
+                    const double width_y = mesh_.dy() * ((j == 0 || j == ny) ? 0.5 : 1.0);
+                    const double flux_bottom =
+                        j == 0 ? -boundary_conditions_[to_index(Boundary::Bottom)].value
+                               : yFaceFlux(idx - stride, idx);
+                    const double flux_top =
+                        j == ny ? boundary_conditions_[to_index(Boundary::Top)].value
+                                : yFaceFlux(idx, idx + stride);
+                    derivative -= (flux_top - flux_bottom) / width_y;
+                }
+
+                double candidate = solution_[idx] + dt * derivative;
+                const double tolerance = 128.0 * std::numeric_limits<double>::epsilon() *
+                                         std::max({1.0, solution_[idx], dt * std::abs(derivative)});
+                if (!std::isfinite(candidate)) {
+                    throw std::runtime_error("Nernst-Planck update produced a non-finite value");
+                }
+                if (candidate < -tolerance) {
+                    throw std::runtime_error(
+                        "Nernst-Planck update produced a negative concentration; reduce the "
+                        "time step or prescribed outward boundary flux");
+                }
+                scratch_[idx] = std::max(0.0, candidate);
+            }
         }
     }
 
@@ -625,101 +865,7 @@ private:
                 }
             }
         }
-    }
-
-    /**
-     * @brief Estimate maximum potential gradient for stability check.
-     */
-    double estimateMaxGradPhi() const {
-        double max_grad = 0.0;
-        double dx = mesh_.dx();
-
-        for (size_t i = 1; i < potential_.size(); ++i) {
-            double grad = std::abs(potential_[i] - potential_[i - 1]) / dx;
-            max_grad = std::max(max_grad, grad);
-        }
-
-        return max_grad;
-    }
-
-    /**
-     * @brief Apply boundary conditions.
-     */
-    void applyBoundaryConditions(std::vector<double>& u) {
-        if (mesh_.is1D()) {
-            applyBoundaryConditions1D(u);
-        } else {
-            applyBoundaryConditions2D(u);
-        }
-    }
-
-    void applyBoundaryConditions1D(std::vector<double>& u) {
-        const int nx = mesh_.nx();
-        const double dx = mesh_.dx();
-
-        const auto& left_bc = boundary_conditions_[to_index(Boundary::Left)];
-        const auto& right_bc = boundary_conditions_[to_index(Boundary::Right)];
-
-        if (left_bc.type == BoundaryType::DIRICHLET) {
-            u[0] = left_bc.value;
-        } else {
-            u[0] = u[1] - left_bc.value * dx;
-        }
-
-        if (right_bc.type == BoundaryType::DIRICHLET) {
-            u[nx] = right_bc.value;
-        } else {
-            u[nx] = u[nx - 1] + right_bc.value * dx;
-        }
-    }
-
-    void applyBoundaryConditions2D(std::vector<double>& u) {
-        const int nx = mesh_.nx();
-        const int ny = mesh_.ny();
-        const int stride = nx + 1;
-        const double dx = mesh_.dx();
-        const double dy = mesh_.dy();
-
-        const auto& left = boundary_conditions_[to_index(Boundary::Left)];
-        const auto& right = boundary_conditions_[to_index(Boundary::Right)];
-        const auto& bottom = boundary_conditions_[to_index(Boundary::Bottom)];
-        const auto& top = boundary_conditions_[to_index(Boundary::Top)];
-
-        // Left/Right boundaries
-        for (int j = 0; j <= ny; ++j) {
-            int left_idx = j * stride;
-            int right_idx = j * stride + nx;
-
-            if (left.type == BoundaryType::DIRICHLET) {
-                u[left_idx] = left.value;
-            } else {
-                u[left_idx] = u[left_idx + 1] - left.value * dx;
-            }
-
-            if (right.type == BoundaryType::DIRICHLET) {
-                u[right_idx] = right.value;
-            } else {
-                u[right_idx] = u[right_idx - 1] + right.value * dx;
-            }
-        }
-
-        // Bottom/Top boundaries
-        for (int i = 0; i <= nx; ++i) {
-            int bottom_idx = i;
-            int top_idx = ny * stride + i;
-
-            if (bottom.type == BoundaryType::DIRICHLET) {
-                u[bottom_idx] = bottom.value;
-            } else {
-                u[bottom_idx] = u[bottom_idx + stride] - bottom.value * dy;
-            }
-
-            if (top.type == BoundaryType::DIRICHLET) {
-                u[top_idx] = top.value;
-            } else {
-                u[top_idx] = u[top_idx - stride] + top.value * dy;
-            }
-        }
+        electrochem_detail::validatePotentialField(potential_);
     }
 };
 
@@ -728,17 +874,15 @@ private:
 // =============================================================================
 
 /**
- * @brief Solver for multiple ion species with electroneutrality or Poisson coupling.
+ * @brief Solver for multiple independent ion species in a prescribed potential.
  *
- * This solver handles N ion species simultaneously, with options for:
- * 1. Prescribed potential field (decoupled)
- * 2. Electroneutrality constraint (local charge balance)
- * 3. Full Poisson-Nernst-Planck coupling (future)
+ * This solver advances N species against one prescribed potential field. It
+ * does not solve Poisson's equation and does not enforce electroneutrality.
+ * Requests for those unsupported couplings are rejected explicitly.
  *
  * The governing equations are:
  *   ∂c_i/∂t = D_i ∇²c_i + (z_i F D_i / RT) ∇·(c_i ∇φ)
  *
- * With electroneutrality: Σ z_i c_i = 0 (or fixed background charge)
  */
 class MultiIonSolver {
 public:
@@ -750,11 +894,8 @@ public:
      */
     MultiIonSolver(const StructuredMesh& mesh, std::vector<IonSpecies> ions,
                    double temperature = 310.0)
-        : mesh_(mesh),
-          ions_(std::move(ions)),
-          temperature_(temperature),
-          num_species_(ions_.size()),
-          iterator_(mesh) {
+        : mesh_(mesh), ions_(std::move(ions)), num_species_(ions_.size()) {
+        electrochem_detail::requirePositive(temperature, "Temperature");
         if (num_species_ == 0) {
             throw std::invalid_argument("Must provide at least one ion species");
         }
@@ -772,11 +913,11 @@ public:
 
         Vt_ = IonSpecies::thermalVoltage(temperature);
 
-        // Default: all Dirichlet zero
+        // Default to an isolated, zero-total-flux domain for every species.
         boundary_conditions_.resize(num_species_);
         for (size_t s = 0; s < num_species_; ++s) {
             for (int b = 0; b < 4; ++b) {
-                boundary_conditions_[s][b] = BoundaryCondition::Dirichlet(0.0);
+                boundary_conditions_[s][b] = BoundaryCondition::Neumann(0.0);
             }
         }
     }
@@ -791,6 +932,7 @@ public:
         if (values.size() != concentrations_[species].size()) {
             throw std::invalid_argument("Initial condition size mismatch");
         }
+        electrochem_detail::validateConcentrationField(values, "Initial condition");
         concentrations_[species] = values;
     }
 
@@ -801,7 +943,9 @@ public:
         if (species >= num_species_) {
             throw std::out_of_range("Species index out of range");
         }
-        boundary_conditions_[species][to_index(boundary)] = BoundaryCondition::Dirichlet(value);
+        electrochem_detail::requireNonnegative(value, "Boundary concentration");
+        const int index = electrochem_detail::checkedBoundaryIndex(boundary, mesh_.is1D());
+        boundary_conditions_[species][index] = BoundaryCondition::Dirichlet(value);
     }
 
     void setDirichletBoundary(size_t species, int boundary_id, double value) {
@@ -815,7 +959,9 @@ public:
         if (species >= num_species_) {
             throw std::out_of_range("Species index out of range");
         }
-        boundary_conditions_[species][to_index(boundary)] = BoundaryCondition::Neumann(flux);
+        electrochem_detail::requireFinite(flux, "Boundary molar flux");
+        const int index = electrochem_detail::checkedBoundaryIndex(boundary, mesh_.is1D());
+        boundary_conditions_[species][index] = BoundaryCondition::Neumann(flux);
     }
 
     /**
@@ -825,6 +971,7 @@ public:
         if (phi.size() != potential_.size()) {
             throw std::invalid_argument("Potential size mismatch");
         }
+        electrochem_detail::validatePotentialField(phi);
         potential_ = phi;
         use_potential_func_ = false;
     }
@@ -839,21 +986,26 @@ public:
     }
 
     /**
-     * @brief Enable electroneutrality mode.
+     * @brief Reject the not-yet-implemented electroneutrality coupling.
      *
-     * When enabled, the solver computes the potential that satisfies
-     * local electroneutrality: Σ z_i c_i = background_charge
+     * Passing false with zero background charge is accepted for
+     * backward-compatible explicit opt-out. Any requested coupling data is
+     * rejected because it would otherwise be ignored.
      */
     void setElectroneutralityMode(bool enable, double background_charge = 0.0) {
-        electroneutrality_mode_ = enable;
-        background_charge_ = background_charge;
+        electrochem_detail::requireFinite(background_charge, "Background charge concentration");
+        if (enable || background_charge != 0.0) {
+            throw std::logic_error(
+                "Electroneutrality coupling is not implemented. Supply a prescribed potential "
+                "field, or use a validated Poisson-Nernst-Planck solver.");
+        }
     }
 
     /**
      * @brief Run simulation.
      */
     void solve(double dt, int num_steps) {
-        if (dt <= 0.0 || num_steps <= 0) {
+        if (!std::isfinite(dt) || dt <= 0.0 || num_steps <= 0) {
             throw std::invalid_argument("Time step and steps must be positive");
         }
 
@@ -862,19 +1014,69 @@ public:
                 updatePotentialFromFunction(time_);
             }
 
-            // Update all species
             for (size_t s = 0; s < num_species_; ++s) {
+                applyDirichletBoundaryValues(s, concentrations_[s]);
+                if (!checkSpeciesStability(s, dt)) {
+                    throw std::runtime_error(
+                        "Time step is too large for the positivity-preserving multi-ion "
+                        "Nernst-Planck update");
+                }
                 updateSpecies(s, dt);
             }
 
-            // Apply boundary conditions and swap
             for (size_t s = 0; s < num_species_; ++s) {
-                applyBoundaryConditions(s, scratch_[s]);
                 concentrations_[s].swap(scratch_[s]);
             }
 
             time_ += dt;
         }
+        if (use_potential_func_) {
+            updatePotentialFromFunction(time_);
+        }
+    }
+
+    /** @brief Test the explicit positivity bound for every species. */
+    bool checkStability(double dt) const {
+        if (!std::isfinite(dt) || dt <= 0.0) {
+            return false;
+        }
+        for (size_t species = 0; species < num_species_; ++species) {
+            if (!checkSpeciesStability(species, dt)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * @brief Largest explicit operator-limited step over all species.
+     *
+     * As in the single-species solver, a prescribed outward flux can impose a
+     * smaller concentration-dependent limit that solve() checks at runtime.
+     */
+    double maximumStableTimeStep() const {
+        double maximum_rate = 0.0;
+        const int ny = mesh_.is1D() ? 0 : mesh_.ny();
+        for (size_t species = 0; species < num_species_; ++species) {
+            for (int j = 0; j <= ny; ++j) {
+                for (int i = 0; i <= mesh_.nx(); ++i) {
+                    maximum_rate = std::max(maximum_rate, nodeDepletionRate(species, i, j));
+                }
+            }
+        }
+        if (!std::isfinite(maximum_rate)) {
+            throw std::runtime_error("Unable to determine a finite multi-ion stability bound");
+        }
+        return maximum_rate == 0.0 ? std::numeric_limits<double>::infinity() : 1.0 / maximum_rate;
+    }
+
+    /** @brief Conservative explicit step suggestion as a fraction of the bound. */
+    double recommendedTimeStep(double safety = 0.9) const {
+        electrochem_detail::requirePositive(safety, "Stability safety factor");
+        if (safety > 1.0) {
+            throw std::invalid_argument("Stability safety factor must not exceed one");
+        }
+        return safety * maximumStableTimeStep();
     }
 
     /**
@@ -905,7 +1107,21 @@ public:
     /**
      * @brief Get ion species.
      */
-    const IonSpecies& ion(size_t i) const { return ions_[i]; }
+    const IonSpecies& ion(size_t i) const {
+        if (i >= num_species_) {
+            throw std::out_of_range("Species index out of range");
+        }
+        return ions_[i];
+    }
+
+    /** @brief Mobility magnitude for a species at this solver's temperature. */
+    double electricalMobility(size_t species) const {
+        if (species >= num_species_) {
+            throw std::out_of_range("Species index out of range");
+        }
+        return std::abs(static_cast<double>(ions_[species].valence)) * ions_[species].diffusivity /
+               Vt_;
+    }
 
     /**
      * @brief Compute total charge density at each node.
@@ -933,7 +1149,6 @@ public:
 private:
     const StructuredMesh& mesh_;
     std::vector<IonSpecies> ions_;
-    double temperature_;
     size_t num_species_;
     double Vt_;
     double time_ = 0.0;
@@ -944,55 +1159,160 @@ private:
 
     std::shared_ptr<PotentialField> potential_func_;
     bool use_potential_func_ = false;
-    bool electroneutrality_mode_ = false;
-    double background_charge_ = 0.0;
-
     std::vector<std::array<BoundaryCondition, 4>> boundary_conditions_;
-    MeshIterator iterator_;
+
+    double speciesZeta(size_t species) const {
+        return static_cast<double>(ions_[species].valence) / Vt_;
+    }
+
+    double xFaceFlux(size_t species, int left_idx, int right_idx) const {
+        const auto& c = concentrations_[species];
+        return electrochem_detail::faceMolarFlux(ions_[species].diffusivity, speciesZeta(species),
+                                                 c[left_idx], c[right_idx], potential_[left_idx],
+                                                 potential_[right_idx], mesh_.dx());
+    }
+
+    double yFaceFlux(size_t species, int bottom_idx, int top_idx) const {
+        const auto& c = concentrations_[species];
+        return electrochem_detail::faceMolarFlux(ions_[species].diffusivity, speciesZeta(species),
+                                                 c[bottom_idx], c[top_idx], potential_[bottom_idx],
+                                                 potential_[top_idx], mesh_.dy());
+    }
+
+    std::optional<double> dirichletValueAt(size_t species, int i, int j) const {
+        const auto& bcs = boundary_conditions_[species];
+        std::optional<double> value;
+        auto consider = [&](Boundary boundary) {
+            const auto& bc = bcs[to_index(boundary)];
+            if (bc.type != BoundaryType::DIRICHLET) {
+                return;
+            }
+            if (value && std::abs(*value - bc.value) >
+                             64.0 * std::numeric_limits<double>::epsilon() *
+                                 std::max({1.0, std::abs(*value), std::abs(bc.value)})) {
+                throw std::invalid_argument(
+                    "Conflicting Dirichlet concentrations meet at a corner");
+            }
+            value = bc.value;
+        };
+        if (i == 0)
+            consider(Boundary::Left);
+        if (i == mesh_.nx())
+            consider(Boundary::Right);
+        if (!mesh_.is1D()) {
+            if (j == 0)
+                consider(Boundary::Bottom);
+            if (j == mesh_.ny())
+                consider(Boundary::Top);
+        }
+        return value;
+    }
+
+    void applyDirichletBoundaryValues(size_t species, std::vector<double>& field) const {
+        const int nx = mesh_.nx();
+        const int ny = mesh_.is1D() ? 0 : mesh_.ny();
+        const int stride = nx + 1;
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                if (const auto value = dirichletValueAt(species, i, j)) {
+                    field[j * stride + i] = *value;
+                }
+            }
+        }
+    }
+
+    double nodeDepletionRate(size_t species, int i, int j) const {
+        if (dirichletValueAt(species, i, j)) {
+            return 0.0;
+        }
+        const int nx = mesh_.nx();
+        const int ny = mesh_.is1D() ? 0 : mesh_.ny();
+        const int stride = nx + 1;
+        const int idx = j * stride + i;
+        const double D = ions_[species].diffusivity;
+        const double zeta = speciesZeta(species);
+        const double width_x = mesh_.dx() * ((i == 0 || i == nx) ? 0.5 : 1.0);
+        double rate = 0.0;
+        if (i > 0) {
+            const auto coeff = electrochem_detail::faceFluxCoefficients(
+                D, zeta, potential_[idx - 1], potential_[idx], mesh_.dx());
+            rate += coeff.from_right / width_x;
+        }
+        if (i < nx) {
+            const auto coeff = electrochem_detail::faceFluxCoefficients(
+                D, zeta, potential_[idx], potential_[idx + 1], mesh_.dx());
+            rate += coeff.from_left / width_x;
+        }
+        if (!mesh_.is1D()) {
+            const double width_y = mesh_.dy() * ((j == 0 || j == ny) ? 0.5 : 1.0);
+            if (j > 0) {
+                const auto coeff = electrochem_detail::faceFluxCoefficients(
+                    D, zeta, potential_[idx - stride], potential_[idx], mesh_.dy());
+                rate += coeff.from_right / width_y;
+            }
+            if (j < ny) {
+                const auto coeff = electrochem_detail::faceFluxCoefficients(
+                    D, zeta, potential_[idx], potential_[idx + stride], mesh_.dy());
+                rate += coeff.from_left / width_y;
+            }
+        }
+        return rate;
+    }
+
+    bool checkSpeciesStability(size_t species, double dt) const {
+        double maximum = 0.0;
+        const int ny = mesh_.is1D() ? 0 : mesh_.ny();
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i <= mesh_.nx(); ++i) {
+                maximum = std::max(maximum, nodeDepletionRate(species, i, j));
+            }
+        }
+        return std::isfinite(maximum) && (maximum == 0.0 || dt * maximum <= 1.0 + 1.0e-14);
+    }
 
     void updateSpecies(size_t species, double dt) {
-        const auto& ion = ions_[species];
-        double D = ion.diffusivity;
-        double zeta = static_cast<double>(ion.valence) / Vt_;
-        double dx = mesh_.dx();
-        double dy = mesh_.is1D() ? 1.0 : mesh_.dy();
-        int nx = mesh_.nx();
-        int stride = mesh_.is1D() ? 1 : (nx + 1);
-
+        const int nx = mesh_.nx();
+        const int ny = mesh_.is1D() ? 0 : mesh_.ny();
+        const int stride = nx + 1;
+        const auto& bcs = boundary_conditions_[species];
         const auto& c = concentrations_[species];
-        auto& s = scratch_[species];
+        auto& next = scratch_[species];
 
-        iterator_.forEachInterior([&](int idx, int i, int j) {
-            double c_center = c[idx];
-
-            // Diffusion
-            double laplacian_c;
-            if (mesh_.is1D()) {
-                laplacian_c = (c[idx - 1] - 2.0 * c_center + c[idx + 1]) / (dx * dx);
-            } else {
-                double d2c_dx2 = (c[idx - 1] - 2.0 * c_center + c[idx + 1]) / (dx * dx);
-                double d2c_dy2 = (c[idx - stride] - 2.0 * c_center + c[idx + stride]) / (dy * dy);
-                laplacian_c = d2c_dx2 + d2c_dy2;
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                const int idx = j * stride + i;
+                if (const auto value = dirichletValueAt(species, i, j)) {
+                    next[idx] = *value;
+                    continue;
+                }
+                const double width_x = mesh_.dx() * ((i == 0 || i == nx) ? 0.5 : 1.0);
+                const double flux_left = i == 0 ? -bcs[to_index(Boundary::Left)].value
+                                                : xFaceFlux(species, idx - 1, idx);
+                const double flux_right = i == nx ? bcs[to_index(Boundary::Right)].value
+                                                  : xFaceFlux(species, idx, idx + 1);
+                double derivative = -(flux_right - flux_left) / width_x;
+                if (!mesh_.is1D()) {
+                    const double width_y = mesh_.dy() * ((j == 0 || j == ny) ? 0.5 : 1.0);
+                    const double flux_bottom = j == 0 ? -bcs[to_index(Boundary::Bottom)].value
+                                                      : yFaceFlux(species, idx - stride, idx);
+                    const double flux_top = j == ny ? bcs[to_index(Boundary::Top)].value
+                                                    : yFaceFlux(species, idx, idx + stride);
+                    derivative -= (flux_top - flux_bottom) / width_y;
+                }
+                double candidate = c[idx] + dt * derivative;
+                const double tolerance = 128.0 * std::numeric_limits<double>::epsilon() *
+                                         std::max({1.0, c[idx], dt * std::abs(derivative)});
+                if (!std::isfinite(candidate)) {
+                    throw std::runtime_error("Multi-ion update produced a non-finite value");
+                }
+                if (candidate < -tolerance) {
+                    throw std::runtime_error(
+                        "Multi-ion update produced a negative concentration; reduce the time "
+                        "step or prescribed outward boundary flux");
+                }
+                next[idx] = std::max(0.0, candidate);
             }
-
-            // Electromigration
-            double dphi_dx = (potential_[idx + 1] - potential_[idx - 1]) / (2.0 * dx);
-            double dphi_dy =
-                mesh_.is1D() ? 0.0
-                             : (potential_[idx + stride] - potential_[idx - stride]) / (2.0 * dy);
-
-            double vx = -zeta * D * dphi_dx;
-            double vy = -zeta * D * dphi_dy;
-
-            double dc_dx = (vx > 0) ? (c_center - c[idx - 1]) / dx : (c[idx + 1] - c_center) / dx;
-            double dc_dy = mesh_.is1D() ? 0.0
-                                        : ((vy > 0) ? (c_center - c[idx - stride]) / dy
-                                                    : (c[idx + stride] - c_center) / dy);
-
-            double advection = -(vx * dc_dx + vy * dc_dy);
-
-            s[idx] = std::max(0.0, c_center + dt * (D * laplacian_c + advection));
-        });
+        }
     }
 
     void updatePotentialFromFunction(double t) {
@@ -1011,77 +1331,7 @@ private:
                 }
             }
         }
-    }
-
-    void applyBoundaryConditions(size_t species, std::vector<double>& u) {
-        if (mesh_.is1D()) {
-            applyBC1D(species, u);
-        } else {
-            applyBC2D(species, u);
-        }
-    }
-
-    void applyBC1D(size_t species, std::vector<double>& u) {
-        const int nx = mesh_.nx();
-        const double dx = mesh_.dx();
-        const auto& bcs = boundary_conditions_[species];
-
-        if (bcs[to_index(Boundary::Left)].type == BoundaryType::DIRICHLET) {
-            u[0] = bcs[to_index(Boundary::Left)].value;
-        } else {
-            u[0] = u[1] - bcs[to_index(Boundary::Left)].value * dx;
-        }
-
-        if (bcs[to_index(Boundary::Right)].type == BoundaryType::DIRICHLET) {
-            u[nx] = bcs[to_index(Boundary::Right)].value;
-        } else {
-            u[nx] = u[nx - 1] + bcs[to_index(Boundary::Right)].value * dx;
-        }
-    }
-
-    void applyBC2D(size_t species, std::vector<double>& u) {
-        const int nx = mesh_.nx();
-        const int ny = mesh_.ny();
-        const int stride = nx + 1;
-        const double dx = mesh_.dx();
-        const double dy = mesh_.dy();
-        const auto& bcs = boundary_conditions_[species];
-
-        // Left/Right
-        for (int j = 0; j <= ny; ++j) {
-            int left = j * stride;
-            int right = j * stride + nx;
-
-            if (bcs[to_index(Boundary::Left)].type == BoundaryType::DIRICHLET) {
-                u[left] = bcs[to_index(Boundary::Left)].value;
-            } else {
-                u[left] = u[left + 1] - bcs[to_index(Boundary::Left)].value * dx;
-            }
-
-            if (bcs[to_index(Boundary::Right)].type == BoundaryType::DIRICHLET) {
-                u[right] = bcs[to_index(Boundary::Right)].value;
-            } else {
-                u[right] = u[right - 1] + bcs[to_index(Boundary::Right)].value * dx;
-            }
-        }
-
-        // Bottom/Top
-        for (int i = 0; i <= nx; ++i) {
-            int bottom = i;
-            int top = ny * stride + i;
-
-            if (bcs[to_index(Boundary::Bottom)].type == BoundaryType::DIRICHLET) {
-                u[bottom] = bcs[to_index(Boundary::Bottom)].value;
-            } else {
-                u[bottom] = u[bottom + stride] - bcs[to_index(Boundary::Bottom)].value * dy;
-            }
-
-            if (bcs[to_index(Boundary::Top)].type == BoundaryType::DIRICHLET) {
-                u[top] = bcs[to_index(Boundary::Top)].value;
-            } else {
-                u[top] = u[top - stride] + bcs[to_index(Boundary::Top)].value * dy;
-            }
-        }
+        electrochem_detail::validatePotentialField(potential_);
     }
 };
 
@@ -1106,10 +1356,10 @@ inline double nernstPotential(int z, double c_in, double c_out, double temperatu
     if (z == 0) {
         throw std::invalid_argument("Ion valence cannot be zero");
     }
-    if (c_in <= 0 || c_out <= 0) {
-        throw std::invalid_argument("Concentrations must be positive");
-    }
-    double Vt = constants::GAS_CONSTANT * temperature / constants::FARADAY;
+    electrochem_detail::requirePositive(c_in, "Intracellular concentration");
+    electrochem_detail::requirePositive(c_out, "Extracellular concentration");
+    electrochem_detail::requirePositive(temperature, "Temperature");
+    const double Vt = constants::GAS_CONSTANT * temperature / constants::FARADAY;
     return (Vt / z) * std::log(c_out / c_in);
 }
 
@@ -1135,13 +1385,27 @@ inline double nernstPotential(int z, double c_in, double c_out, double temperatu
 inline double ghkVoltage(double P_K, double K_in, double K_out, double P_Na, double Na_in,
                          double Na_out, double P_Cl, double Cl_in, double Cl_out,
                          double temperature = 310.0) {
-    double Vt = constants::GAS_CONSTANT * temperature / constants::FARADAY;
+    electrochem_detail::requireNonnegative(P_K, "Potassium permeability");
+    electrochem_detail::requireNonnegative(P_Na, "Sodium permeability");
+    electrochem_detail::requireNonnegative(P_Cl, "Chloride permeability");
+    electrochem_detail::requireNonnegative(K_in, "Intracellular potassium concentration");
+    electrochem_detail::requireNonnegative(K_out, "Extracellular potassium concentration");
+    electrochem_detail::requireNonnegative(Na_in, "Intracellular sodium concentration");
+    electrochem_detail::requireNonnegative(Na_out, "Extracellular sodium concentration");
+    electrochem_detail::requireNonnegative(Cl_in, "Intracellular chloride concentration");
+    electrochem_detail::requireNonnegative(Cl_out, "Extracellular chloride concentration");
+    electrochem_detail::requirePositive(temperature, "Temperature");
+    if (P_K == 0.0 && P_Na == 0.0 && P_Cl == 0.0) {
+        throw std::invalid_argument("At least one permeability must be positive");
+    }
+    const double Vt = constants::GAS_CONSTANT * temperature / constants::FARADAY;
 
     double numerator = P_K * K_out + P_Na * Na_out + P_Cl * Cl_in;
     double denominator = P_K * K_in + P_Na * Na_in + P_Cl * Cl_out;
 
-    if (denominator <= 0 || numerator <= 0) {
-        throw std::invalid_argument("Invalid concentration or permeability values");
+    if (denominator <= 0.0 || numerator <= 0.0) {
+        throw std::invalid_argument(
+            "Permeability-weighted concentrations must be positive on both sides");
     }
 
     return Vt * std::log(numerator / denominator);

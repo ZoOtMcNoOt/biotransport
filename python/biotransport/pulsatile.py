@@ -1,42 +1,107 @@
+"""Validated time-dependent scalar boundary-value generators.
+
+The classes in this module generate scalar values as functions of time.  A
+name such as :class:`ArterialPressureBC` describes the units and shape of the
+generated signal; it does *not* turn a scalar diffusion problem into a fluid,
+pressure-propagation, or compliant-vessel model.
+
+``solve_pulsatile`` is retained as a compatibility reference implementation
+for exactly one equation on a uniform one-dimensional mesh::
+
+    du/dt = D d2u/dx2
+
+It supports uniform ``D``, time-varying Dirichlet data on the left and/or
+right boundary, and static Dirichlet or outward-derivative Neumann data on
+the remaining boundary.  It rejects advection, reactions, variable
+diffusivity, Robin data, and multidimensional meshes instead of silently
+dropping those terms.  The loop is Python/NumPy, not the native C++ transport
+solver, and emits a runtime warning when used.
+
+Times are seconds for the waveform classes whose rates are expressed in Hz,
+beats/minute, or breaths/minute.  For the reference diffusion solve, spatial
+units and field units may be chosen freely but must be mutually consistent:
+``D`` must then have units ``length**2 / second``.
 """
-Pulsatile Boundary Conditions for Time-Varying Transport Simulations.
 
-Provides time-dependent boundary condition functions for simulating
-physiological processes with cardiac cycle variations:
-
-- Arterial pressure waveforms
-- Venous flow patterns
-- Drug infusion profiles
-- Periodic heating/cooling
-
-Example:
-    >>> import biotransport as bt
-    >>>
-    >>> # Create a sinusoidal BC
-    >>> bc = bt.SinusoidalBC(mean=100, amplitude=20, frequency=1.0)  # 1 Hz
-    >>> print(bc(t=0.5))  # Value at t=0.5s
-    >>>
-    >>> # Use arterial pressure waveform
-    >>> arterial = bt.ArterialPressureBC(systolic=120, diastolic=80, heart_rate=72)
-    >>> print(arterial(t=0.25))
-    >>>
-    >>> # Solve with pulsatile BC
-    >>> result = bt.solve_pulsatile(
-    ...     problem,
-    ...     t_end=5.0,
-    ...     pulsatile_bcs={bt.Boundary.Left: arterial}
-    ... )
-"""
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Optional
+from fractions import Fraction
+import math
+from numbers import Integral
+from typing import Any, Optional, cast
+import warnings
+
 import numpy as np
 
 from ._core import (
     Boundary,
+    BoundaryType,
     TransportProblem,
 )
+
+
+_REFERENCE_SOLVER_WARNING = (
+    "solve_pulsatile is a legacy Python/NumPy reference solver for uniform 1D "
+    "scalar diffusion only. Time-varying values are strong Dirichlet scalar "
+    "data; waveform names do not add pressure, flow, or vascular physics."
+)
+
+
+def _finite(value: float, name: str) -> float:
+    """Return ``value`` as a finite float or raise a focused error."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{name} must be a real scalar") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _positive(value: float, name: str) -> float:
+    result = _finite(value, name)
+    if result <= 0.0:
+        raise ValueError(f"{name} must be positive")
+    return result
+
+
+def _nonnegative(value: float, name: str) -> float:
+    result = _finite(value, name)
+    if result < 0.0:
+        raise ValueError(f"{name} must be non-negative")
+    return result
+
+
+def _fraction(value: float, name: str, *, closed: bool = False) -> float:
+    result = _finite(value, name)
+    valid = 0.0 <= result <= 1.0 if closed else 0.0 < result < 1.0
+    if not valid:
+        interval = "[0, 1]" if closed else "(0, 1)"
+        raise ValueError(f"{name} must lie in {interval}")
+    return result
+
+
+def _time(value: float) -> float:
+    return _finite(value, "time")
+
+
+def _waveform_value(value: float, name: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{name} must return a real scalar") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{name} returned a non-finite value")
+    return result
+
+
+def _smoothstep(value: float) -> float:
+    """Cubic interpolation from zero to one with zero endpoint slopes."""
+    clipped = min(1.0, max(0.0, value))
+    return clipped * clipped * (3.0 - 2.0 * clipped)
 
 
 # =============================================================================
@@ -89,10 +154,16 @@ class ConstantBC(PulsatileBC):
 
     value: float = 0.0
 
+    def __post_init__(self) -> None:
+        self.value = _finite(self.value, "value")
+
     def __call__(self, t: float) -> float:
+        _time(t)
+        self.value = _finite(self.value, "value")
         return self.value
 
     def period(self) -> float:
+        self.value = _finite(self.value, "value")
         return 0.0  # Non-periodic
 
 
@@ -114,13 +185,26 @@ class SinusoidalBC(PulsatileBC):
     frequency: float = 1.0  # Hz
     phase: float = 0.0  # radians
 
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        self.mean = _finite(self.mean, "mean")
+        self.amplitude = _finite(self.amplitude, "amplitude")
+        self.frequency = _positive(self.frequency, "frequency")
+        self.phase = _finite(self.phase, "phase")
+
     def __call__(self, t: float) -> float:
-        return self.mean + self.amplitude * np.sin(
-            2.0 * np.pi * self.frequency * t + self.phase
+        self._validate()
+        time = _time(t)
+        return float(
+            self.mean
+            + self.amplitude * np.sin(2.0 * np.pi * self.frequency * time + self.phase)
         )
 
     def period(self) -> float:
-        return 1.0 / self.frequency if self.frequency > 0 else 0.0
+        self._validate()
+        return 1.0 / self.frequency
 
 
 @dataclass
@@ -143,16 +227,27 @@ class RampBC(PulsatileBC):
     t_start: float = 0.0
     duration: float = 1.0
 
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        self.start_value = _finite(self.start_value, "start_value")
+        self.end_value = _finite(self.end_value, "end_value")
+        self.t_start = _finite(self.t_start, "t_start")
+        self.duration = _positive(self.duration, "duration")
+
     def __call__(self, t: float) -> float:
-        if t <= self.t_start:
+        self._validate()
+        time = _time(t)
+        if time <= self.t_start:
             return self.start_value
-        elif t >= self.t_start + self.duration:
+        if time >= self.t_start + self.duration:
             return self.end_value
-        else:
-            frac = (t - self.t_start) / self.duration
-            return self.start_value + frac * (self.end_value - self.start_value)
+        fraction = (time - self.t_start) / self.duration
+        return self.start_value + fraction * (self.end_value - self.start_value)
 
     def period(self) -> float:
+        self._validate()
         return 0.0  # Non-periodic
 
 
@@ -172,10 +267,17 @@ class StepBC(PulsatileBC):
     value_after: float = 1.0
     t_step: float = 0.0
 
+    def __post_init__(self) -> None:
+        self.value_before = _finite(self.value_before, "value_before")
+        self.value_after = _finite(self.value_after, "value_after")
+        self.t_step = _finite(self.t_step, "t_step")
+
     def __call__(self, t: float) -> float:
-        return self.value_before if t < self.t_step else self.value_after
+        self.__post_init__()
+        return self.value_before if _time(t) < self.t_step else self.value_after
 
     def period(self) -> float:
+        self.__post_init__()
         return 0.0  # Non-periodic
 
 
@@ -199,14 +301,28 @@ class SquareWaveBC(PulsatileBC):
     duty_cycle: float = 0.5
     phase: float = 0.0
 
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        self.high_value = _finite(self.high_value, "high_value")
+        self.low_value = _finite(self.low_value, "low_value")
+        self.frequency = _positive(self.frequency, "frequency")
+        self.duty_cycle = _fraction(self.duty_cycle, "duty_cycle", closed=True)
+        self.phase = _finite(self.phase, "phase")
+
     def __call__(self, t: float) -> float:
-        T = 1.0 / self.frequency if self.frequency > 0 else 1.0
-        t_shifted = t + self.phase * T
-        t_in_cycle = t_shifted % T
-        return self.high_value if t_in_cycle < self.duty_cycle * T else self.low_value
+        self._validate()
+        period = 1.0 / self.frequency
+        shifted_time = _time(t) + self.phase * period
+        time_in_cycle = shifted_time % period
+        if time_in_cycle < self.duty_cycle * period:
+            return self.high_value
+        return self.low_value
 
     def period(self) -> float:
-        return 1.0 / self.frequency if self.frequency > 0 else 0.0
+        self._validate()
+        return 1.0 / self.frequency
 
 
 @dataclass
@@ -221,10 +337,17 @@ class CustomBC(PulsatileBC):
     func: Callable[[float], float] = field(default=lambda t: 0.0)
     T: float = 0.0  # Period (0 = non-periodic)
 
+    def __post_init__(self) -> None:
+        if not callable(self.func):
+            raise TypeError("func must be callable")
+        self.T = _nonnegative(self.T, "T")
+
     def __call__(self, t: float) -> float:
-        return self.func(t)
+        self.__post_init__()
+        return _waveform_value(self.func(_time(t)), "CustomBC.func")
 
     def period(self) -> float:
+        self.__post_init__()
         return self.T
 
 
@@ -235,11 +358,13 @@ class CustomBC(PulsatileBC):
 
 @dataclass
 class ArterialPressureBC(PulsatileBC):
-    """Arterial pressure waveform boundary condition.
+    """Synthetic periodic arterial-pressure protocol in mmHg.
 
-    Generates a realistic arterial pressure waveform with systolic peak,
-    dicrotic notch, and diastolic decay. Based on a sum of harmonics
-    approximation to the cardiac pressure waveform.
+    This is an uncalibrated, smooth template with one systolic peak, a
+    late-systolic shoulder, and a diastolic return.  ``systolic`` and
+    ``diastolic`` are the exact maximum and minimum of the template.  It is
+    useful for deterministic examples, not as a patient-specific waveform or
+    a validated hemodynamics model.
 
     Attributes:
         systolic: Systolic (peak) pressure in mmHg (default 120)
@@ -253,35 +378,51 @@ class ArterialPressureBC(PulsatileBC):
     heart_rate: float = 72.0  # bpm
     systolic_fraction: float = 0.35
 
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        self.systolic = _positive(self.systolic, "systolic")
+        self.diastolic = _nonnegative(self.diastolic, "diastolic")
+        if self.systolic <= self.diastolic:
+            raise ValueError("systolic must be greater than diastolic")
+        self.heart_rate = _positive(self.heart_rate, "heart_rate")
+        self.systolic_fraction = _fraction(self.systolic_fraction, "systolic_fraction")
+
     def __call__(self, t: float) -> float:
-        # Period of cardiac cycle
-        T = 60.0 / self.heart_rate
-        omega = 2.0 * np.pi / T
+        self._validate()
+        period = 60.0 / self.heart_rate
+        phase = (_time(t) % period) / period
+        peak_phase = 0.35 * self.systolic_fraction
+        shoulder = 0.12
 
-        # Pressure range
-        pp = self.systolic - self.diastolic  # Pulse pressure
-        mean = (self.systolic + 2.0 * self.diastolic) / 3.0  # MAP approximation
+        if phase <= peak_phase:
+            normalized = _smoothstep(phase / peak_phase)
+        elif phase <= self.systolic_fraction:
+            descent = _smoothstep(
+                (phase - peak_phase) / (self.systolic_fraction - peak_phase)
+            )
+            normalized = 1.0 - (1.0 - shoulder) * descent
+        else:
+            diastolic_phase = (phase - self.systolic_fraction) / (
+                1.0 - self.systolic_fraction
+            )
+            normalized = shoulder * (1.0 - _smoothstep(diastolic_phase))
 
-        # Fourier-based arterial waveform (4 harmonics)
-        # Coefficients approximate a typical arterial pressure shape
-        p = mean
-        p += 0.50 * pp * np.sin(omega * t)  # Fundamental
-        p += 0.25 * pp * np.sin(2.0 * omega * t - 0.2)  # 2nd harmonic
-        p += 0.10 * pp * np.sin(3.0 * omega * t - 0.4)  # 3rd harmonic
-        p += 0.05 * pp * np.sin(4.0 * omega * t - 0.6)  # 4th harmonic
-
-        return p
+        return self.diastolic + (self.systolic - self.diastolic) * normalized
 
     def period(self) -> float:
+        self._validate()
         return 60.0 / self.heart_rate
 
 
 @dataclass
 class VenousPressureBC(PulsatileBC):
-    """Venous pressure waveform boundary condition.
+    """Synthetic central-venous-pressure protocol in mmHg.
 
-    Generates a venous pressure waveform with characteristic A, C, and V waves.
-    Lower amplitude and slower variations than arterial pressure.
+    Three Gaussian components label the conventional A, C, and V features.
+    Their timing and widths are fixed illustrative values; this is not a
+    calibrated venous-return or right-heart model.
 
     Attributes:
         mean_pressure: Mean venous pressure in mmHg (default 8)
@@ -293,9 +434,18 @@ class VenousPressureBC(PulsatileBC):
     amplitude: float = 4.0  # mmHg
     heart_rate: float = 72.0  # bpm
 
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        self.mean_pressure = _finite(self.mean_pressure, "mean_pressure")
+        self.amplitude = _nonnegative(self.amplitude, "amplitude")
+        self.heart_rate = _positive(self.heart_rate, "heart_rate")
+
     def __call__(self, t: float) -> float:
-        T = 60.0 / self.heart_rate
-        phase = (t % T) / T
+        self._validate()
+        period = 60.0 / self.heart_rate
+        phase = (_time(t) % period) / period
 
         # Venous waveform: A wave (atrial contraction), C wave (AV valve bulging),
         # V wave (atrial filling)
@@ -307,22 +457,30 @@ class VenousPressureBC(PulsatileBC):
         c_wave = 0.2 * self.amplitude * np.exp(-((phase - 0.15) ** 2) / 0.002)
         v_wave = 0.4 * self.amplitude * np.exp(-((phase - 0.5) ** 2) / 0.02)
 
-        return p + a_wave + c_wave + v_wave
+        return float(p + a_wave + c_wave + v_wave)
 
     def period(self) -> float:
+        self._validate()
         return 60.0 / self.heart_rate
 
 
 @dataclass
 class CardiacOutputBC(PulsatileBC):
-    """Pulsatile flow/velocity boundary condition for cardiac output.
+    """Synthetic periodic volumetric-flow protocol in L/min.
 
-    Generates a flow waveform representing blood flow rate through
-    a vessel during the cardiac cycle.
+    The ejection segment is a squared-sine lobe with the specified
+    ``peak_flow``.  The non-ejection segment is a smaller squared-sine return
+    lobe whose amplitude is selected so the cycle average is exactly
+    ``mean_flow``.  The value and its first derivative are continuous between
+    cycles and segments.
+    Parameter combinations that cannot satisfy both that average and the peak
+    bound are rejected.  The generated scalar is neither a velocity profile
+    nor a Navier--Stokes inlet condition until a caller performs the required
+    geometry- and model-specific conversion.
 
     Attributes:
-        mean_flow: Mean flow rate (units depend on application)
-        peak_flow: Peak systolic flow rate
+        mean_flow: Cycle-mean volumetric flow rate in L/min
+        peak_flow: Peak ejection flow rate in L/min
         heart_rate: Heart rate in beats per minute (default 72)
         ejection_fraction: Fraction of cycle during ejection (default 0.3)
     """
@@ -332,36 +490,70 @@ class CardiacOutputBC(PulsatileBC):
     heart_rate: float = 72.0  # bpm
     ejection_fraction: float = 0.3
 
-    def __call__(self, t: float) -> float:
-        T = 60.0 / self.heart_rate
-        phase = (t % T) / T
+    def __post_init__(self) -> None:
+        self._validate()
 
-        # Ejection phase: half-sine wave
-        if phase < self.ejection_fraction:
-            # Normalize phase within ejection period
-            ejection_phase = phase / self.ejection_fraction
-            return self.peak_flow * np.sin(np.pi * ejection_phase)
-        else:
-            # Diastole: low/zero flow (or slight retrograde)
-            diastole_phase = (phase - self.ejection_fraction) / (
-                1.0 - self.ejection_fraction
+    def _validate(self) -> None:
+        self.mean_flow = _nonnegative(self.mean_flow, "mean_flow")
+        self.peak_flow = _positive(self.peak_flow, "peak_flow")
+        self.heart_rate = _positive(self.heart_rate, "heart_rate")
+        self.ejection_fraction = _fraction(self.ejection_fraction, "ejection_fraction")
+        tail_amplitude = self._tail_amplitude()
+        tolerance = 64.0 * np.finfo(float).eps * self.peak_flow
+        if tail_amplitude < -tolerance or tail_amplitude > self.peak_flow + tolerance:
+            lower, upper = self._admissible_mean_range()
+            raise ValueError(
+                "mean_flow is incompatible with peak_flow and ejection_fraction "
+                "for this non-negative peak-bounded template; expected "
+                f"{lower:.12g} <= mean_flow <= {upper:.12g}"
             )
-            # Exponential decay to near-zero
-            return self.mean_flow * 0.1 * np.exp(-3.0 * diastole_phase)
+
+    def _tail_integral(self) -> float:
+        return 0.5 * (1.0 - self.ejection_fraction)
+
+    def _ejection_mean(self) -> float:
+        return 0.5 * self.peak_flow * self.ejection_fraction
+
+    def _tail_amplitude(self) -> float:
+        return (self.mean_flow - self._ejection_mean()) / self._tail_integral()
+
+    def _admissible_mean_range(self) -> tuple[float, float]:
+        ejection_mean = self._ejection_mean()
+        return ejection_mean, ejection_mean + self.peak_flow * self._tail_integral()
+
+    def __call__(self, t: float) -> float:
+        self._validate()
+        period = 60.0 / self.heart_rate
+        phase = (_time(t) % period) / period
+
+        # Squared-sine lobes are C1 at the segment and cycle boundaries.
+        if phase < self.ejection_fraction:
+            ejection_phase = phase / self.ejection_fraction
+            return float(self.peak_flow * np.sin(np.pi * ejection_phase) ** 2)
+
+        diastole_phase = (phase - self.ejection_fraction) / (
+            1.0 - self.ejection_fraction
+        )
+        return float(
+            max(0.0, self._tail_amplitude()) * np.sin(np.pi * diastole_phase) ** 2
+        )
 
     def period(self) -> float:
+        self._validate()
         return 60.0 / self.heart_rate
 
 
 @dataclass
 class RespiratoryBC(PulsatileBC):
-    """Respiratory modulation boundary condition.
+    """Synthetic respiratory-cycle scalar protocol.
 
-    Generates a respiratory waveform for modeling ventilation effects
-    on pressure or concentration.
+    ``mean`` is retained for compatibility but is the baseline/minimum, not
+    the mathematical cycle mean.  ``amplitude`` is the excursion above that
+    baseline.  The scalar has no pressure, volume, or concentration meaning
+    until the caller assigns units and couples it to an appropriate model.
 
     Attributes:
-        mean: Mean value
+        mean: Baseline/minimum value (legacy parameter name)
         amplitude: Breath amplitude
         respiratory_rate: Breaths per minute (default 12)
         inspiration_fraction: Fraction of cycle during inspiration (default 0.4)
@@ -372,31 +564,49 @@ class RespiratoryBC(PulsatileBC):
     respiratory_rate: float = 12.0  # breaths per minute
     inspiration_fraction: float = 0.4
 
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        self.mean = _finite(self.mean, "mean")
+        self.amplitude = _nonnegative(self.amplitude, "amplitude")
+        self.respiratory_rate = _positive(self.respiratory_rate, "respiratory_rate")
+        self.inspiration_fraction = _fraction(
+            self.inspiration_fraction, "inspiration_fraction"
+        )
+
     def __call__(self, t: float) -> float:
-        T = 60.0 / self.respiratory_rate
-        phase = (t % T) / T
+        self._validate()
+        period = 60.0 / self.respiratory_rate
+        phase = (_time(t) % period) / period
 
         if phase < self.inspiration_fraction:
             # Inspiration: rise
             insp_phase = phase / self.inspiration_fraction
-            return self.mean + self.amplitude * (0.5 - 0.5 * np.cos(np.pi * insp_phase))
-        else:
-            # Expiration: fall
-            exp_phase = (phase - self.inspiration_fraction) / (
-                1.0 - self.inspiration_fraction
+            return float(
+                self.mean + self.amplitude * (0.5 - 0.5 * np.cos(np.pi * insp_phase))
             )
-            return self.mean + self.amplitude * (0.5 + 0.5 * np.cos(np.pi * exp_phase))
+
+        # Expiration: fall
+        exp_phase = (phase - self.inspiration_fraction) / (
+            1.0 - self.inspiration_fraction
+        )
+        return float(
+            self.mean + self.amplitude * (0.5 + 0.5 * np.cos(np.pi * exp_phase))
+        )
 
     def period(self) -> float:
+        self._validate()
         return 60.0 / self.respiratory_rate
 
 
 @dataclass
 class DrugInfusionBC(PulsatileBC):
-    """Drug infusion boundary condition with bolus and maintenance phases.
+    """Prescribed concentration protocol with bolus and maintenance phases.
 
-    Models IV drug administration with optional loading dose followed
-    by continuous infusion.
+    This returns a boundary concentration, not a dose or infusion rate.  It
+    does not include a compartmental pharmacokinetic model, clearance, or
+    vascular/tissue exchange.
 
     Attributes:
         bolus_concentration: Concentration during bolus phase
@@ -410,17 +620,32 @@ class DrugInfusionBC(PulsatileBC):
     bolus_duration: float = 60.0  # seconds
     infusion_start: float = 0.0
 
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        self.bolus_concentration = _nonnegative(
+            self.bolus_concentration, "bolus_concentration"
+        )
+        self.maintenance_concentration = _nonnegative(
+            self.maintenance_concentration, "maintenance_concentration"
+        )
+        self.bolus_duration = _positive(self.bolus_duration, "bolus_duration")
+        self.infusion_start = _finite(self.infusion_start, "infusion_start")
+
     def __call__(self, t: float) -> float:
-        if t < self.infusion_start:
+        self._validate()
+        time = _time(t)
+        if time < self.infusion_start:
             return 0.0
-        elif t < self.infusion_start + self.bolus_duration:
+        if time < self.infusion_start + self.bolus_duration:
             # Bolus phase with slight exponential decay
-            phase = (t - self.infusion_start) / self.bolus_duration
-            return self.bolus_concentration * np.exp(-0.5 * phase)
-        else:
-            return self.maintenance_concentration
+            phase = (time - self.infusion_start) / self.bolus_duration
+            return float(self.bolus_concentration * np.exp(-0.5 * phase))
+        return self.maintenance_concentration
 
     def period(self) -> float:
+        self._validate()
         return 0.0  # Non-periodic
 
 
@@ -433,35 +658,89 @@ class DrugInfusionBC(PulsatileBC):
 class CompositeBC(PulsatileBC):
     """Composite boundary condition from multiple waveforms.
 
-    Combines multiple PulsatileBC objects using addition or multiplication.
+    Combines multiple :class:`PulsatileBC` objects using addition or
+    multiplication.  ``period()`` returns a common declared period when one
+    can be established from the components.  It returns zero for an empty or
+    genuinely non-periodic composition.
 
     Attributes:
         components: List of PulsatileBC objects to combine
         operation: 'add' or 'multiply' (default 'add')
     """
 
-    components: list = field(default_factory=list)
+    components: list[PulsatileBC] = field(default_factory=list)
     operation: str = "add"
 
+    def __post_init__(self) -> None:
+        self._validate()
+
+    def _validate(self) -> None:
+        if self.operation not in {"add", "multiply"}:
+            raise ValueError("operation must be 'add' or 'multiply'")
+        if not isinstance(self.components, list):
+            self.components = list(self.components)
+        if any(not isinstance(component, PulsatileBC) for component in self.components):
+            raise TypeError("every component must be a PulsatileBC")
+
     def __call__(self, t: float) -> float:
+        self._validate()
+        time = _time(t)
         if not self.components:
             return 0.0
 
         if self.operation == "multiply":
             result = 1.0
             for bc in self.components:
-                result *= bc(t)
-        else:  # add
+                result *= bc(time)
+        else:
             result = 0.0
             for bc in self.components:
-                result += bc(t)
+                result += bc(time)
 
-        return result
+        return _waveform_value(result, "CompositeBC")
 
     def period(self) -> float:
-        # Return LCM of periods or max period as approximation
-        periods = [bc.period() for bc in self.components if bc.period() > 0]
-        return max(periods) if periods else 0.0
+        self._validate()
+        if not self.components:
+            return 0.0
+
+        periods: list[float] = []
+        for component in self.components:
+            period = _nonnegative(component.period(), "component period")
+            if period == 0.0:
+                # A constant does not destroy another component's periodicity.
+                if isinstance(component, ConstantBC):
+                    continue
+                return 0.0
+            periods.append(period)
+
+        if not periods:
+            return 0.0
+
+        rational_periods = [
+            Fraction(period).limit_denominator(10_000) for period in periods
+        ]
+        numerator = 1
+        denominator = 0
+        for rational_period in rational_periods:
+            numerator = math.lcm(numerator, rational_period.numerator)
+            denominator = (
+                rational_period.denominator
+                if denominator == 0
+                else math.gcd(denominator, rational_period.denominator)
+            )
+        common_period = float(Fraction(numerator, denominator))
+
+        # Treat an enormous inferred repeat interval as no useful established period.
+        if not math.isfinite(common_period) or common_period > 1_000_000.0 * max(
+            periods
+        ):
+            return 0.0
+        for period in periods:
+            cycles = common_period / period
+            if not math.isclose(cycles, round(cycles), rel_tol=1e-10, abs_tol=1e-10):
+                return 0.0
+        return common_period
 
 
 # =============================================================================
@@ -471,138 +750,347 @@ class CompositeBC(PulsatileBC):
 
 @dataclass
 class PulsatileResult:
-    """Result from a pulsatile simulation.
+    """Result from the legacy one-dimensional diffusion reference solve.
 
     Attributes:
         solution: Final solution field
         time: Final simulation time
-        time_history: Array of time points if snapshots were saved
-        solution_history: List of solution snapshots
-        bc_history: Dict mapping boundary to list of BC values over time
-        stats: Solver statistics
+        time_history: Initial, requested, and final snapshot times
+        solution_history: Solution copies aligned with ``time_history``
+        bc_history: Dynamic Dirichlet values aligned with ``time_history``
+        stats: Numerical metadata, including the precise equation and CFL limit
     """
 
     solution: np.ndarray
     time: float
-    time_history: np.ndarray = field(default_factory=lambda: np.array([]))
-    solution_history: list = field(default_factory=list)
-    bc_history: dict = field(default_factory=dict)
-    stats: dict = field(default_factory=dict)
+    time_history: np.ndarray = field(
+        default_factory=lambda: np.array([], dtype=np.float64)
+    )
+    solution_history: list[np.ndarray] = field(default_factory=list)
+    bc_history: dict[Boundary, list[float]] = field(default_factory=dict)
+    stats: dict[str, object] = field(default_factory=dict)
+
+
+def _positive_integer(value: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral):
+        raise TypeError(f"{name} must be a positive integer")
+    result = int(value)
+    if result <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return result
+
+
+def _validated_dynamic_boundaries(
+    pulsatile_bcs: Mapping[Boundary, PulsatileBC],
+) -> dict[Boundary, PulsatileBC]:
+    if not isinstance(pulsatile_bcs, Mapping):
+        raise TypeError("pulsatile_bcs must be a mapping")
+
+    supported_sides = {Boundary.Left, Boundary.Right}
+    result: dict[Boundary, PulsatileBC] = {}
+    for side, waveform in pulsatile_bcs.items():
+        if side not in supported_sides:
+            raise ValueError(
+                "the 1D reference solver accepts only Boundary.Left and Boundary.Right"
+            )
+        if not isinstance(waveform, PulsatileBC):
+            raise TypeError(
+                "each time-varying boundary must be a PulsatileBC; wrap arbitrary "
+                "callables with CustomBC"
+            )
+        result[side] = waveform
+    return result
+
+
+def _validate_reference_problem(
+    problem: TransportProblem,
+    dynamic_boundaries: Mapping[Boundary, PulsatileBC],
+) -> tuple[Any, float, np.ndarray, tuple[Any, Any]]:
+    if not isinstance(problem, TransportProblem):
+        raise TypeError("problem must be a TransportProblem")
+
+    # The runtime bindings expose these accessors; their shared stub is updated
+    # by the integration owner, so keep this compatibility module independent
+    # of stub rollout order.
+    bound_problem = cast(Any, problem)
+    mesh = bound_problem.mesh()
+    if not mesh.is_1d():
+        raise ValueError("solve_pulsatile supports only a one-dimensional mesh")
+    if not bound_problem.has_uniform_diffusivity():
+        raise NotImplementedError(
+            "solve_pulsatile does not implement variable diffusivity; use the native "
+            "transport solver for static boundaries"
+        )
+    if bound_problem.has_advection():
+        raise NotImplementedError(
+            "solve_pulsatile solves diffusion only and will not discard configured advection"
+        )
+    if bound_problem.has_reaction():
+        raise NotImplementedError(
+            "solve_pulsatile solves diffusion only and will not discard configured reactions"
+        )
+
+    diffusivity = _nonnegative(bound_problem.diffusivity(), "problem diffusivity")
+    spacing = _positive(mesh.dx(), "mesh spacing")
+    del spacing
+
+    initial = np.asarray(bound_problem.initial(), dtype=np.float64)
+    if initial.ndim != 1 or initial.size != mesh.num_nodes():
+        raise ValueError(
+            "problem initial condition must contain one value per mesh node"
+        )
+    if not np.all(np.isfinite(initial)):
+        raise ValueError("problem initial condition must contain only finite values")
+    initial = np.array(initial, dtype=np.float64, copy=True)
+
+    boundaries = bound_problem.boundaries()
+    static_boundaries = (boundaries[0], boundaries[1])
+    for side, boundary in zip((Boundary.Left, Boundary.Right), static_boundaries):
+        if side in dynamic_boundaries:
+            continue
+        if boundary.type == BoundaryType.ROBIN:
+            raise NotImplementedError(
+                "solve_pulsatile does not implement Robin boundaries because their "
+                "explicit stability limit depends on the Robin coefficients"
+            )
+        if boundary.type not in {BoundaryType.DIRICHLET, BoundaryType.NEUMANN}:
+            raise ValueError("unsupported static boundary type")
+        _finite(boundary.value, f"static {side.name} boundary value")
+
+    return mesh, diffusivity, initial, static_boundaries
+
+
+def _evaluate_dynamic_boundaries(
+    dynamic_boundaries: Mapping[Boundary, PulsatileBC], time: float
+) -> dict[Boundary, float]:
+    return {
+        side: _waveform_value(waveform(time), f"{side.name} boundary waveform")
+        for side, waveform in dynamic_boundaries.items()
+    }
+
+
+def _impose_dirichlet_boundaries(
+    solution: np.ndarray,
+    static_boundaries: tuple[Any, Any],
+    dynamic_values: Mapping[Boundary, float],
+) -> None:
+    for index, side, boundary in (
+        (0, Boundary.Left, static_boundaries[0]),
+        (-1, Boundary.Right, static_boundaries[1]),
+    ):
+        if side in dynamic_values:
+            solution[index] = dynamic_values[side]
+        elif boundary.type == BoundaryType.DIRICHLET:
+            solution[index] = boundary.value
 
 
 def solve_pulsatile(
     problem: TransportProblem,
     t_end: float,
-    pulsatile_bcs: Dict[Boundary, PulsatileBC],
+    pulsatile_bcs: Mapping[Boundary, PulsatileBC],
     dt: Optional[float] = None,
     save_every: Optional[int] = None,
     callback: Optional[Callable[[float, np.ndarray], None]] = None,
+    *,
+    max_steps: int = 1_000_000,
 ) -> PulsatileResult:
-    """Solve a transport problem with time-varying boundary conditions.
+    """Run the legacy reference solver for uniform 1D scalar diffusion.
 
-    This function performs explicit time integration while updating
-    boundary conditions at each timestep according to the provided
-    pulsatile BC functions.
+    The discretization is second-order centered in space and forward Euler in
+    time.  Values in ``pulsatile_bcs`` are imposed as strong Dirichlet data at
+    the new time level.  A static Neumann value is interpreted as the outward
+    derivative ``du/dn`` and applied with a centered ghost point.  The
+    explicit diffusion number must satisfy ``D*dt/dx**2 <= 1/2``.
+
+    This function does not call the C++ transport solver.  It is retained for
+    compatibility and transparent reference calculations while a native
+    dynamic-boundary interface is absent.  Every call emits ``RuntimeWarning``.
 
     Args:
-        problem: TransportProblem with initial condition and static BCs
-        t_end: End time for simulation
-        pulsatile_bcs: Dict mapping Boundary enum to PulsatileBC objects
-        dt: Time step (if None, uses stability-limited dt)
-        save_every: Save solution every N steps (None = only final)
-        callback: Optional function called each step with (t, solution)
+        problem: A 1D, uniform-diffusivity, diffusion-only problem.
+        t_end: Non-negative final time in seconds.
+        pulsatile_bcs: Left/right scalar waveforms, imposed as Dirichlet data.
+        dt: Positive time step in seconds.  If omitted, 90% of the exact
+            forward-Euler diffusion stability limit is used.  When ``D=0``
+            there is no diffusion-derived time scale, so ``dt`` is required.
+        save_every: Save every positive integer number of steps.  The initial
+            and final states are always returned.
+        callback: Called after each accepted step with ``(time, read-only copy)``.
+        max_steps: Guard against accidentally running a long Python loop.
 
     Returns:
-        PulsatileResult with final and optionally saved solutions
+        Final field, aligned histories, and numerical metadata.
 
-    Example:
-        >>> bc_left = bt.ArterialPressureBC(systolic=120, diastolic=80)
-        >>> result = bt.solve_pulsatile(
-        ...     problem,
-        ...     t_end=5.0,
-        ...     pulsatile_bcs={bt.Boundary.Left: bc_left}
-        ... )
+    Raises:
+        NotImplementedError: If the problem contains physics this reference
+            scheme does not implement.
+        ValueError: If a value is outside its domain or the requested time
+            step violates the explicit diffusion stability bound.
     """
-    mesh = problem.mesh()
-    D = problem.diffusivity()
+    final_time = _nonnegative(t_end, "t_end")
+    step_limit = _positive_integer(max_steps, "max_steps")
+    if save_every is not None:
+        save_every = _positive_integer(save_every, "save_every")
+    if callback is not None and not callable(callback):
+        raise TypeError("callback must be callable or None")
 
-    # Compute stable timestep if not provided
+    dynamic_boundaries = _validated_dynamic_boundaries(pulsatile_bcs)
+    mesh, diffusivity, solution, static_boundaries = _validate_reference_problem(
+        problem, dynamic_boundaries
+    )
+    spacing = _positive(mesh.dx(), "mesh spacing")
+    spacing_squared = spacing * spacing
+    if spacing_squared == 0.0:
+        raise ValueError("mesh spacing is too small to square in float64 arithmetic")
+    max_stable_dt = (
+        spacing_squared / (2.0 * diffusivity) if diffusivity > 0.0 else math.inf
+    )
+
     if dt is None:
-        dx = mesh.dx()
-        dt = 0.4 * dx * dx / D  # CFL-like stability condition
+        if final_time > 0.0 and diffusivity == 0.0:
+            raise ValueError(
+                "dt is required when diffusivity is zero because no diffusion "
+                "stability scale exists to choose it"
+            )
+        nominal_dt = 0.9 * max_stable_dt if final_time > 0.0 else 0.0
+        if not math.isfinite(nominal_dt):
+            nominal_dt = final_time
+    else:
+        nominal_dt = _positive(dt, "dt")
 
-    # Initialize solution
-    u = np.array(problem.initial(), dtype=np.float64)
-    dx = mesh.dx()
-    dx2 = dx * dx
+    planned_steps = 0
+    if final_time > 0.0:
+        first_step = min(nominal_dt, final_time)
+        diffusion_number = diffusivity * first_step / spacing_squared
+        stability_tolerance = 64.0 * np.finfo(float).eps
+        if diffusion_number > 0.5 + stability_tolerance:
+            raise ValueError(
+                "dt violates the forward-Euler 1D diffusion stability limit: "
+                f"D*dt/dx^2={diffusion_number:.12g} > 0.5; use dt <= "
+                f"{max_stable_dt:.12g}"
+            )
+        step_ratio = final_time / nominal_dt
+        nearest_integer = round(step_ratio)
+        if nearest_integer >= 1 and math.isclose(
+            step_ratio, nearest_integer, rel_tol=1e-13, abs_tol=1e-13
+        ):
+            planned_steps = int(nearest_integer)
+        else:
+            planned_steps = math.ceil(step_ratio)
+        if planned_steps > step_limit:
+            raise ValueError(
+                f"the requested solve needs more than max_steps={step_limit}; "
+                "use the native C++ solver for long runs or raise max_steps explicitly"
+            )
 
-    # Tracking
-    t = 0.0
+    warnings.warn(_REFERENCE_SOLVER_WARNING, RuntimeWarning, stacklevel=2)
+
+    time = 0.0
     step = 0
-    time_history = [0.0]
-    solution_history = [u.copy()]
-    bc_history = {side: [bc(0.0)] for side, bc in pulsatile_bcs.items()}
+    last_dt = 0.0
+    max_diffusion_number = 0.0
+    dynamic_values = _evaluate_dynamic_boundaries(dynamic_boundaries, time)
+    _impose_dirichlet_boundaries(solution, static_boundaries, dynamic_values)
 
-    # Get static boundaries for sides without pulsatile BCs
-    static_bcs = problem.boundaries()
+    time_history = [time]
+    solution_history = [solution.copy()]
+    bc_history = {side: [dynamic_values[side]] for side in dynamic_boundaries}
 
-    while t < t_end:
-        # Adjust final step
-        if t + dt > t_end:
-            dt = t_end - t
-
-        # Update pulsatile BCs for current time
-        left_val = (
-            pulsatile_bcs[Boundary.Left](t)
-            if Boundary.Left in pulsatile_bcs
-            else static_bcs[0].value
+    for step_index in range(planned_steps):
+        next_time = (
+            final_time
+            if step_index + 1 == planned_steps
+            else min((step_index + 1) * nominal_dt, final_time)
         )
-        right_val = (
-            pulsatile_bcs[Boundary.Right](t)
-            if Boundary.Right in pulsatile_bcs
-            else static_bcs[1].value
+        step_dt = next_time - time
+        if step_dt <= 0.0:
+            raise RuntimeError("time integration stopped making forward progress")
+
+        diffusion_number = diffusivity * step_dt / spacing_squared
+        next_solution = solution.copy()
+        if solution.size > 2:
+            next_solution[1:-1] = solution[1:-1] + diffusion_number * (
+                solution[:-2] - 2.0 * solution[1:-1] + solution[2:]
+            )
+
+        for index, neighbor, side, boundary in (
+            (0, 1, Boundary.Left, static_boundaries[0]),
+            (-1, -2, Boundary.Right, static_boundaries[1]),
+        ):
+            if side in dynamic_boundaries or boundary.type == BoundaryType.DIRICHLET:
+                continue
+            outward_derivative = _finite(
+                boundary.value, f"static {side.name} outward derivative"
+            )
+            next_solution[index] = solution[index] + 2.0 * diffusion_number * (
+                solution[neighbor] - solution[index] + outward_derivative * spacing
+            )
+
+        next_dynamic_values = _evaluate_dynamic_boundaries(
+            dynamic_boundaries, next_time
         )
+        _impose_dirichlet_boundaries(
+            next_solution, static_boundaries, next_dynamic_values
+        )
+        if not np.all(np.isfinite(next_solution)):
+            raise FloatingPointError("the reference solve produced a non-finite value")
 
-        # Compute RHS (diffusion only for now, 1D)
-        dudt = np.zeros_like(u)
-        for i in range(1, len(u) - 1):
-            dudt[i] = D * (u[i - 1] - 2 * u[i] + u[i + 1]) / dx2
-
-        # Forward Euler step
-        u = u + dt * dudt
-
-        # Apply boundary conditions
-        u[0] = left_val
-        u[-1] = right_val
-
-        t += dt
+        solution = next_solution
+        dynamic_values = next_dynamic_values
+        time = next_time
         step += 1
+        last_dt = step_dt
+        max_diffusion_number = max(max_diffusion_number, diffusion_number)
 
-        # Save history
         if save_every is not None and step % save_every == 0:
-            time_history.append(t)
-            solution_history.append(u.copy())
-            for side, bc in pulsatile_bcs.items():
-                bc_history[side].append(bc(t))
+            time_history.append(time)
+            solution_history.append(solution.copy())
+            for side in dynamic_boundaries:
+                bc_history[side].append(dynamic_values[side])
 
-        # Callback
         if callback is not None:
-            callback(t, u)
+            callback_solution = solution.copy()
+            callback_solution.setflags(write=False)
+            callback(time, callback_solution)
 
-    # Always save final state
-    if save_every is None or step % save_every != 0:
-        time_history.append(t)
-        solution_history.append(u.copy())
-        for side, bc in pulsatile_bcs.items():
-            bc_history[side].append(bc(t))
+    if time_history[-1] != time:
+        time_history.append(time)
+        solution_history.append(solution.copy())
+        for side in dynamic_boundaries:
+            bc_history[side].append(dynamic_values[side])
+
+    positive_periods = []
+    for waveform in dynamic_boundaries.values():
+        waveform_period = waveform.period()
+        if waveform_period > 0.0:
+            positive_periods.append(waveform_period)
+    minimum_period = min(positive_periods) if positive_periods else None
+    steps_per_minimum_period = (
+        minimum_period / nominal_dt
+        if minimum_period is not None and nominal_dt > 0.0
+        else None
+    )
 
     return PulsatileResult(
-        solution=u,
-        time=t,
-        time_history=np.array(time_history),
+        solution=solution,
+        time=time,
+        time_history=np.asarray(time_history, dtype=np.float64),
         solution_history=solution_history,
         bc_history=bc_history,
-        stats={"steps": step, "dt": dt, "t_end": t},
+        stats={
+            "implementation": "legacy-python-numpy-reference",
+            "equation": "du/dt = D*d2u/dx2",
+            "dynamic_boundary_semantics": "strong Dirichlet scalar value",
+            "static_neumann_semantics": "outward-normal derivative du/dn",
+            "steps": step,
+            "dt": nominal_dt,
+            "last_dt": last_dt,
+            "t_end": time,
+            "max_stable_dt": max_stable_dt,
+            "max_diffusion_number": max_diffusion_number,
+            "minimum_waveform_period": minimum_period,
+            "steps_per_minimum_period": steps_per_minimum_period,
+        },
     )
 
 
@@ -620,7 +1108,7 @@ def heart_rate_to_period(bpm: float) -> float:
     Returns:
         Period in seconds
     """
-    return 60.0 / bpm
+    return 60.0 / _positive(bpm, "bpm")
 
 
 def period_to_heart_rate(T: float) -> float:
@@ -632,12 +1120,12 @@ def period_to_heart_rate(T: float) -> float:
     Returns:
         Heart rate in beats per minute
     """
-    return 60.0 / T
+    return 60.0 / _positive(T, "T")
 
 
 def sample_waveform(
     bc: PulsatileBC, t_start: float = 0.0, t_end: float = 1.0, num_points: int = 100
-) -> tuple:
+) -> tuple[np.ndarray, np.ndarray]:
     """Sample a pulsatile BC waveform over a time range.
 
     Useful for visualization and verification.
@@ -651,6 +1139,16 @@ def sample_waveform(
     Returns:
         Tuple of (times, values) arrays
     """
-    times = np.linspace(t_start, t_end, num_points)
-    values = np.array([bc(t) for t in times])
+    if not isinstance(bc, PulsatileBC):
+        raise TypeError("bc must be a PulsatileBC")
+    start = _finite(t_start, "t_start")
+    end = _finite(t_end, "t_end")
+    if end < start:
+        raise ValueError("t_end must be greater than or equal to t_start")
+    count = _positive_integer(num_points, "num_points")
+
+    times = np.linspace(start, end, count, dtype=np.float64)
+    values = np.asarray([bc(float(time)) for time in times], dtype=np.float64)
+    if not np.all(np.isfinite(values)):
+        raise ValueError("waveform sampling produced a non-finite value")
     return times, values

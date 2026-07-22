@@ -147,6 +147,22 @@ class TestGridConvergenceStudy:
         with pytest.raises(ValueError, match="Need at least 3 grid levels"):
             study.analyze()
 
+    def test_identical_solutions_are_indeterminate_not_theoretical(self):
+        """A disconnected refinement parameter must never manufacture a pass."""
+        study = GridConvergenceStudy(theoretical_order=2.0)
+        for h in (0.1, 0.05, 0.025):
+            study.add_solution(h=h, value=1.0)
+
+        with pytest.raises(ValueError, match="indeterminate"):
+            study.analyze()
+
+    @pytest.mark.parametrize("h", [0.0, -0.1, np.nan, np.inf])
+    def test_add_solution_rejects_invalid_mesh_size(self, h):
+        study = GridConvergenceStudy()
+
+        with pytest.raises(ValueError, match="greater than zero"):
+            study.add_solution(h=h, value=1.0)
+
     def test_analyze_second_order(self):
         """Test analyze with second-order convergent data."""
         # Simulate second-order convergence: f(h) = f_exact + C*h^2

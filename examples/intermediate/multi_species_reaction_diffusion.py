@@ -14,7 +14,8 @@ The general form solved is:
     ∂u_i/∂t = D_i ∇²u_i + R_i(u_1, ..., u_N, x, y, t)
 
 where u_i are species concentrations, D_i are diffusion coefficients,
-and R_i are reaction kinetics.
+and R_i are reaction kinetics. Each example states its own consistent length,
+time, and concentration units; the solver does not guess or convert units.
 """
 
 import numpy as np
@@ -33,7 +34,7 @@ def example_lotka_volterra():
     =====================================
 
     Classic 2-species model with spatial diffusion:
-        du/dt = D_u ∇²u + α·u - β·u·v      (prey)
+        du/dt = D_u ∇²u + α·u·(1-u/K) - β·u·v  (prey)
         dv/dt = D_v ∇²v + δ·u·v - γ·v      (predator)
 
     Parameters:
@@ -45,27 +46,27 @@ def example_lotka_volterra():
     When prey diffuses faster than predators, we can see spatial patterns.
     """
     print("\n" + "=" * 60)
-    print("Example 2: Lotka-Volterra Predator-Prey System")
+    print("Example 1: Lotka-Volterra Predator-Prey System")
     print("=" * 60)
 
-    # Domain: 10x10 units, 30x30 grid (coarser for stability)
+    # Dimensionless illustrative model: length and time are model units.
+    # Domain: 10x10 length units, 30x30 cells.
     Lx, Ly = 10.0, 10.0
     nx, ny = 30, 30
     mesh = bt.StructuredMesh(nx, ny, 0.0, Lx, 0.0, Ly)
 
-    # Diffusion coefficients: minimal for stability with explicit solver
-    D_prey = 0.005  # Very small prey diffusivity
-    D_pred = 0.002  # Even smaller predator diffusivity
+    D_prey = 0.005  # length^2 / time
+    D_pred = 0.002  # length^2 / time
 
     # Create multi-species solver
     solver = bt.MultiSpeciesSolver(mesh, [D_prey, D_pred])
 
     # Set up Lotka-Volterra reaction model with carrying capacity
     # This prevents unbounded prey growth and stabilizes the explicit solver
-    alpha = 1.0  # Prey growth rate
-    beta = 0.1  # Predation rate
-    gamma = 0.5  # Predator death rate
-    delta = 0.05  # Predator reproduction rate
+    alpha = 1.0  # 1/time
+    beta = 0.1  # 1/(predator concentration*time)
+    gamma = 0.5  # 1/time
+    delta = 0.05  # 1/(prey concentration*time)
     K = 50.0  # Prey carrying capacity
 
     reaction_model = bt.LotkaVolterraReaction(alpha, beta, gamma, delta, K)
@@ -100,7 +101,7 @@ def example_lotka_volterra():
     # Time integration - use smaller timestep for reaction-diffusion stability
     dt = 0.01  # Fixed small timestep for coupled stability
     T_final = 30.0  # Shorter simulation for speed
-    num_steps = int(T_final / dt)
+    num_steps = int(np.ceil(T_final / dt))
 
     print(f"Time step: {dt:.4f}")
     print(f"Running for {num_steps} steps (T = {T_final})...")
@@ -110,9 +111,8 @@ def example_lotka_volterra():
     prey_history = [solver.solution(0).copy()]
     pred_history = [solver.solution(1).copy()]
 
-    steps_per_snapshot = num_steps // 10
-    for snapshot in range(10):
-        solver.solve(dt, steps_per_snapshot)
+    for target_time in np.linspace(T_final / 10.0, T_final, 10):
+        solver.solve_until(float(target_time), maximum_dt=dt)
         times.append(solver.time())
         prey_history.append(solver.solution(0).copy())
         pred_history.append(solver.solution(1).copy())
@@ -171,20 +171,24 @@ def example_sir_epidemic():
 
     The diffusion models population movement.
     Infected individuals may move less (D_I < D_S).
+
+    This is an illustrative reaction-diffusion compartment model, not a
+    calibrated epidemiological forecast. Fickian diffusion is only a coarse
+    effective-mobility approximation, and N is a local reference density.
     """
     print("\n" + "=" * 60)
-    print("Example 3: SIR Epidemic with Spatial Spread")
+    print("Example 2: SIR Epidemic with Spatial Spread")
     print("=" * 60)
 
-    # Domain: 20x20 units (e.g., 20km x 20km region)
+    # Illustrative units: x and y in km, time in days, and S/I/R in people/km^2.
     Lx, Ly = 20.0, 20.0
     nx, ny = 60, 60
     mesh = bt.StructuredMesh(nx, ny, 0.0, Lx, 0.0, Ly)
 
     # Diffusion coefficients (mobility)
-    D_S = 0.5  # Susceptible mobility
-    D_I = 0.1  # Infected mobility (reduced - stay home when sick)
-    D_R = 0.5  # Recovered mobility
+    D_S = 0.5  # km^2/day, effective susceptible mobility
+    D_I = 0.1  # km^2/day, reduced effective infected mobility
+    D_R = 0.5  # km^2/day, effective recovered mobility
 
     # Create solver with 3 species
     solver = bt.MultiSpeciesSolver(mesh, [D_S, D_I, D_R])
@@ -193,9 +197,9 @@ def example_sir_epidemic():
     # R₀ = β/γ determines epidemic behavior:
     #   R₀ > 1: epidemic spreads
     #   R₀ < 1: epidemic dies out
-    beta = 0.4  # Transmission rate
-    gamma = 0.1  # Recovery rate (1/gamma = 10 days average infection)
-    N = 100.0  # Reference population density (matches S_ic)
+    beta = 0.4  # 1/day
+    gamma = 0.1  # 1/day (mean infectious duration 1/gamma = 10 days)
+    N = 100.0  # people/km^2, fixed reference density in the incidence term
 
     reaction_model = bt.SIRReaction(beta, gamma, N)
     solver.set_reaction_model(reaction_model)
@@ -235,24 +239,23 @@ def example_sir_epidemic():
     # Time integration
     dt = solver.max_stable_time_step()
     T_final = 100.0
-    num_steps = int(T_final / dt)
+    num_steps = int(np.ceil(T_final / dt))
 
     print(f"Time step: {dt:.4f}")
     print(f"Running for {num_steps} steps (T = {T_final})...")
 
     # Store time series of total populations
     t_history = [0]
-    S_total = [np.sum(S_ic)]
-    I_total = [np.sum(I_ic)]
-    R_total = [np.sum(R_ic)]
+    S_total = [solver.total_mass(0)]
+    I_total = [solver.total_mass(1)]
+    R_total = [solver.total_mass(2)]
 
     # Store spatial snapshots
     I_snapshots = [I_ic.copy()]
     snapshot_times = [0]
 
-    steps_per_record = num_steps // 200
-    for record in range(200):
-        solver.solve(dt, steps_per_record)
+    for record, target_time in enumerate(np.linspace(T_final / 200.0, T_final, 200)):
+        solver.solve_until(float(target_time), maximum_dt=dt)
         t_history.append(solver.time())
         S_total.append(solver.total_mass(0))
         I_total.append(solver.total_mass(1))
@@ -304,18 +307,19 @@ def example_sir_epidemic():
 
 def example_brusselator():
     """
-    Brusselator Chemical Oscillator with Turing Patterns
-    ======================================================
+    Brusselator Diffusion-Driven Pattern Example
+    ==============================================
 
     Classic autocatalytic reaction system:
         dX/dt = D_X ∇²X + A - (B+1)·X + X²·Y
         dY/dt = D_Y ∇²Y + B·X - X²·Y
 
-    For B > 1 + A², the system exhibits oscillations.
-    With appropriate diffusion ratios, Turing patterns emerge.
+    For B > 1 + A², the homogeneous system loses stability through a Hopf
+    bifurcation. Here B is below that threshold; unequal diffusion can instead
+    destabilize spatial modes for the selected illustrative parameters.
     """
     print("\n" + "=" * 60)
-    print("Example 1: Brusselator Turing Patterns")
+    print("Example 3: Brusselator Diffusion-Driven Pattern")
     print("=" * 60)
 
     # Domain
@@ -332,8 +336,7 @@ def example_brusselator():
 
     # Brusselator parameters
     A = 4.5
-    B = 9.0  # B > 1 + A² = 21.25 is needed for oscillation, but
-    # lower B can give Turing patterns with diffusion
+    B = 9.0  # Below the homogeneous Hopf threshold 1 + A^2 = 21.25.
 
     reaction_model = bt.BrusselatorReaction(A, B)
     solver.set_reaction_model(reaction_model)
@@ -369,7 +372,7 @@ def example_brusselator():
     # Time integration
     dt = 0.8 * solver.max_stable_time_step()  # Smaller for stability
     T_final = 50.0  # Reduced for faster demo
-    num_steps = int(T_final / dt)
+    num_steps = int(np.ceil(T_final / dt))
 
     print(f"Time step: {dt:.4f}")
     print(f"Running for {num_steps} steps (T = {T_final})...")
@@ -378,9 +381,8 @@ def example_brusselator():
     X_snapshots = [X_ic.copy()]
     snapshot_times = [0]
 
-    steps_per_snapshot = num_steps // 5
-    for snapshot in range(5):
-        solver.solve(dt, steps_per_snapshot)
+    for target_time in np.linspace(T_final / 5.0, T_final, 5):
+        solver.solve_until(float(target_time), maximum_dt=dt)
         X_snapshots.append(solver.solution(0).copy())
         snapshot_times.append(solver.time())
         print(
@@ -412,20 +414,20 @@ def example_brusselator():
     return True
 
 
-def example_custom_reaction():
+def example_signaling_cascade():
     """
-    Custom Reaction Function Example
-    =================================
+    Enzyme Signaling Cascade Example
+    ================================
 
-    Demonstrates how to define a custom reaction function
-    for systems not covered by the built-in models.
+    The built-in EnzymeCascadeReaction models downstream activation without
+    consuming the upstream signal. It is therefore a signaling cascade, not a
+    mass-conserving A -> B -> C chemical conversion:
 
-    Example: 3-species chain reaction
-        A -> B -> C
-    with Michaelis-Menten kinetics.
+        dE0/dt = -kdeg0*E0
+        dEi/dt = Vmax_i*E(i-1)/(Km_i + E(i-1)) - kdeg_i*Ei
     """
     print("\n" + "=" * 60)
-    print("Example 4: Custom Reaction Function")
+    print("Example 4: Enzyme Signaling Cascade")
     print("=" * 60)
 
     # 1D domain for simplicity
@@ -440,15 +442,14 @@ def example_custom_reaction():
 
     solver = bt.MultiSpeciesSolver(mesh, [D_A, D_B, D_C])
 
-    # Use built-in EnzymeCascadeReaction for A -> B -> C
-    # Parameters: Vmax list, Km list, and kdeg list for each species
-    Vmax_list = [0.5, 0.3]  # A->B, B->C rates
+    # Parameters: activation Vmax/Km per link and degradation per species.
+    Vmax_list = [0.5, 0.3]
     Km_list = [1.0, 1.0]  # Michaelis constants
     kdeg_list = [0.0, 0.0, 0.0]  # No degradation for A, B, C
 
     reaction_model = bt.EnzymeCascadeReaction(Vmax_list, Km_list, kdeg_list)
     solver.set_reaction_model(reaction_model)
-    print("Chain reaction: A -> B -> C (EnzymeCascadeReaction)")
+    print("Activation cascade: E0 activates E1, which activates E2")
     print(f"Step 1: Vmax={Vmax_list[0]}, Km={Km_list[0]}")
     print(f"Step 2: Vmax={Vmax_list[1]}, Km={Km_list[1]}")
 
@@ -474,7 +475,7 @@ def example_custom_reaction():
     # Time integration
     dt = solver.max_stable_time_step()
     T_final = 100.0
-    num_steps = int(T_final / dt)
+    num_steps = int(np.ceil(T_final / dt))
 
     print(f"Time step: {dt:.4f}")
     print(f"Running for {num_steps} steps...")
@@ -486,9 +487,7 @@ def example_custom_reaction():
     snapshot_times = [0, 10, 25, 50, 100]
     for t_target in snapshot_times:
         if t_target > 0:
-            steps_to_run = int((t_target - solver.time()) / dt)
-            if steps_to_run > 0:
-                solver.solve(dt, steps_to_run)
+            solver.solve_until(float(t_target), maximum_dt=dt)
 
         profiles["t"].append(solver.time())
         profiles["A"].append(solver.solution(0).copy())
@@ -513,13 +512,13 @@ def example_custom_reaction():
         ax.legend()
         ax.grid(True, alpha=0.3)
 
-    plt.suptitle("Chain Reaction: A -> B -> C", fontsize=14)
+    plt.suptitle("Enzyme Signaling Activation Cascade", fontsize=14)
     plt.tight_layout()
 
     output_dir = Path(__file__).parent.parent.parent / "results" / "multi_species"
     output_dir.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_dir / "custom_reaction.png", dpi=150, bbox_inches="tight")
-    print(f"\nSaved: {output_dir / 'custom_reaction.png'}")
+    plt.savefig(output_dir / "signaling_cascade.png", dpi=150, bbox_inches="tight")
+    print(f"\nSaved: {output_dir / 'signaling_cascade.png'}")
     plt.close()
 
     return True
@@ -531,13 +530,11 @@ def main():
     print("Multi-Species Reaction-Diffusion Framework Examples")
     print("=" * 60)
 
-    # Note: Order matters due to C++ solver state issues
-    # Run Brusselator first (most sensitive to numerical precision)
     examples = [
-        ("Brusselator", example_brusselator),
         ("Lotka-Volterra", example_lotka_volterra),
         ("SIR Epidemic", example_sir_epidemic),
-        ("Custom Reaction", example_custom_reaction),
+        ("Brusselator", example_brusselator),
+        ("Signaling Cascade", example_signaling_cascade),
     ]
 
     results = []

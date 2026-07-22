@@ -1,7 +1,9 @@
-"""Gray–Scott reaction-diffusion (Turing patterns), simulated in C++.
+"""Dimensionless Gray–Scott reaction-diffusion patterns, simulated in C++.
 
-This is a classic *dimensionless* 2-species reaction–diffusion system that
-produces spots/stripes/mazes depending on (f, k). The Python script is mainly:
+This two-species model produces spots, stripes, and mazes depending on (f, k).
+These are often called "Turing patterns" in demonstrations, although a given
+parameter set should not be assumed to satisfy a classical linear Turing
+instability analysis. The Python script is mainly:
 - parameter + initial-condition setup
 - calling the C++ solver
 - saving plots
@@ -20,14 +22,13 @@ import biotransport as bt
 
 EXAMPLE_NAME = "turing_patterns"
 _HEADLESS = os.environ.get("MPLBACKEND", "").lower() == "agg"
-nx, ny = (128, 128) if _HEADLESS else (256, 256)
-Du = 0.16
-Dv = 0.08
-dt = 1.0
+nx, ny = (128, 128) if _HEADLESS else (256, 256)  # periodic cell samples
+Du = 0.16  # grid_length^2 / model_time
+Dv = 0.08  # grid_length^2 / model_time
+dt = 1.0  # model_time
 total_steps = 6000 if _HEADLESS else 20000
 
-# Some well-known Gray–Scott parameter sets (f, k) for distinct patterns
-# (Adapted from John Pearson’s classification or widely known references)
+# Common illustrative Gray–Scott parameter sets (f and k both 1/model_time).
 pattern_sets = {
     "spots": (0.035, 0.065, "Isolated spots"),
     "stripes": (0.022, 0.051, "Stripe patterns"),
@@ -107,7 +108,9 @@ def simulate_gray_scott(f, k, init_type="random", steps_between_frames=1000):
     # Initialize fields
     u0, v0 = initialize_fields(init_type)
 
-    mesh = bt.mesh_2d(nx - 1, ny - 1, x_max=1.0, y_max=1.0)
+    # The periodic solver stores one cell-centred sample per mesh cell. These
+    # domain limits give dx=dy=1, matching the scaling assumed by Du, Dv, and dt.
+    mesh = bt.mesh_2d(nx, ny, x_max=float(nx), y_max=float(ny))
     solver = bt.GrayScottSolver(mesh, Du, Dv, f, k)
 
     check_interval = 500 if _HEADLESS else 1000
@@ -184,7 +187,7 @@ def visualize_frames(u_frames, v_frames, frame_steps, f, k, pattern_name, descri
     v_final = v_frames[-1]
     plt.imshow(v_final, cmap=v_cmap, interpolation="bilinear", vmin=v_p1, vmax=v_p99)
     plt.title(f"Final V: f={f}, k={k} - {description}")
-    plt.colorbar(label="V concentration")
+    plt.colorbar(label="Dimensionless V")
     plt.axis("off")
     plt.tight_layout()
     final_v_path = bt.get_result_path(
@@ -196,7 +199,7 @@ def visualize_frames(u_frames, v_frames, frame_steps, f, k, pattern_name, descri
     u_final = u_frames[-1]
     plt.imshow(u_final, cmap=u_cmap, interpolation="bilinear", vmin=u_vmin, vmax=u_vmax)
     plt.title(f"Final U: f={f}, k={k} - {description}")
-    plt.colorbar(label="U concentration")
+    plt.colorbar(label="Dimensionless U")
     plt.axis("off")
     plt.tight_layout()
     final_u_path = bt.get_result_path(

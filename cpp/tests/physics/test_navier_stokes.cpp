@@ -1,327 +1,274 @@
-/**
- * @file test_navier_stokes.cpp
- * @brief Unit tests for the Navier-Stokes flow solver
- *
- * Tests verify:
- * 1. Basic solver construction and parameter setting
- * 2. Channel flow development
- * 3. Stability behavior
- * 4. CFL condition handling
- * 5. Time stepping accuracy
- * 6. Reynolds number effects
- */
-
-#include <algorithm>
+#include "../test_support/science_test.hpp"
 #include <biotransport/physics/fluid_dynamics/navier_stokes.hpp>
-#include <cassert>
 #include <cmath>
-#include <iostream>
+#include <functional>
+#include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace biotransport;
 
-// Helper function to check approximate equality
-bool approxEqual(double a, double b, double tol = 1e-6) {
-    return std::abs(a - b) < tol;
-}
+namespace {
 
-/**
- * Test 1: Basic solver construction
- */
-void testConstruction() {
-    std::cout << "Test 1: Basic construction..." << std::endl;
-
-    StructuredMesh mesh(10, 10, 0.0, 1.0, 0.0, 1.0);
-    double rho = 1000.0;  // kg/m^3
-    double mu = 0.001;    // Pa.s
-
-    NavierStokesSolver solver(mesh, rho, mu);
-
-    // Should not throw
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Left, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Right, VelocityBC::NoSlip());
-
-    std::cout << "  PASSED" << std::endl;
-}
-
-/**
- * Test 2: Invalid parameters should throw
- */
-void testInvalidParameters() {
-    std::cout << "Test 2: Invalid parameters..." << std::endl;
-
-    StructuredMesh mesh2D(10, 10, 0.0, 1.0, 0.0, 1.0);
-    StructuredMesh mesh1D(10, 0.0, 1.0);
-
-    // Negative density should throw
+template <typename Exception, typename Callable>
+void requireThrows(Callable&& callable, const std::string& context) {
     bool caught = false;
     try {
-        NavierStokesSolver solver(mesh2D, -1000.0, 0.001);
-    } catch (const std::invalid_argument&) {
+        callable();
+    } catch (const Exception&) {
         caught = true;
     }
-    assert(caught && "Should throw for negative density");
-
-    // Negative viscosity should throw
-    caught = false;
-    try {
-        NavierStokesSolver solver(mesh2D, 1000.0, -0.001);
-    } catch (const std::invalid_argument&) {
-        caught = true;
-    }
-    assert(caught && "Should throw for negative viscosity");
-
-    // 1D mesh should throw
-    caught = false;
-    try {
-        NavierStokesSolver solver(mesh1D, 1000.0, 0.001);
-    } catch (const std::invalid_argument&) {
-        caught = true;
-    }
-    assert(caught && "Should throw for 1D mesh");
-
-    std::cout << "  PASSED" << std::endl;
+    SCIENCE_REQUIRE(caught, context);
 }
 
-/**
- * Test 3: Channel flow development
- */
-void testChannelFlow() {
-    std::cout << "Test 3: Channel flow development..." << std::endl;
-
-    // Microfluidic channel
-    double L = 0.001;   // 1 mm
-    double H = 0.0005;  // 0.5 mm
-    double rho = 1000.0;
-    double mu = 0.001;
-    double u_inlet = 0.1;  // 0.1 m/s
-
-    int nx = 20, ny = 10;
-    StructuredMesh mesh(nx, ny, 0.0, L, 0.0, H);
-
-    NavierStokesSolver solver(mesh, rho, mu);
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Left, VelocityBC::Inflow(u_inlet, 0.0));
-    solver.setVelocityBC(Boundary::Right, VelocityBC::Outflow());
-
-    // Simulate for a short time
-    double t_end = 0.001;  // 1 ms
-    NavierStokesResult result = solver.solve(t_end);
-
-    std::cout << "  Stable: " << (result.stable ? "true" : "false") << std::endl;
-    std::cout << "  Time steps: " << result.time_steps << std::endl;
-    std::cout << "  Final time: " << result.time << std::endl;
-
-    assert(result.stable && "Channel flow should be stable");
-    assert(result.time_steps > 0 && "Should take some time steps");
-
-    // Check velocities are non-zero and finite
-    double u_max = *std::max_element(result.u.begin(), result.u.end());
-    assert(u_max > 0.0 && "Should have positive velocity");
-    assert(!std::isnan(u_max) && "Should not have NaN");
-    assert(!std::isinf(u_max) && "Should not have Inf");
-
-    std::cout << "  Max velocity: " << u_max << " m/s" << std::endl;
-    std::cout << "  PASSED" << std::endl;
+std::vector<double> zeroField(const StructuredMesh& mesh) {
+    return std::vector<double>(static_cast<std::size_t>(mesh.numNodes()), 0.0);
 }
 
-/**
- * Test 4: Lid-driven cavity (time-dependent)
- */
-void testLidDrivenCavity() {
-    std::cout << "Test 4: Lid-driven cavity..." << std::endl;
+double packedDivergence(const StructuredMesh& mesh, const std::vector<double>& u,
+                        const std::vector<double>& v) {
+    const int nx = mesh.nx();
+    const int ny = mesh.ny();
+    const int stride = nx + 1;
+    double maximum = 0.0;
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            const int index = j * stride + i;
+            const double divergence =
+                (u[index + 1] - u[index]) / mesh.dx() + (v[index + stride] - v[index]) / mesh.dy();
+            maximum = std::max(maximum, std::abs(divergence));
+        }
+    }
+    return maximum;
+}
 
-    double L = 0.001;  // 1 mm
-    double rho = 1000.0;
-    double mu = 0.01;  // Higher viscosity for stability
-    double u_lid = 0.1;
+void constructionAndOwnedMesh() {
+    NavierStokesSolver solver(StructuredMesh(8, 6, 0.0, 1.0, 0.0, 1.0), 1.0, 0.02);
+    const auto result = solver.solve(0.0);
+    SCIENCE_REQUIRE(result.stable, "a zero initial field must be a valid incompressible state");
+    SCIENCE_REQUIRE(result.u.size() == 63, "solver must safely own a temporary 8x6 mesh");
 
-    int nx = 15, ny = 15;
-    StructuredMesh mesh(nx, ny, 0.0, L, 0.0, L);
+    const StructuredMesh mesh(4, 4, 0.0, 1.0, 0.0, 1.0);
+    const StructuredMesh mesh_1d(4, 0.0, 1.0);
+    requireThrows<std::invalid_argument>([&] { NavierStokesSolver invalid(mesh, 0.0, 1.0); },
+                                         "zero density must be rejected");
+    requireThrows<std::invalid_argument>(
+        [&] { NavierStokesSolver invalid(mesh, std::numeric_limits<double>::quiet_NaN(), 1.0); },
+        "non-finite density must be rejected");
+    requireThrows<std::invalid_argument>([&] { NavierStokesSolver invalid(mesh, 1.0, -1.0); },
+                                         "negative viscosity must be rejected");
+    requireThrows<std::invalid_argument>([&] { NavierStokesSolver invalid(mesh_1d, 1.0, 1.0); },
+                                         "a one-dimensional mesh must be rejected");
+}
 
-    NavierStokesSolver solver(mesh, rho, mu);
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Left, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Right, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Top, VelocityBC::Dirichlet(u_lid, 0.0));
+void configurationContracts() {
+    const StructuredMesh mesh(6, 6, 0.0, 1.0, 0.0, 1.0);
+    NavierStokesSolver solver(mesh, 1.0, 0.01);
 
-    double t_end = 0.01;  // 10 ms
-    NavierStokesResult result = solver.solve(t_end);
+    requireThrows<std::invalid_argument>([&] { solver.setCFL(0.0); }, "CFL=0 must be rejected");
+    requireThrows<std::invalid_argument>([&] { solver.setCFL(1.01); }, "CFL>1 must be rejected");
+    requireThrows<std::invalid_argument>(
+        [&] { solver.setCFL(std::numeric_limits<double>::infinity()); },
+        "non-finite CFL must be rejected");
+    requireThrows<std::invalid_argument>([&] { solver.setTimeStep(-1.0); },
+                                         "negative time step must be rejected");
+    requireThrows<std::invalid_argument>([&] { solver.setPressureTolerance(0.0); },
+                                         "zero pressure tolerance must be rejected");
+    requireThrows<std::invalid_argument>([&] { solver.setMaxPressureIterations(0); },
+                                         "zero pressure iterations must be rejected");
+    requireThrows<std::invalid_argument>(
+        [&] { solver.setConvectionScheme(ConvectionScheme::QUICK); },
+        "unimplemented QUICK convection must be rejected");
+    requireThrows<std::invalid_argument>(
+        [&] { solver.setConvectionScheme(ConvectionScheme::HYBRID); },
+        "unimplemented HYBRID convection must be rejected");
+    requireThrows<std::invalid_argument>(
+        [&] { solver.setVelocityBC(Boundary::Right, VelocityBC::Outflow()); },
+        "open boundaries must not silently use an incompatible pressure model");
+    requireThrows<std::invalid_argument>(
+        [&] { solver.setVelocityBC(Boundary::Left, VelocityBC::Inflow(1.0)); },
+        "inflow shorthand must be rejected until an open-boundary model exists");
+    requireThrows<std::invalid_argument>(
+        [&] { solver.setInlet(Boundary::Left, [](double, double) { return 1.0; }); },
+        "profile inlet must be rejected explicitly");
 
-    assert(result.stable && "Cavity flow should be stable with high viscosity");
+    solver.setConvectionScheme(ConvectionScheme::CENTRAL);
+    solver.setCFL(0.5);
+    solver.setTimeStep(0.0);
+}
 
-    // Check lid boundary condition is enforced
-    int stride = nx + 1;
-    for (int i = 0; i <= nx; ++i) {
-        int idx = ny * stride + i;
-        assert(approxEqual(result.u[idx], u_lid, 1e-4) && "Lid should have u = u_lid");
+void initialFieldContracts() {
+    const StructuredMesh mesh(6, 5, 0.0, 1.0, 0.0, 1.0);
+    NavierStokesSolver solver(mesh, 1.0, 0.01);
+    auto u = zeroField(mesh);
+    auto v = zeroField(mesh);
+
+    auto short_u = u;
+    short_u.pop_back();
+    requireThrows<std::invalid_argument>([&] { solver.setInitialVelocity(short_u, v); },
+                                         "short initial field must be rejected");
+    u[3] = std::numeric_limits<double>::quiet_NaN();
+    requireThrows<std::invalid_argument>([&] { solver.setInitialVelocity(u, v); },
+                                         "non-finite initial field must be rejected");
+}
+
+void exactTimeAndStepSemantics() {
+    const StructuredMesh mesh(8, 6, 0.0, 1.0, 0.0, 1.0);
+    NavierStokesSolver solver(mesh, 1.0, 0.02);
+    solver.setTimeStep(0.001);
+
+    const auto duration_result = solver.solve(0.0035);
+    SCIENCE_REQUIRE_NEAR(duration_result.time, 0.0035, 1e-15, 0.0, "exact requested final time");
+    SCIENCE_REQUIRE(duration_result.time_steps == 4,
+                    "final shortened step must be counted exactly once");
+    SCIENCE_REQUIRE(duration_result.stable, "quiescent fixed-step solution must be stable");
+    SCIENCE_REQUIRE_NEAR(duration_result.divergence, 0.0, 1e-14, 0.0, "quiescent divergence");
+
+    const auto step_result = solver.solveSteps(7);
+    SCIENCE_REQUIRE(step_result.time_steps == 7, "solveSteps(7) must take exactly seven steps");
+    SCIENCE_REQUIRE_NEAR(step_result.time, 0.007, 1e-15, 0.0, "seven fixed time steps");
+
+    requireThrows<std::invalid_argument>([&] { (void)solver.solve(-0.1); },
+                                         "negative duration must be rejected");
+    requireThrows<std::invalid_argument>(
+        [&] { (void)solver.solve(std::numeric_limits<double>::infinity()); },
+        "non-finite duration must be rejected");
+    requireThrows<std::invalid_argument>([&] { (void)solver.solve(0.1, 0.01); },
+                                         "unimplemented snapshot interval must be rejected");
+    requireThrows<std::invalid_argument>([&] { (void)solver.solveSteps(-1); },
+                                         "negative step count must be rejected");
+}
+
+void compatibleProjectionReducesDivergence() {
+    const int nx = 12;
+    const int ny = 10;
+    const StructuredMesh mesh(nx, ny, 0.0, 1.0, 0.0, 1.0);
+    auto u = zeroField(mesh);
+    auto v = zeroField(mesh);
+    const int stride = nx + 1;
+    const double pi = std::acos(-1.0);
+
+    for (int j = 0; j < ny; ++j) {
+        const double y = (static_cast<double>(j) + 0.5) * mesh.dy();
+        for (int i = 1; i < nx; ++i) {
+            const double x = static_cast<double>(i) * mesh.dx();
+            u[j * stride + i] = 0.2 * std::sin(pi * x) * std::sin(pi * y);
+        }
+    }
+    const double initial_divergence = packedDivergence(mesh, u, v);
+    SCIENCE_REQUIRE(initial_divergence > 0.1,
+                    "test field must begin with material discrete divergence");
+
+    NavierStokesSolver solver(mesh, 1.0, 0.01);
+    solver.setInitialVelocity(u, v)
+        .setTimeStep(0.0005)
+        .setPressureTolerance(1e-10)
+        .setMaxPressureIterations(10000);
+    const auto result = solver.solveSteps(1);
+
+    science_test::report("initial max divergence", initial_divergence, "1/s");
+    science_test::report("projected max divergence", result.divergence, "1/s");
+    science_test::report("relative pressure residual", result.pressure_residual);
+    SCIENCE_REQUIRE(result.stable, "a converged projection must report stable");
+    SCIENCE_REQUIRE(result.pressure_residual <= 1e-10,
+                    "reported pressure residual must meet its contract");
+    SCIENCE_REQUIRE(result.divergence < 1e-8,
+                    "compatible projection must reduce max divergence quantitatively");
+    SCIENCE_REQUIRE(result.divergence < initial_divergence * 1e-8,
+                    "projection must reduce divergence by at least eight orders of magnitude");
+}
+
+void divergentZeroDurationIsNotStable() {
+    const int nx = 8;
+    const int ny = 8;
+    const StructuredMesh mesh(nx, ny, 0.0, 1.0, 0.0, 1.0);
+    auto u = zeroField(mesh);
+    auto v = zeroField(mesh);
+    const int stride = nx + 1;
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 1; i < nx; ++i) {
+            u[j * stride + i] = 0.1 * static_cast<double>(i);
+        }
     }
 
-    // Check recirculation develops
-    double v_max = 0.0;
-    for (double vi : result.v) {
-        v_max = std::max(v_max, std::abs(vi));
+    NavierStokesSolver solver(mesh, 1.0, 0.01);
+    solver.setInitialVelocity(u, v);
+    const auto result = solver.solve(0.0);
+    SCIENCE_REQUIRE(result.divergence > 0.1, "the test state must be measurably divergent");
+    SCIENCE_REQUIRE(!result.stable,
+                    "a finite but materially divergent field must never be reported stable");
+}
+
+void lidDrivenCavityRemainsSolenoidal() {
+    const StructuredMesh mesh(12, 12, 0.0, 1.0, 0.0, 1.0);
+    NavierStokesSolver solver(mesh, 1.0, 0.1);
+    solver.setVelocityBC(Boundary::Top, VelocityBC::Dirichlet(1.0, 0.0))
+        .setTimeStep(0.0005)
+        .setPressureTolerance(1e-9);
+    const auto result = solver.solveSteps(12);
+
+    science_test::report("cavity max speed", result.max_velocity, "m/s");
+    science_test::report("cavity divergence", result.divergence, "1/s");
+    SCIENCE_REQUIRE(result.stable, "bounded lid-driven cavity must remain projection-stable");
+    SCIENCE_REQUIRE(result.max_velocity > 1e-4, "moving lid must transmit momentum into the fluid");
+    SCIENCE_REQUIRE(result.divergence < 1e-7,
+                    "lid-driven cavity velocity must remain discretely solenoidal");
+}
+
+void closedDomainForceIsBalancedByPressure() {
+    const StructuredMesh mesh(10, 8, 0.0, 1.0, 0.0, 1.0);
+    NavierStokesSolver solver(mesh, 1.0, 0.05);
+    solver.setBodyForce(3.0, 0.0)
+        .setTimeStep(0.0005)
+        .setPressureTolerance(1e-10)
+        .setMaxPressureIterations(10000);
+    const auto result = solver.solveSteps(1);
+
+    SCIENCE_REQUIRE(result.stable, "constant force projection must converge");
+    SCIENCE_REQUIRE(result.divergence < 1e-8,
+                    "pressure-balanced closed-domain force must remain divergence free");
+    SCIENCE_REQUIRE(result.max_velocity < 1e-8,
+                    "a conservative uniform body force in a closed domain is balanced by pressure");
+}
+
+void incompatibleFluxAndFailedPressureFailLoudly() {
+    const StructuredMesh mesh(10, 10, 0.0, 1.0, 0.0, 1.0);
+    NavierStokesSolver incompatible(mesh, 1.0, 0.01);
+    incompatible.setVelocityBC(Boundary::Left, VelocityBC::Dirichlet(0.1, 0.0)).setTimeStep(0.001);
+    requireThrows<std::domain_error>([&] { (void)incompatible.solveSteps(1); },
+                                     "nonzero prescribed net flux must fail loudly");
+
+    auto u = zeroField(mesh);
+    auto v = zeroField(mesh);
+    const int stride = mesh.nx() + 1;
+    for (int j = 0; j < mesh.ny(); ++j) {
+        for (int i = 1; i < mesh.nx(); ++i) {
+            u[j * stride + i] = std::sin(0.37 * static_cast<double>(i + 2 * j));
+        }
     }
-
-    std::cout << "  Max |v|: " << v_max << " m/s" << std::endl;
-    std::cout << "  Time steps: " << result.time_steps << std::endl;
-
-    assert(v_max > 0.0 && "Should develop vertical velocity from recirculation");
-
-    std::cout << "  PASSED" << std::endl;
+    NavierStokesSolver unconverged(mesh, 1.0, 0.01);
+    unconverged.setInitialVelocity(u, v)
+        .setTimeStep(0.0001)
+        .setPressureTolerance(1e-14)
+        .setMaxPressureIterations(1);
+    requireThrows<std::runtime_error>([&] { (void)unconverged.solveSteps(1); },
+                                      "an unconverged pressure projection must not return stable");
 }
 
-/**
- * Test 5: Reynolds number effect on stability
- */
-void testReynoldsNumber() {
-    std::cout << "Test 5: Reynolds number effects..." << std::endl;
-
-    double L = 0.001;
-    double H = 0.001;
-    double rho = 1000.0;
-    double u = 0.1;
-
-    int nx = 10, ny = 10;
-
-    // Low Re (Re ~ 10) - should be stable
-    {
-        double mu = 0.01;  // Re = rho*u*L/mu = 1000*0.1*0.001/0.01 = 10
-        StructuredMesh mesh(nx, ny, 0.0, L, 0.0, H);
-        NavierStokesSolver solver(mesh, rho, mu);
-        solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-        solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
-        solver.setVelocityBC(Boundary::Left, VelocityBC::Inflow(u, 0.0));
-        solver.setVelocityBC(Boundary::Right, VelocityBC::Outflow());
-
-        NavierStokesResult result = solver.solve(0.001);
-        std::cout << "  Low Re (10): stable=" << result.stable << std::endl;
-        assert(result.stable && "Low Re flow should be stable");
-    }
-
-    // Moderate Re (Re ~ 100) - should still be stable with proper time stepping
-    {
-        double mu = 0.001;  // Re = 100
-        StructuredMesh mesh(nx, ny, 0.0, L, 0.0, H);
-        NavierStokesSolver solver(mesh, rho, mu);
-        solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-        solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
-        solver.setVelocityBC(Boundary::Left, VelocityBC::Inflow(u, 0.0));
-        solver.setVelocityBC(Boundary::Right, VelocityBC::Outflow());
-
-        NavierStokesResult result = solver.solve(0.0005);
-        std::cout << "  Moderate Re (100): stable=" << result.stable << std::endl;
-        // May or may not be stable depending on time step selection
-    }
-
-    std::cout << "  PASSED" << std::endl;
-}
-
-/**
- * Test 6: No NaN in results
- */
-void testNoNaN() {
-    std::cout << "Test 6: No NaN values..." << std::endl;
-
-    int nx = 10, ny = 10;
-    StructuredMesh mesh(nx, ny, 0.0, 0.001, 0.0, 0.001);
-
-    NavierStokesSolver solver(mesh, 1000.0, 0.01);
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Top, VelocityBC::Dirichlet(0.1, 0.0));
-    solver.setVelocityBC(Boundary::Left, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Right, VelocityBC::NoSlip());
-
-    NavierStokesResult result = solver.solve(0.01);
-
-    for (size_t i = 0; i < result.u.size(); ++i) {
-        assert(!std::isnan(result.u[i]) && "u should not contain NaN");
-        assert(!std::isnan(result.v[i]) && "v should not contain NaN");
-        assert(!std::isnan(result.pressure[i]) && "pressure should not contain NaN");
-    }
-
-    std::cout << "  PASSED" << std::endl;
-}
-
-/**
- * Test 7: Time stepping
- */
-void testTimeStepping() {
-    std::cout << "Test 7: Time stepping..." << std::endl;
-
-    int nx = 10, ny = 10;
-    StructuredMesh mesh(nx, ny, 0.0, 0.001, 0.0, 0.001);
-
-    NavierStokesSolver solver(mesh, 1000.0, 0.001);
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Left, VelocityBC::Inflow(0.1, 0.0));
-    solver.setVelocityBC(Boundary::Right, VelocityBC::Outflow());
-
-    // Different end times should result in different time steps
-    NavierStokesResult r1 = solver.solve(0.0001);
-    NavierStokesResult r2 = solver.solve(0.001);
-
-    std::cout << "  t=0.1ms: steps=" << r1.time_steps << ", time=" << r1.time << std::endl;
-    std::cout << "  t=1.0ms: steps=" << r2.time_steps << ", time=" << r2.time << std::endl;
-
-    assert(r2.time_steps >= r1.time_steps && "Longer sim should have more steps");
-    assert(r2.time >= r1.time && "Longer sim should reach later time");
-
-    std::cout << "  PASSED" << std::endl;
-}
-
-/**
- * Test 8: Body force
- */
-void testBodyForce() {
-    std::cout << "Test 8: Body force..." << std::endl;
-
-    int nx = 10, ny = 10;
-    StructuredMesh mesh(nx, ny, 0.0, 0.001, 0.0, 0.001);
-
-    NavierStokesSolver solver(mesh, 1000.0, 0.01);
-    solver.setVelocityBC(Boundary::Bottom, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Top, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Left, VelocityBC::NoSlip());
-    solver.setVelocityBC(Boundary::Right, VelocityBC::NoSlip());
-    solver.setBodyForce(1000.0, 0.0);  // Strong body force
-
-    NavierStokesResult result = solver.solve(0.01);
-
-    double u_max = *std::max_element(result.u.begin(), result.u.end());
-    std::cout << "  Max u: " << u_max << " m/s" << std::endl;
-
-    assert(u_max > 0.0 && "Body force should accelerate flow");
-    assert(!std::isnan(u_max) && "Should not have NaN");
-
-    std::cout << "  PASSED" << std::endl;
-}
+}  // namespace
 
 int main() {
-    std::cout << "========================================" << std::endl;
-    std::cout << "Navier-Stokes Solver Unit Tests" << std::endl;
-    std::cout << "========================================" << std::endl;
-
-    try {
-        testConstruction();
-        testInvalidParameters();
-        testChannelFlow();
-        testLidDrivenCavity();
-        testReynoldsNumber();
-        testNoNaN();
-        testTimeStepping();
-        testBodyForce();
-
-        std::cout << "========================================" << std::endl;
-        std::cout << "All 8 tests PASSED!" << std::endl;
-        std::cout << "========================================" << std::endl;
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "FAILED with exception: " << e.what() << std::endl;
-        return 1;
-    }
+    return science_test::runSuite(
+        "Navier-Stokes compatible projection",
+        {{"construction owns mesh and validates parameters", constructionAndOwnedMesh},
+         {"configuration rejects unsupported numerics", configurationContracts},
+         {"initial fields have exact finite layout", initialFieldContracts},
+         {"duration and solveSteps are exact", exactTimeAndStepSemantics},
+         {"projection quantitatively removes divergence", compatibleProjectionReducesDivergence},
+         {"divergent zero-duration state is not stable", divergentZeroDurationIsNotStable},
+         {"lid-driven cavity remains solenoidal", lidDrivenCavityRemainsSolenoidal},
+         {"closed-domain force is pressure-balanced", closedDomainForceIsBalancedByPressure},
+         {"incompatible or unconverged projection fails",
+          incompatibleFluxAndFailedPressureFailLoudly}});
 }

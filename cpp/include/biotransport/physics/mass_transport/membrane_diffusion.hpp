@@ -11,17 +11,28 @@
  *   j = D * Phi * (C_left - C_right) / L
  *
  * Where:
- *   - j is the steady-state flux [mol/(m²·s)]
+ *   - j is the steady-state flux [amount/(m²·s)]
  *   - D is the membrane diffusion coefficient [m²/s]
  *   - Phi is the partition coefficient (dimensionless)
  *   - L is the membrane thickness [m]
- *   - C_left, C_right are boundary concentrations [mol/m³]
+ *   - C_left, C_right are boundary amount densities [amount/m³]
+ *
+ * The equations are linear in concentration, so "amount" may be mol, kg, or
+ * another consistent amount unit. Inputs must be per cubic metre; the returned
+ * flux uses the same amount unit per square metre per second.
  *
  * Optional hindered diffusion for large solutes in pores:
  *   D_eff = D_0 * H(lambda)
  *   lambda = solute_radius / pore_radius
- *   H(lambda) = (1 - lambda)^2 * (1 - 2.104*lambda + 2.09*lambda^3 - 0.95*lambda^5)
+ *   H(lambda) = (1 - lambda)^2
+ *               * (1 - 2.104*lambda + 2.09*lambda^3 - 0.95*lambda^5)
  *   (Renkin equation for spherical solutes in cylindrical pores)
+ *
+ * Model scope: layers are homogeneous and partitioning is instantaneous and
+ * ideal-dilute. External film resistances, porosity or tortuosity beyond the
+ * supplied effective D and Phi, reactions, swelling, and active transport are
+ * not modeled. At steady state, D changes flux but not the linear profile when
+ * the two partitioned boundary concentrations are fixed.
  *
  * Applications in biotransport:
  *   - Blood-brain barrier transport
@@ -33,31 +44,70 @@
 #ifndef BIOTRANSPORT_PHYSICS_MASS_TRANSPORT_MEMBRANE_DIFFUSION_HPP
 #define BIOTRANSPORT_PHYSICS_MASS_TRANSPORT_MEMBRANE_DIFFUSION_HPP
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace biotransport {
+
+namespace membrane_detail {
+
+inline void requireFinite(double value, const char* name) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument(std::string(name) + " must be finite");
+    }
+}
+
+inline void requirePositive(double value, const char* name) {
+    requireFinite(value, name);
+    if (value <= 0.0) {
+        throw std::invalid_argument(std::string(name) + " must be positive");
+    }
+}
+
+inline void requireNonnegative(double value, const char* name) {
+    requireFinite(value, name);
+    if (value < 0.0) {
+        throw std::invalid_argument(std::string(name) + " must be non-negative");
+    }
+}
+
+inline void requireFiniteResult(double value, const char* name) {
+    if (!std::isfinite(value)) {
+        throw std::overflow_error(std::string(name) +
+                                  " is non-finite; rescale or reduce the input parameters");
+    }
+}
+
+}  // namespace membrane_detail
 
 /**
  * @brief Result of steady-state membrane diffusion solve.
  */
 struct MembraneDiffusionResult {
     std::vector<double> x;              ///< Position coordinates [m]
-    std::vector<double> concentration;  ///< Concentration profile [mol/m³]
-    double flux;                        ///< Steady-state flux [mol/(m²·s)]
+    std::vector<double> concentration;  ///< Concentration profile [amount/m³]
+    double flux;                        ///< Steady-state flux [amount/(m²·s)]
     double permeability;                ///< Membrane permeability P = D*Phi/L [m/s]
-    double effective_diffusivity;       ///< Effective diffusivity (with hindrance) [m²/s]
+    double effective_diffusivity;       ///< Equivalent external-gradient coefficient P*L [m²/s]
 };
 
 /**
  * @brief Compute Renkin hindrance factor for spherical solutes in cylindrical pores.
  *
- * @param lambda Ratio of solute radius to pore radius (0 < lambda < 1)
- * @return Hindrance factor H (0 < H <= 1)
+ * @param lambda Ratio of solute radius to pore radius (lambda >= 0)
+ * @return Hindrance factor H (0 <= H <= 1)
  */
 inline double renkin_hindrance(double lambda) {
-    if (lambda <= 0.0)
+    membrane_detail::requireFinite(lambda, "Solute-to-pore radius ratio");
+    if (lambda < 0.0) {
+        throw std::invalid_argument("Solute-to-pore radius ratio must be non-negative");
+    }
+    if (lambda == 0.0)
         return 1.0;
     if (lambda >= 1.0)
         return 0.0;
@@ -69,7 +119,9 @@ inline double renkin_hindrance(double lambda) {
     double l3 = l2 * lambda;
     double l5 = l3 * l2;
 
-    return one_minus_lambda * one_minus_lambda * (1.0 - 2.104 * lambda + 2.09 * l3 - 0.95 * l5);
+    const double hindrance =
+        one_minus_lambda * one_minus_lambda * (1.0 - 2.104 * lambda + 2.09 * l3 - 0.95 * l5);
+    return std::clamp(hindrance, 0.0, 1.0);
 }
 
 /**
@@ -84,9 +136,8 @@ inline double renkin_hindrance(double lambda) {
  *   solver.setMembraneThickness(100e-6)      // 100 µm membrane
  *         .setDiffusivity(1e-10)             // 10⁻¹⁰ m²/s in membrane
  *         .setPartitionCoefficient(0.1)       // Φ = 0.1
- *         .setLeftConcentration(1.0)          // 1 mol/m³ on left
- *         .setRightConcentration(0.0);        // 0 mol/m³ on right
- *
+ *         .setLeftConcentration(1.0)          // 1 amount/m³ on left
+ *         .setRightConcentration(0.0);         // 0 amount/m³ on right
  *   auto result = solver.solve();
  *   // result.flux is steady-state flux
  *   // result.concentration is profile inside membrane
@@ -106,9 +157,7 @@ public:
      * @return Reference to this solver for chaining
      */
     MembraneDiffusion1DSolver& setMembraneThickness(double L) {
-        if (L <= 0.0) {
-            throw std::invalid_argument("Membrane thickness must be positive");
-        }
+        membrane_detail::requirePositive(L, "Membrane thickness");
         L_ = L;
         return *this;
     }
@@ -120,9 +169,7 @@ public:
      * @return Reference to this solver for chaining
      */
     MembraneDiffusion1DSolver& setDiffusivity(double D) {
-        if (D <= 0.0) {
-            throw std::invalid_argument("Diffusivity must be positive");
-        }
+        membrane_detail::requirePositive(D, "Diffusivity");
         D_ = D;
         return *this;
     }
@@ -139,9 +186,7 @@ public:
      * @return Reference to this solver for chaining
      */
     MembraneDiffusion1DSolver& setPartitionCoefficient(double Phi) {
-        if (Phi <= 0.0) {
-            throw std::invalid_argument("Partition coefficient must be positive");
-        }
+        membrane_detail::requirePositive(Phi, "Partition coefficient");
         Phi_ = Phi;
         return *this;
     }
@@ -149,10 +194,11 @@ public:
     /**
      * @brief Set the concentration on the left (donor) side.
      *
-     * @param C Concentration [mol/m³]
+     * @param C Concentration [amount/m³]
      * @return Reference to this solver for chaining
      */
     MembraneDiffusion1DSolver& setLeftConcentration(double C) {
+        membrane_detail::requireNonnegative(C, "Left concentration");
         C_left_ = C;
         return *this;
     }
@@ -160,10 +206,11 @@ public:
     /**
      * @brief Set the concentration on the right (receiver) side.
      *
-     * @param C Concentration [mol/m³]
+     * @param C Concentration [amount/m³]
      * @return Reference to this solver for chaining
      */
     MembraneDiffusion1DSolver& setRightConcentration(double C) {
+        membrane_detail::requireNonnegative(C, "Right concentration");
         C_right_ = C;
         return *this;
     }
@@ -180,9 +227,8 @@ public:
      * @return Reference to this solver for chaining
      */
     MembraneDiffusion1DSolver& setHinderedDiffusion(double solute_radius, double pore_radius) {
-        if (solute_radius < 0.0 || pore_radius <= 0.0) {
-            throw std::invalid_argument("Radii must be positive");
-        }
+        membrane_detail::requireNonnegative(solute_radius, "Solute radius");
+        membrane_detail::requirePositive(pore_radius, "Pore radius");
         if (solute_radius >= pore_radius) {
             throw std::invalid_argument("Solute radius must be less than pore radius");
         }
@@ -231,6 +277,8 @@ public:
         // Concentration at membrane boundaries (with partition)
         double C_mem_left = Phi_ * C_left_;
         double C_mem_right = Phi_ * C_right_;
+        membrane_detail::requireFiniteResult(C_mem_left, "Left membrane concentration");
+        membrane_detail::requireFiniteResult(C_mem_right, "Right membrane concentration");
 
         // Steady-state flux: j = D * (C_mem_left - C_mem_right) / L
         //                      = D * Phi * (C_left - C_right) / L
@@ -238,6 +286,8 @@ public:
 
         // Permeability: P = D * Phi / L
         double permeability = D_eff * Phi_ / L_;
+        membrane_detail::requireFiniteResult(flux, "Membrane flux");
+        membrane_detail::requireFiniteResult(permeability, "Membrane permeability");
 
         // Generate concentration profile (linear at steady state)
         std::vector<double> x(num_nodes_);
@@ -251,8 +301,11 @@ public:
             concentration[i] = C_mem_left + frac * (C_mem_right - C_mem_left);
         }
 
+        // P*L is the apparent transport coefficient referenced to the external
+        // concentration difference. It includes both hindrance and partition.
+        const double apparent_diffusivity = permeability * L_;
         return MembraneDiffusionResult{std::move(x), std::move(concentration), flux, permeability,
-                                       D_eff};
+                                       apparent_diffusivity};
     }
 
     /**
@@ -260,14 +313,16 @@ public:
      *
      * Convenience method for quick calculations without full solve.
      *
-     * @return Steady-state flux [mol/(m²·s)]
+     * @return Steady-state flux [amount/(m²·s)]
      */
     double computeFlux() const {
         double D_eff = D_;
         if (use_hindered_) {
             D_eff *= renkin_hindrance(lambda_);
         }
-        return D_eff * Phi_ * (C_left_ - C_right_) / L_;
+        const double flux = D_eff * Phi_ * (C_left_ - C_right_) / L_;
+        membrane_detail::requireFiniteResult(flux, "Membrane flux");
+        return flux;
     }
 
     /**
@@ -283,7 +338,9 @@ public:
         if (use_hindered_) {
             D_eff *= renkin_hindrance(lambda_);
         }
-        return D_eff * Phi_ / L_;
+        const double permeability = D_eff * Phi_ / L_;
+        membrane_detail::requireFiniteResult(permeability, "Membrane permeability");
+        return permeability;
     }
 
     // Getters for current settings
@@ -299,8 +356,8 @@ private:
     double L_ = 100e-6;          ///< Membrane thickness [m] (default 100 µm)
     double D_ = 1e-10;           ///< Diffusion coefficient [m²/s]
     double Phi_ = 1.0;           ///< Partition coefficient (dimensionless)
-    double C_left_ = 1.0;        ///< Left (donor) concentration [mol/m³]
-    double C_right_ = 0.0;       ///< Right (receiver) concentration [mol/m³]
+    double C_left_ = 1.0;        ///< Left (donor) concentration [amount/m³]
+    double C_right_ = 0.0;       ///< Right (receiver) concentration [amount/m³]
     bool use_hindered_ = false;  ///< Whether to use hindered diffusion
     double lambda_ = 0.0;        ///< Solute/pore radius ratio
     int num_nodes_ = 101;        ///< Number of output nodes
@@ -327,20 +384,15 @@ public:
      *
      * @param thickness Layer thickness [m]
      * @param diffusivity Diffusion coefficient in layer [m²/s]
-     * @param partition_coefficient Partition coefficient at layer entry
+     * @param partition_coefficient Equilibrium concentration ratio K_i between
+     *        this layer and a common reference solution phase
      * @return Reference to this solver for chaining
      */
     MultiLayerMembraneSolver& addLayer(double thickness, double diffusivity,
                                        double partition_coefficient = 1.0) {
-        if (thickness <= 0.0) {
-            throw std::invalid_argument("Layer thickness must be positive");
-        }
-        if (diffusivity <= 0.0) {
-            throw std::invalid_argument("Diffusivity must be positive");
-        }
-        if (partition_coefficient <= 0.0) {
-            throw std::invalid_argument("Partition coefficient must be positive");
-        }
+        membrane_detail::requirePositive(thickness, "Layer thickness");
+        membrane_detail::requirePositive(diffusivity, "Layer diffusivity");
+        membrane_detail::requirePositive(partition_coefficient, "Layer partition coefficient");
 
         layers_.push_back({thickness, diffusivity, partition_coefficient});
         return *this;
@@ -350,6 +402,7 @@ public:
      * @brief Set the concentration on the left (donor) side.
      */
     MultiLayerMembraneSolver& setLeftConcentration(double C) {
+        membrane_detail::requireNonnegative(C, "Left concentration");
         C_left_ = C;
         return *this;
     }
@@ -358,6 +411,7 @@ public:
      * @brief Set the concentration on the right (receiver) side.
      */
     MultiLayerMembraneSolver& setRightConcentration(double C) {
+        membrane_detail::requireNonnegative(C, "Right concentration");
         C_right_ = C;
         return *this;
     }
@@ -373,9 +427,15 @@ public:
     /**
      * @brief Solve for steady-state flux through composite membrane.
      *
-     * Uses resistance-in-series model:
+     * Uses a local-equilibrium resistance-in-series model. If q is a
+     * reference-phase concentration (equivalently an ideal-dilute activity
+     * coordinate), layer i has C_i = K_i*q and therefore:
      *   R_total = Σ (L_i / (D_i * Φ_i))
      *   j = (C_left - C_right) / R_total
+     *
+     * Adjacent layers can have different K_i, so their membrane-phase
+     * concentrations jump at an interface while q remains continuous. Both
+     * one-sided interface values are returned at the same x coordinate.
      *
      * @return Result with combined flux and total permeability
      */
@@ -391,18 +451,24 @@ public:
             R_total += layer.thickness / (layer.diffusivity * layer.partition);
             L_total += layer.thickness;
         }
+        membrane_detail::requireFiniteResult(R_total, "Total membrane resistance");
+        membrane_detail::requireFiniteResult(L_total, "Total membrane thickness");
+        if (R_total <= 0.0 || L_total <= 0.0) {
+            throw std::overflow_error(
+                "Membrane resistance or thickness underflowed; rescale the input parameters");
+        }
 
         // Steady-state flux
         double flux = (C_left_ - C_right_) / R_total;
 
         // Overall permeability
         double permeability = 1.0 / R_total;
+        membrane_detail::requireFiniteResult(flux, "Composite membrane flux");
+        membrane_detail::requireFiniteResult(permeability, "Composite membrane permeability");
 
         // Generate concentration profile through all layers
-        int nodes_per_layer = 21;
-        int total_nodes =
-            static_cast<int>(layers_.size()) * nodes_per_layer -
-            (static_cast<int>(layers_.size()) - 1);  // Avoid duplicate interface nodes
+        constexpr std::size_t nodes_per_layer = 21;
+        const std::size_t total_nodes = layers_.size() * nodes_per_layer;
 
         std::vector<double> x;
         std::vector<double> concentration;
@@ -410,36 +476,31 @@ public:
         concentration.reserve(total_nodes);
 
         double x_offset = 0.0;
-        double C_interface = C_left_;  // Concentration in solution at left
+        double q_interface = C_left_;  // Common reference-phase concentration
 
         for (size_t layer_idx = 0; layer_idx < layers_.size(); ++layer_idx) {
             const auto& layer = layers_[layer_idx];
 
-            // Concentration at layer entry (with partition)
-            double C_entry = layer.partition * C_interface;
-
-            // Concentration at layer exit
-            double C_exit = C_entry - flux * layer.thickness / layer.diffusivity;
+            const double C_entry = layer.partition * q_interface;
+            const double q_exit =
+                q_interface - flux * layer.thickness / (layer.diffusivity * layer.partition);
+            const double C_exit = layer.partition * q_exit;
 
             // Generate nodes for this layer
-            int start_i = (layer_idx == 0) ? 0 : 1;  // Skip first node except for first layer
-            for (int i = start_i; i < nodes_per_layer; ++i) {
-                double frac = static_cast<double>(i) / (nodes_per_layer - 1);
+            for (std::size_t i = 0; i < nodes_per_layer; ++i) {
+                double frac = static_cast<double>(i) / static_cast<double>(nodes_per_layer - 1);
                 x.push_back(x_offset + frac * layer.thickness);
                 concentration.push_back(C_entry + frac * (C_exit - C_entry));
             }
 
             x_offset += layer.thickness;
 
-            // Update interface concentration for next layer
-            // C in solution at interface = C_exit / partition_current * partition_next
-            if (layer_idx + 1 < layers_.size()) {
-                C_interface = C_exit / layer.partition;
-            }
+            q_interface = q_exit;
         }
 
         // Effective diffusivity (for single equivalent layer)
-        double D_eff = L_total * permeability;
+        const double D_eff = L_total * permeability;
+        membrane_detail::requireFiniteResult(D_eff, "Equivalent membrane diffusivity");
 
         return MembraneDiffusionResult{std::move(x), std::move(concentration), flux, permeability,
                                        D_eff};

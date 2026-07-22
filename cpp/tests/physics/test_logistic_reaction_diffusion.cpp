@@ -1,60 +1,85 @@
+#include "../test_support/science_test.hpp"
+#include <algorithm>
 #include <biotransport/core/mesh/structured_mesh.hpp>
-#include <biotransport/solvers/explicit_fd.hpp>
-#include <cassert>
+#include <biotransport/physics/reactions.hpp>
+#include <biotransport/solvers/diffusion_solvers.hpp>
 #include <cmath>
-#include <iostream>
 #include <vector>
 
 using namespace biotransport;
 
-static double logisticExact(double u0, double r, double K, double t) {
-    // u(t) = K / (1 + (K/u0 - 1) * exp(-r t))
-    const double a = (K / u0) - 1.0;
-    return K / (1.0 + a * std::exp(-r * t));
+namespace {
+
+constexpr double kInitialConcentration = 0.2;
+constexpr double kGrowthRate = 1.25;
+constexpr double kCarryingCapacity = 2.0;
+constexpr double kEndTime = 2.0;
+
+double logisticExact(double initial, double growth_rate, double capacity, double time) {
+    const double ratio = capacity / initial - 1.0;
+    return capacity / (1.0 + ratio * std::exp(-growth_rate * time));
 }
 
-void testLogisticReaction1DMatchesODEForUniformField() {
-    std::cout << "Testing logistic reaction-diffusion (1D) vs logistic ODE..." << std::endl;
+struct UniformRun {
+    double concentration;
+    double spatial_range;
+};
 
-    StructuredMesh mesh(200, 0.0, 1.0);
+UniformRun solveUniformLogistic(double dt) {
+    StructuredMesh mesh(20, 0.0, 1.0);
+    std::vector<double> initial(mesh.numNodes(), kInitialConcentration);
 
-    const double D = 1e-12;  // effectively no diffusion
-    const double r = 1.25;
-    const double K = 2.0;
+    ReactionDiffusionSolver solver(mesh, 1.0e-3,
+                                   reactions::logistic(kGrowthRate, kCarryingCapacity));
+    solver.setInitialCondition(initial);
+    solver.setNeumannBoundary(Boundary::Left, 0.0);
+    solver.setNeumannBoundary(Boundary::Right, 0.0);
 
-    const double u0 = 0.2;
-    std::vector<double> initial(mesh.numNodes(), u0);
+    const int steps = static_cast<int>(std::llround(kEndTime / dt));
+    SCIENCE_REQUIRE_NEAR(steps * dt, kEndTime, 1.0e-14, 0.0, "integrated end time");
+    solver.solve(dt, steps);
 
-    TransportProblem problem(mesh);
-    problem.diffusivity(D)
-        .logisticGrowth(r, K)
-        .initialCondition(initial)
-        .neumann(Boundary::Left, 0.0)
-        .neumann(Boundary::Right, 0.0);
-
-    const double t_end = 2.0;  // dt=1e-3 * 2000 steps
-
-    ExplicitFD solver;
-    auto result = solver.safetyFactor(0.4).run(problem, t_end);
-
-    const double u_exact = logisticExact(u0, r, K, t_end);
-
-    const auto& u = result.solution;
-    const int mid = mesh.nx() / 2;
-
-    const double err = std::abs(u[mid] - u_exact);
-    assert(err < 5e-3);
-
-    // Should remain within physical bounds for these parameters.
-    assert(u[mid] > 0.0);
-    assert(u[mid] < K + 1e-3);
-
-    std::cout << "Logistic ODE agreement test passed!" << std::endl;
+    const auto& solution = solver.solution();
+    const auto range = std::minmax_element(solution.begin(), solution.end());
+    return {solution[mesh.nx() / 2], *range.second - *range.first};
 }
+
+void testUniformFieldMatchesLogisticOde() {
+    // The PDE reduces exactly to the logistic ODE for a uniform field with zero-flux walls.
+    // Explicit Euler is first-order in time, so halving dt should halve the global error.
+    const UniformRun coarse = solveUniformLogistic(0.02);
+    const UniformRun fine = solveUniformLogistic(0.01);
+    const double exact =
+        logisticExact(kInitialConcentration, kGrowthRate, kCarryingCapacity, kEndTime);
+    const double coarse_error = std::abs(coarse.concentration - exact);
+    const double fine_error = std::abs(fine.concentration - exact);
+    const double observed_order = std::log(coarse_error / fine_error) / std::log(2.0);
+    const double fine_relative_error = fine_error / exact;
+
+    science_test::report("exact concentration", exact);
+    science_test::report("dt=0.02 absolute error", coarse_error);
+    science_test::report("dt=0.01 absolute error", fine_error);
+    science_test::report("observed temporal order", observed_order);
+
+    SCIENCE_REQUIRE(fine.concentration > kInitialConcentration,
+                    "positive growth must increase concentration");
+    SCIENCE_REQUIRE(fine.concentration < kCarryingCapacity,
+                    "this trajectory must approach carrying capacity from below");
+    SCIENCE_REQUIRE(fine_relative_error < 3.0e-3,
+                    "dt=0.01 must resolve the analytical trajectory to <0.3% relative error; "
+                    "actual=" +
+                        science_test::number(fine_relative_error));
+    SCIENCE_REQUIRE(observed_order > 0.9 && observed_order < 1.1,
+                    "forward Euler should demonstrate first-order temporal convergence; actual=" +
+                        science_test::number(observed_order));
+    SCIENCE_REQUIRE(coarse.spatial_range < 1.0e-13 && fine.spatial_range < 1.0e-13,
+                    "zero-flux diffusion must preserve a spatially uniform field");
+}
+
+}  // namespace
 
 int main() {
-    testLogisticReaction1DMatchesODEForUniformField();
-
-    std::cout << "All logistic reaction-diffusion tests passed!" << std::endl;
-    return 0;
+    return science_test::runSuite(
+        "logistic reaction-diffusion",
+        {{"uniform PDE reduction agrees with logistic ODE", testUniformFieldMatchesLogisticOde}});
 }

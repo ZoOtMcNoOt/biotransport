@@ -53,9 +53,11 @@ inline double diffusion_1d_semi_infinite(double x, double t, double diffusivity,
 }
 
 /**
- * @brief Penetration depth for diffusion (approximate distance of influence).
+ * @brief Characteristic diffusion length.
  *
- * δ ≈ √(D t)  or more precisely 4√(Dt) for 99% penetration
+ * Returns ℓ_D = √(D t).  This is a scaling length, not a concentration
+ * threshold.  A "penetration depth" is otherwise ambiguous unless the
+ * normalized concentration level is stated.
  *
  * @param diffusivity   Diffusivity D [m²/s]
  * @param t             Time [s]
@@ -66,6 +68,13 @@ inline double diffusion_penetration_depth(double diffusivity, double t) {
         throw std::invalid_argument("diffusivity and time must be non-negative");
     }
     return std::sqrt(diffusivity * t);
+}
+
+/**
+ * @brief Characteristic diffusion length ℓ_D = √(D t).
+ */
+inline double diffusion_length(double diffusivity, double t) {
+    return diffusion_penetration_depth(diffusivity, t);
 }
 
 /**
@@ -91,7 +100,7 @@ inline double lumped_exponential(double C_0, double C_inf, double t, double tau)
 }
 
 // ============================================================================
-// Pipe flow solutions (Poiseuille / Couette)
+// Canonical viscous-flow solutions
 // ============================================================================
 
 /**
@@ -168,10 +177,10 @@ inline double poiseuille_wall_shear(double radius, double dp_dz) {
 }
 
 /**
- * @brief Couette flow velocity profile between parallel plates (pressure-driven).
+ * @brief Plane-Poiseuille velocity between stationary parallel plates.
  *
  * For plates at y = ±h/2 with origin at centerline:
- * vx(y) = (1 / 2μ) × (dp/dx) × (h²/4 - y²)
+ * vx(y) = (-dp/dx) × (H² - y²) / (2μ), where H is the half-height.
  *
  * @param y             Position from centerline [m]
  * @param half_height   Half channel height h/2 [m]
@@ -179,7 +188,8 @@ inline double poiseuille_wall_shear(double radius, double dp_dz) {
  * @param viscosity     Dynamic viscosity μ [Pa·s]
  * @return Velocity vx [m/s]
  */
-inline double couette_velocity(double y, double half_height, double dp_dx, double viscosity) {
+inline double plane_poiseuille_velocity(double y, double half_height, double dp_dx,
+                                        double viscosity) {
     if (viscosity <= 0.0) {
         throw std::invalid_argument("viscosity must be positive");
     }
@@ -187,13 +197,13 @@ inline double couette_velocity(double y, double half_height, double dp_dx, doubl
         throw std::invalid_argument("half_height must be positive");
     }
     if (std::abs(y) > half_height) {
-        return 0.0;  // Outside channel
+        throw std::invalid_argument("y must lie between -half_height and +half_height");
     }
     return (1.0 / (2.0 * viscosity)) * (-dp_dx) * (half_height * half_height - y * y);
 }
 
 /**
- * @brief Maximum velocity in pressure-driven Couette flow (at centerline).
+ * @brief Centerline velocity in plane-Poiseuille flow.
  *
  * v_max = (h² / 8μ) × (-dp/dx)
  *
@@ -202,8 +212,35 @@ inline double couette_velocity(double y, double half_height, double dp_dx, doubl
  * @param viscosity     Dynamic viscosity μ [Pa·s]
  * @return Maximum velocity [m/s]
  */
-inline double couette_max_velocity(double half_height, double dp_dx, double viscosity) {
-    return couette_velocity(0.0, half_height, dp_dx, viscosity);
+inline double plane_poiseuille_max_velocity(double half_height, double dp_dx, double viscosity) {
+    return plane_poiseuille_velocity(0.0, half_height, dp_dx, viscosity);
+}
+
+/**
+ * @brief Couette velocity between one fixed and one translating plate.
+ *
+ * With the fixed plate at y=0 and a plate moving at U at y=H,
+ * u(y) = U y/H.  There is no imposed pressure gradient.
+ */
+inline double couette_velocity(double y, double gap_height, double moving_wall_velocity) {
+    if (gap_height <= 0.0 || !std::isfinite(gap_height)) {
+        throw std::invalid_argument("gap_height must be finite and positive");
+    }
+    if (!std::isfinite(y) || y < 0.0 || y > gap_height) {
+        throw std::invalid_argument("y must lie between 0 and gap_height");
+    }
+    if (!std::isfinite(moving_wall_velocity)) {
+        throw std::invalid_argument("moving_wall_velocity must be finite");
+    }
+    return moving_wall_velocity * y / gap_height;
+}
+
+/** @brief Maximum Couette speed, attained at the moving wall. */
+inline double couette_max_velocity(double moving_wall_velocity) {
+    if (!std::isfinite(moving_wall_velocity)) {
+        throw std::invalid_argument("moving_wall_velocity must be finite");
+    }
+    return moving_wall_velocity;
 }
 
 // ============================================================================

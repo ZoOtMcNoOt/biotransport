@@ -6,6 +6,7 @@ Verifies analytical solutions for steady-state membrane transport:
   P = D * Phi / L
 """
 
+import math
 import unittest
 from biotransport import (
     MembraneDiffusion1DSolver,
@@ -42,7 +43,9 @@ class TestMembraneDiffusion(unittest.TestCase):
 
         self.assertAlmostEqual(result.flux, j_analytical, places=15)
         self.assertAlmostEqual(result.permeability, P_analytical, places=15)
-        self.assertAlmostEqual(result.effective_diffusivity, D, places=15)
+        # This result field is the equivalent coefficient referenced to the
+        # external concentration difference: P*L = D*Phi.
+        self.assertAlmostEqual(result.effective_diffusivity, D * Phi, places=15)
 
     def test_permeability_calculation(self):
         """Test permeability P = D * Phi / L."""
@@ -153,9 +156,11 @@ class TestMembraneDiffusion(unittest.TestCase):
         # Hindered flux should be less
         self.assertLess(result_hindered.flux, result_bulk.flux)
 
-        # Check effective diffusivity is reduced by H factor
+        # Equivalent external-gradient coefficient includes both hindrance and partition.
         H = renkin_hindrance(solute_r / pore_r)
-        self.assertAlmostEqual(result_hindered.effective_diffusivity, D * H, places=15)
+        self.assertAlmostEqual(
+            result_hindered.effective_diffusivity, D * H * Phi, places=15
+        )
 
     def test_multilayer_resistance_series(self):
         """Test multi-layer membrane with resistances in series."""
@@ -226,6 +231,41 @@ class TestMembraneDiffusion(unittest.TestCase):
 
         self.assertAlmostEqual(result.flux, j_expected, places=12)
         self.assertAlmostEqual(result.permeability, P_expected, places=12)
+
+        # Concentration can jump between unlike phases, but C/K (the common
+        # ideal-dilute activity coordinate used by this model) is continuous.
+        x = result.x()
+        concentration = result.concentration()
+        self.assertEqual(len(x), 42)
+        self.assertAlmostEqual(x[20], x[21], places=18)
+        self.assertAlmostEqual(
+            concentration[20] / Phi1, concentration[21] / Phi2, places=12
+        )
+
+    def test_reverse_gradient_reverses_flux(self):
+        """Positive flux is explicitly defined as left to right."""
+        result = (
+            MembraneDiffusion1DSolver()
+            .set_left_concentration(1.0)
+            .set_right_concentration(4.0)
+            .solve()
+        )
+        self.assertLess(result.flux, 0.0)
+
+    def test_invalid_physical_parameters_are_rejected(self):
+        """Reject non-finite or negative inputs instead of propagating nonsense."""
+        with self.assertRaises(ValueError):
+            renkin_hindrance(-0.1)
+        with self.assertRaises(ValueError):
+            MembraneDiffusion1DSolver().set_diffusivity(math.nan)
+        with self.assertRaises(ValueError):
+            MembraneDiffusion1DSolver().set_left_concentration(-1.0)
+        with self.assertRaises(ValueError):
+            MultiLayerMembraneSolver().add_layer(1e-4, 0.0, 1.0)
+
+    def test_multilayer_requires_a_layer(self):
+        with self.assertRaises(RuntimeError):
+            MultiLayerMembraneSolver().solve()
 
     def test_fluent_api_chaining(self):
         """Test that fluent API returns self for chaining."""

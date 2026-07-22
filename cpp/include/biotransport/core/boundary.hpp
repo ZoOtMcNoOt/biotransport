@@ -36,7 +36,7 @@ constexpr int to_index(Boundary b) noexcept {
  */
 enum class BoundaryType {
     DIRICHLET,  ///< Fixed value (e.g., concentration, temperature)
-    NEUMANN,    ///< Fixed flux (e.g., heat flux, mass flux)
+    NEUMANN,    ///< Fixed outward-normal derivative du/dn
     ROBIN       ///< Mixed/Robin: a*u + b*du/dn = c
 };
 
@@ -62,11 +62,17 @@ struct BoundaryCondition {
     }
 
     /**
-     * @brief Create a Neumann (fixed flux) boundary condition.
-     * @param flux The fixed flux at the boundary (positive = outward)
+     * @brief Create a Neumann boundary condition for the outward-normal derivative.
+     *
+     * This is a field gradient, not a physical diffusive flux. A physical flux
+     * also depends on the transport coefficient and uses the opposite sign in
+     * Fick/Fourier conventions. Keeping those concepts distinct prevents unit
+     * and sign mistakes in multi-material problems.
+     *
+     * @param normal_derivative Value of du/dn, positive in the outward direction
      */
-    static BoundaryCondition Neumann(double flux) noexcept {
-        return BoundaryCondition{BoundaryType::NEUMANN, flux, 0.0, 0.0, 0.0};
+    static BoundaryCondition Neumann(double normal_derivative) noexcept {
+        return BoundaryCondition{BoundaryType::NEUMANN, normal_derivative, 0.0, 0.0, 0.0};
     }
 
     /**

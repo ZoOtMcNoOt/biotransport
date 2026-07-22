@@ -1,7 +1,8 @@
-"""Verification: Poiseuille flow analytical solution.
+"""Reference checks and visualization for the Poiseuille closed form.
 
-Compares the analytical Poiseuille velocity profile against itself
-(self-consistency check) and demonstrates the parabolic profile.
+Checks boundary/centerline values and quadrature against independently written
+formulae, then demonstrates the parabolic profile. This does not verify a PDE
+solver or validate blood as a Newtonian fluid.
 
 BMEN 341 Reference: Weeks 3-4 (Viscous Flow, Hagen-Poiseuille equation)
 """
@@ -41,21 +42,21 @@ def verify_poiseuille_profile():
     Q = bt.analytical.poiseuille_flow_rate(R, dp_dz, mu)
 
     print("\nParameters:")
-    print(f"  Radius R = {R*1000:.2f} mm")
+    print(f"  Radius R = {R * 1000:.2f} mm")
     print(f"  Pressure gradient = {dp_dz:.0f} Pa/m")
-    print(f"  Viscosity mu = {mu*1000:.2f} mPa.s")
+    print(f"  Viscosity mu = {mu * 1000:.2f} mPa.s")
 
     print("\nResults:")
-    print(f"  Max velocity (centerline) = {v_max_analytical*100:.4f} cm/s")
+    print(f"  Max velocity (centerline) = {v_max_analytical * 100:.4f} cm/s")
     print(f"  Wall shear stress = {tau_w:.4f} Pa")
-    print(f"  Volume flow rate = {Q*1e9:.4f} mm^3/s")
+    print(f"  Volume flow rate = {Q * 1e9:.4f} mm^3/s")
 
     # Verification checks
     error_vmax = abs(v_max_numerical - v_max_analytical) / v_max_analytical
     error_wall = abs(v[-1]) / v_max_analytical  # Should be zero at wall
 
     print("\nVerification:")
-    print(f"  v_max error: {error_vmax*100:.6f}%")
+    print(f"  v_max error: {error_vmax * 100:.6f}%")
     print(f"  v(R)/v_max: {error_wall:.2e} (should be ~0)")
 
     # Plot
@@ -69,7 +70,7 @@ def verify_poiseuille_profile():
         color="r",
         linestyle="--",
         alpha=0.7,
-        label=f"v_max = {v_max_analytical*100:.3f} cm/s",
+        label=f"v_max = {v_max_analytical * 100:.3f} cm/s",
     )
     ax1.set_xlabel("Radial Position r (mm)")
     ax1.set_ylabel("Velocity v(r) (cm/s)")
@@ -119,7 +120,7 @@ def verify_flow_rate_formula():
 
     print(f"\nQ from biotransport.analytical: {Q_analytical:.6e} m^3/s")
     print(f"Q from piR^4|dp/dz|/(8mu):         {Q_formula:.6e} m^3/s")
-    print(f"Relative error: {error*100:.6e}%")
+    print(f"Relative error: {error * 100:.6e}%")
 
     passed = error < 1e-10
     print(f"\n{'OK PASSED' if passed else 'X FAILED'}: Flow rate formula")
@@ -134,3 +135,5 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print(f"SUMMARY: {sum(results)}/{len(results)} verifications passed")
     print("=" * 60)
+    if not all(results):
+        raise SystemExit(1)

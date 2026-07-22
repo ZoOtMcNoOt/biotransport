@@ -3,6 +3,26 @@ BioTransport - A library for modeling biotransport phenomena
 """
 
 from ._core import (
+    BalanceDimension,
+    BalanceUnit,
+    BalanceTransferDirection,
+    BalanceTerm,
+    BalanceTransfer,
+    BalanceAudit,
+    BalanceLedger,
+    MatchedBalanceTransfer,
+    DimensionBalanceAudit,
+    BalanceReconciliation,
+    balance_dimension_name,
+    balance_unit_symbol,
+    balance_unit_dimension,
+    balance_base_unit,
+    convert_balance_value,
+    reconcile_balances,
+    native_build_info,
+    NonuniformMesh1D,
+    NonuniformDiffusionDiagnostics,
+    NonuniformDiffusion1D,
     StructuredMesh,
     StructuredMesh3D,
     Boundary3D,
@@ -26,6 +46,7 @@ from ._core import (
     ImplicitSolveResult,
     ImplicitDiffusion2D,
     ImplicitDiffusion3D,
+    sparse_matrix_available,
     ConstantSourceReactionDiffusionSolver,
     LinearReactionDiffusionSolver,
     LogisticReactionDiffusionSolver,
@@ -45,6 +66,10 @@ from ._core import (
     ExplicitFD,
     RunResult,
     SolverStats,
+    SolveOptions,
+    SolveDiagnostics,
+    TransportResult,
+    solve_transport,
     # Advection-diffusion (Phase 2)
     AdvectionScheme,
     AdvectionDiffusionSolver,
@@ -85,6 +110,7 @@ from ._core import (
     blood_casson_model,
     blood_carreau_model,
     pipe_wall_shear_rate,
+    apparent_viscosity_pipe,
     # I/O and visualization (C++ version - single array API)
     write_vtk_series_with_metadata,
     # Multi-species reaction-diffusion
@@ -204,11 +230,17 @@ from .high_order import (
     ddx,
     HighOrderDiffusionSolver,
     HighOrderResult,
+    RungeKuttaResult,
+    integrate_explicit_runge_kutta,
     verify_order_of_accuracy,
 )
 
 # Newton-Raphson iteration for nonlinear steady-state problems
 from .newton_raphson import (
+    NewtonSolverError,
+    NewtonEvaluationError,
+    NewtonLinearSolveError,
+    NewtonLineSearchError,
     NewtonRaphsonSolver,
     NonlinearDiffusionSolver,
     NewtonResult,
@@ -218,6 +250,49 @@ from .newton_raphson import (
     bistable,
     exponential_decay,
 )
+
+# Discoverable, science-scoped API namespaces.
+from . import (
+    analysis,
+    applications,
+    contracts,
+    diffusion,
+    electrochem,
+    flow,
+    provenance,
+    reproducibility,
+    units,
+)
+from .analysis import (
+    ParameterRange,
+    latin_hypercube,
+    local_sensitivity,
+    parameter_sweep,
+    propagate_uncertainty,
+    standardized_regression_coefficients,
+)
+from .contracts import (
+    SolverContract,
+    filter_contracts,
+    get_contract,
+    list_contracts,
+    registry_as_dict,
+)
+from .provenance import (
+    ParameterProvenance,
+    ParameterSetProvenance,
+    illustrative_parameter_set,
+)
+from .reproducibility import (
+    balance_residual,
+    convergence_table,
+    create_manifest,
+    freeze_config,
+    load_manifest,
+    method_metadata,
+    write_manifest,
+)
+from .units import Dimension, Quantity, Unit, convert, quantity
 
 # ============================================================================
 # User-friendly aliases
@@ -234,6 +309,64 @@ AdvectionDiffusionProblem = TransportProblem
 __version__ = "0.1.0"
 
 __all__ = [
+    # ========== Discoverable namespaces ==========
+    "diffusion",
+    "electrochem",
+    "flow",
+    "applications",
+    "analysis",
+    "contracts",
+    "provenance",
+    "reproducibility",
+    "units",
+    # ========== Scientific workflow helpers ==========
+    "Dimension",
+    "Quantity",
+    "Unit",
+    "quantity",
+    "convert",
+    "ParameterRange",
+    "parameter_sweep",
+    "local_sensitivity",
+    "latin_hypercube",
+    "propagate_uncertainty",
+    "standardized_regression_coefficients",
+    "ParameterProvenance",
+    "ParameterSetProvenance",
+    "illustrative_parameter_set",
+    "SolverContract",
+    "get_contract",
+    "list_contracts",
+    "filter_contracts",
+    "registry_as_dict",
+    "freeze_config",
+    "method_metadata",
+    "convergence_table",
+    "balance_residual",
+    "create_manifest",
+    "write_manifest",
+    "load_manifest",
+    # ========== Scientific balance accounting ==========
+    "BalanceDimension",
+    "BalanceUnit",
+    "BalanceTransferDirection",
+    "BalanceTerm",
+    "BalanceTransfer",
+    "BalanceAudit",
+    "BalanceLedger",
+    "MatchedBalanceTransfer",
+    "DimensionBalanceAudit",
+    "BalanceReconciliation",
+    "balance_dimension_name",
+    "balance_unit_symbol",
+    "balance_unit_dimension",
+    "balance_base_unit",
+    "convert_balance_value",
+    "reconcile_balances",
+    "native_build_info",
+    "NonuniformMesh1D",
+    "NonuniformDiffusionDiagnostics",
+    "NonuniformDiffusion1D",
     # ========== Core (most commonly used) ==========
     "Problem",  # The main problem builder (alias for TransportProblem)
     "solve",  # Simplest way to run a simulation
@@ -261,6 +394,10 @@ __all__ = [
     "BoundaryCondition",
     "RunResult",
     "SolverStats",
+    "SolveOptions",
+    "SolveDiagnostics",
+    "TransportResult",
+    "solve_transport",
     "run",
     "run_checkpoints",
     # ========== Adaptive time-stepping ==========
@@ -310,6 +447,8 @@ __all__ = [
     "ddx",
     "HighOrderDiffusionSolver",
     "HighOrderResult",
+    "RungeKuttaResult",
+    "integrate_explicit_runge_kutta",
     "verify_order_of_accuracy",
     # ========== Plotting variants ==========
     "plot_field",
@@ -346,6 +485,7 @@ __all__ = [
     "ImplicitSolveResult",
     "ImplicitDiffusion2D",
     "ImplicitDiffusion3D",
+    "sparse_matrix_available",
     "ConstantSourceReactionDiffusionSolver",
     "LinearReactionDiffusionSolver",
     "LogisticReactionDiffusionSolver",
@@ -392,6 +532,7 @@ __all__ = [
     "blood_casson_model",
     "blood_carreau_model",
     "pipe_wall_shear_rate",
+    "apparent_viscosity_pipe",
     # ========== Utilities ==========
     "get_results_dir",
     "get_result_path",
@@ -424,6 +565,10 @@ __all__ = [
     "ions",
     "ghk",
     # ========== Newton-Raphson nonlinear solvers ==========
+    "NewtonSolverError",
+    "NewtonEvaluationError",
+    "NewtonLinearSolveError",
+    "NewtonLineSearchError",
     "NewtonRaphsonSolver",
     "NonlinearDiffusionSolver",
     "NewtonResult",

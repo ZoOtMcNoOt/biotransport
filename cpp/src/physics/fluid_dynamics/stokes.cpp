@@ -7,33 +7,98 @@
 #include <biotransport/physics/fluid_dynamics/stokes.hpp>
 #include <biotransport/physics/fluid_dynamics/velocity_bc_applicator.hpp>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 namespace biotransport {
+
+namespace {
+
+int checkedBoundary(Boundary side) {
+    const int index = to_index(side);
+    if (index < to_index(Boundary::Left) || index > to_index(Boundary::Top)) {
+        throw std::invalid_argument("Boundary identifier is outside [0, 3]");
+    }
+    return index;
+}
+
+void requireFinite(double value, const char* name) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument(std::string(name) + " must be finite");
+    }
+}
+
+void requireFiniteNumerical(double value, const char* name) {
+    if (!std::isfinite(value)) {
+        throw std::runtime_error(std::string(name) + " became non-finite");
+    }
+}
+
+void requireFiniteField(const std::vector<double>& values, const char* name) {
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (!std::isfinite(values[index])) {
+            throw std::runtime_error(std::string(name) + " contains a non-finite value at " +
+                                     std::to_string(index));
+        }
+    }
+}
+
+void validateVelocityBC(const VelocityBC& bc) {
+    requireFinite(bc.u_value, "Velocity boundary u value");
+    requireFinite(bc.v_value, "Velocity boundary v value");
+    switch (bc.type) {
+        case VelocityBCType::NOSLIP:
+        case VelocityBCType::DIRICHLET:
+        case VelocityBCType::INFLOW:
+        case VelocityBCType::OUTFLOW:
+            return;
+        case VelocityBCType::NEUMANN:
+            throw std::invalid_argument(
+                "StressFree/NEUMANN traction is not implemented by StokesSolver");
+        default:
+            throw std::invalid_argument("Unknown velocity boundary-condition type");
+    }
+}
+
+}  // namespace
 
 StokesSolver::StokesSolver(const StructuredMesh& mesh, double viscosity)
     : mesh_(mesh), mu_(viscosity) {
     if (mesh.is1D()) {
         throw std::invalid_argument("StokesSolver requires a 2D mesh");
     }
-    if (viscosity <= 0.0) {
-        throw std::invalid_argument("Viscosity must be positive");
+    if (mesh.nx() < 2 || mesh.ny() < 2) {
+        throw std::invalid_argument("StokesSolver requires at least two cells in each direction");
+    }
+    if (!std::isfinite(viscosity) || viscosity <= 0.0) {
+        throw std::invalid_argument("Viscosity must be finite and positive");
     }
 }
 
 StokesSolver& StokesSolver::setVelocityBC(Boundary side, VelocityBC bc) {
-    velocity_bcs_[static_cast<int>(side)] = bc;
+    validateVelocityBC(bc);
+    velocity_bcs_[checkedBoundary(side)] = bc;
     return *this;
 }
 
 StokesSolver& StokesSolver::setBodyForce(std::function<double(double x, double y)> fx,
                                          std::function<double(double x, double y)> fy) {
-    fx_ = fx;
-    fy_ = fy;
+    if (!fx || !fy) {
+        throw std::invalid_argument("Body-force callbacks must both be callable");
+    }
+    fx_ = std::move(fx);
+    fy_ = std::move(fy);
+    has_uniform_body_force_ = false;
+    uniform_fx_ = 0.0;
+    uniform_fy_ = 0.0;
     return *this;
 }
 
 StokesSolver& StokesSolver::setBodyForce(double fx, double fy) {
+    requireFinite(fx, "x body force");
+    requireFinite(fy, "y body force");
     double fx_val = fx;
     double fy_val = fy;
     fx_ = [fx_val](double, double) {
@@ -42,27 +107,72 @@ StokesSolver& StokesSolver::setBodyForce(double fx, double fy) {
     fy_ = [fy_val](double, double) {
         return fy_val;
     };
+    has_uniform_body_force_ = true;
+    uniform_fx_ = fx_val;
+    uniform_fy_ = fy_val;
     return *this;
 }
 
 StokesSolver& StokesSolver::setTolerance(double tol) {
+    if (!std::isfinite(tol) || tol <= 0.0) {
+        throw std::invalid_argument("Stokes tolerance must be finite and positive");
+    }
     tolerance_ = tol;
     return *this;
 }
 
 StokesSolver& StokesSolver::setMaxIterations(int max_iter) {
+    if (max_iter <= 0) {
+        throw std::invalid_argument("Stokes maximum iterations must be positive");
+    }
     max_iter_ = max_iter;
     return *this;
 }
 
 StokesSolver& StokesSolver::setPressureRelaxation(double omega_p) {
+    if (!std::isfinite(omega_p) || omega_p <= 0.0 || omega_p > 1.0) {
+        throw std::invalid_argument("Pressure relaxation must be finite and in (0, 1]");
+    }
     omega_p_ = omega_p;
     return *this;
 }
 
 StokesSolver& StokesSolver::setVelocityRelaxation(double omega_v) {
+    if (!std::isfinite(omega_v) || omega_v <= 0.0 || omega_v > 1.0) {
+        throw std::invalid_argument("Velocity relaxation must be finite and in (0, 1]");
+    }
     omega_v_ = omega_v;
     return *this;
+}
+
+double StokesSolver::reynolds(double L, double U, double rho) const {
+    requireFinite(L, "Characteristic length");
+    requireFinite(U, "Characteristic velocity");
+    requireFinite(rho, "Fluid density");
+    if (L <= 0.0 || U < 0.0 || rho <= 0.0) {
+        throw std::invalid_argument("Reynolds scales require L > 0, U >= 0, and rho > 0");
+    }
+    const double value = rho * U * L / mu_;
+    if (!std::isfinite(value)) {
+        throw std::overflow_error("Reynolds number is not finite");
+    }
+    return value;
+}
+
+double StokesSolver::bodyForceX(double x, double y) const {
+    const double value = fx_(x, y);
+    if (!std::isfinite(value)) {
+        throw std::domain_error("x body-force callback returned a non-finite value");
+    }
+    return value;
+}
+
+double StokesSolver::bodyForceY(double x, double y) const {
+    const double value = fy_(x, y);
+    if (!std::isfinite(value)) {
+        throw std::domain_error("y body-force callback returned a non-finite value");
+    }
+    return value;
 }
 
 void StokesSolver::applyVelocityBCs(std::vector<double>& u, std::vector<double>& v) const {
@@ -88,9 +198,8 @@ void StokesSolver::solveMomentum(std::vector<double>& u, std::vector<double>& v,
     // Gauss-Seidel iterations for momentum equations
     for (int gs_iter = 0; gs_iter < 20; ++gs_iter) {
         // Solve for u-velocity (x-momentum): 0 = -dp/dx + mu*lap(u) + fx
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
-#pragma omp parallel for schedule(static)
-#endif
+        // This sweep is intentionally serial because neighboring updates are
+        // data-dependent in an in-place Gauss-Seidel iteration.
         for (int j = 1; j < ny; ++j) {
             for (int i = 1; i < nx; ++i) {
                 int idx = j * stride + i;
@@ -108,20 +217,20 @@ void StokesSolver::solveMomentum(std::vector<double>& u, std::vector<double>& v,
                 double dpdx = (p[idx + 1] - p[idx - 1]) / (2.0 * dx);
 
                 // Body force
-                double fx = fx_(x, y_coord);
+                double fx = bodyForceX(x, y_coord);
 
                 // Solve: a_p * u = u_neighbors - dpdx + fx
                 double u_new = (u_neighbors - dpdx + fx) / a_p;
+                requireFiniteNumerical(u_new, "Stokes u-momentum iterate");
 
                 // Under-relaxation update
                 u[idx] = (1.0 - omega_v_) * u[idx] + omega_v_ * u_new;
+                requireFiniteNumerical(u[idx], "Stokes relaxed u velocity");
             }
         }
 
         // Solve for v-velocity (y-momentum): 0 = -dp/dy + mu*lap(v) + fy
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
-#pragma omp parallel for schedule(static)
-#endif
+        // Keep the same deterministic Gauss-Seidel ordering as u-velocity.
         for (int j = 1; j < ny; ++j) {
             for (int i = 1; i < nx; ++i) {
                 int idx = j * stride + i;
@@ -139,13 +248,15 @@ void StokesSolver::solveMomentum(std::vector<double>& u, std::vector<double>& v,
                 double dpdy = (p[idx + stride] - p[idx - stride]) / (2.0 * dy);
 
                 // Body force
-                double fy = fy_(x, y_coord);
+                double fy = bodyForceY(x, y_coord);
 
                 // Solve: a_p * v = v_neighbors - dpdy + fy
                 double v_new = (v_neighbors - dpdy + fy) / a_p;
+                requireFiniteNumerical(v_new, "Stokes v-momentum iterate");
 
                 // Under-relaxation update
                 v[idx] = (1.0 - omega_v_) * v[idx] + omega_v_ * v_new;
+                requireFiniteNumerical(v[idx], "Stokes relaxed v velocity");
             }
         }
     }
@@ -177,34 +288,8 @@ void StokesSolver::solvePressurePoisson(std::vector<double>& p, const std::vecto
     for (int iter = 0; iter < 200; ++iter) {
         double max_correction = 0.0;
 
-// MSVC OpenMP doesn't support max reduction, use critical section
-#if defined(_MSC_VER) && defined(BIOTRANSPORT_ENABLE_OPENMP)
-#pragma omp parallel for schedule(static)
-        for (int j = 1; j < ny; ++j) {
-            double local_max = 0.0;
-            for (int i = 1; i < nx; ++i) {
-                int idx = j * stride + i;
-
-                // Divergence of velocity at cell center (central difference)
-                double div_u = (u[idx + 1] - u[idx - 1]) / (2.0 * dx) +
-                               (v[idx + stride] - v[idx - stride]) / (2.0 * dy);
-
-                // Neighbor pressure contributions
-                double p_neighbors =
-                    a_ew * (p[idx - 1] + p[idx + 1]) + a_ns * (p[idx - stride] + p[idx + stride]);
-
-                // Solve: lap(p) = scale * div(u)
-                // This drives pressure to enforce continuity
-                double p_new = (p_neighbors - scale * div_u) / a_p;
-                double correction = p_new - p[idx];
-                p[idx] = p[idx] + omega_sor * correction;
-                local_max = std::max(local_max, std::abs(correction));
-            }
-#pragma omp critical
-            max_correction = std::max(max_correction, local_max);
-        }
-#elif defined(BIOTRANSPORT_ENABLE_OPENMP)
-#pragma omp parallel for schedule(static) reduction(max : max_correction)
+        // Pressure SOR has the same in-place neighbor dependency as the
+        // momentum sweeps, so it must not be parallelized by rows.
         for (int j = 1; j < ny; ++j) {
             for (int i = 1; i < nx; ++i) {
                 int idx = j * stride + i;
@@ -221,32 +306,13 @@ void StokesSolver::solvePressurePoisson(std::vector<double>& p, const std::vecto
                 // This drives pressure to enforce continuity
                 double p_new = (p_neighbors - scale * div_u) / a_p;
                 double correction = p_new - p[idx];
+                requireFiniteNumerical(p_new, "Stokes pressure iterate");
+                requireFiniteNumerical(correction, "Stokes pressure correction");
                 p[idx] = p[idx] + omega_sor * correction;
+                requireFiniteNumerical(p[idx], "Stokes relaxed pressure");
                 max_correction = std::max(max_correction, std::abs(correction));
             }
         }
-#else
-        for (int j = 1; j < ny; ++j) {
-            for (int i = 1; i < nx; ++i) {
-                int idx = j * stride + i;
-
-                // Divergence of velocity at cell center (central difference)
-                double div_u = (u[idx + 1] - u[idx - 1]) / (2.0 * dx) +
-                               (v[idx + stride] - v[idx - stride]) / (2.0 * dy);
-
-                // Neighbor pressure contributions
-                double p_neighbors =
-                    a_ew * (p[idx - 1] + p[idx + 1]) + a_ns * (p[idx - stride] + p[idx + stride]);
-
-                // Solve: lap(p) = scale * div(u)
-                // This drives pressure to enforce continuity
-                double p_new = (p_neighbors - scale * div_u) / a_p;
-                double correction = p_new - p[idx];
-                p[idx] = p[idx] + omega_sor * correction;
-                max_correction = std::max(max_correction, std::abs(correction));
-            }
-        }
-#endif
 
         // Neumann BCs for pressure (dp/dn = 0)
         applyPressureNeumannBCs(mesh_, p);
@@ -318,13 +384,16 @@ double StokesSolver::computeMomentumResidual(const std::vector<double>& u,
             double lap_u = (u[idx - 1] - 2.0 * u[idx] + u[idx + 1]) / dx2 +
                            (u[idx - stride] - 2.0 * u[idx] + u[idx + stride]) / dy2;
             double dpdx = (p[idx + 1] - p[idx - 1]) / (2.0 * dx);
-            double res_u = -dpdx + mu_ * lap_u + fx_(x, y);
+            double res_u = -dpdx + mu_ * lap_u + bodyForceX(x, y);
 
             // y-momentum residual
             double lap_v = (v[idx - 1] - 2.0 * v[idx] + v[idx + 1]) / dx2 +
                            (v[idx - stride] - 2.0 * v[idx] + v[idx + stride]) / dy2;
             double dpdy = (p[idx + stride] - p[idx - stride]) / (2.0 * dy);
-            double res_v = -dpdy + mu_ * lap_v + fy_(x, y);
+            double res_v = -dpdy + mu_ * lap_v + bodyForceY(x, y);
+
+            requireFiniteNumerical(res_u, "Stokes x-momentum residual");
+            requireFiniteNumerical(res_v, "Stokes y-momentum residual");
 
             max_res = std::max(max_res, std::abs(res_u));
             max_res = std::max(max_res, std::abs(res_v));
@@ -349,6 +418,7 @@ double StokesSolver::computeDivergence(const std::vector<double>& u,
             int idx = j * stride + i;
             double div = (u[idx + 1] - u[idx - 1]) / (2.0 * dx) +
                          (v[idx + stride] - v[idx - stride]) / (2.0 * dy);
+            requireFiniteNumerical(div, "Stokes velocity divergence");
             max_div = std::max(max_div, std::abs(div));
         }
     }
@@ -367,6 +437,19 @@ StokesResult StokesSolver::solve() const {
     double dy2 = dy * dy;
     double Ly = ny * dy;        // Domain length in y
     double y0 = mesh_.y(0, 0);  // y at bottom boundary
+    requireFiniteNumerical(Ly, "Stokes domain height");
+    if (Ly <= 0.0) {
+        throw std::invalid_argument("Stokes mesh must have a positive y extent");
+    }
+
+    // Validate callback-defined force fields over their declared nodal domain
+    // before starting an iterative solve.
+    for (int j = 0; j <= ny; ++j) {
+        for (int i = 0; i <= nx; ++i) {
+            (void)bodyForceX(mesh_.x(i), mesh_.y(i, j));
+            (void)bodyForceY(mesh_.x(i), mesh_.y(i, j));
+        }
+    }
 
     // Initialize fields
     std::vector<double> u(num_nodes, 0.0);
@@ -395,9 +478,57 @@ StokesResult StokesSolver::solve() const {
 
     // Apply initial BCs
     applyVelocityBCs(u, v);
+    requireFiniteField(u, "Initial Stokes u field");
+    requireFiniteField(v, "Initial Stokes v field");
 
-    StokesResult result;
+    StokesResult result{};
     result.converged = false;
+    result.residual = std::numeric_limits<double>::infinity();
+    result.divergence = std::numeric_limits<double>::infinity();
+
+    const bool sealed_no_slip =
+        std::all_of(velocity_bcs_.begin(), velocity_bcs_.end(),
+                    [](const VelocityBC& bc) { return bc.type == VelocityBCType::NOSLIP; });
+    if (sealed_no_slip && has_uniform_body_force_) {
+        // A spatially uniform force is conservative: f = grad(f dot x).
+        // In a sealed no-slip domain the exact steady solution is therefore
+        // zero velocity with pressure p = f dot x.  Construct it directly
+        // instead of forcing the generic pressure-correction iteration to use
+        // an incompatible zero-normal-pressure-gradient wall approximation.
+        long double pressure_sum = 0.0L;
+        for (int j = 0; j <= ny; ++j) {
+            for (int i = 0; i <= nx; ++i) {
+                const int idx = j * stride + i;
+                const long double pressure = static_cast<long double>(uniform_fx_) * mesh_.x(i) +
+                                             static_cast<long double>(uniform_fy_) * mesh_.y(i, j);
+                if (!std::isfinite(pressure) ||
+                    std::abs(pressure) > std::numeric_limits<double>::max()) {
+                    throw std::overflow_error("Hydrostatic Stokes pressure is not finite");
+                }
+                p[idx] = static_cast<double>(pressure);
+                pressure_sum += pressure;
+            }
+        }
+
+        const long double pressure_mean = pressure_sum / static_cast<long double>(num_nodes);
+        if (!std::isfinite(pressure_mean) ||
+            std::abs(pressure_mean) > std::numeric_limits<double>::max()) {
+            throw std::overflow_error("Hydrostatic Stokes pressure gauge is not finite");
+        }
+        for (double& value : p) {
+            value -= static_cast<double>(pressure_mean);
+            requireFiniteNumerical(value, "Hydrostatic Stokes pressure");
+        }
+
+        result.u = std::move(u);
+        result.v = std::move(v);
+        result.pressure = std::move(p);
+        result.iterations = 1;
+        result.residual = computeMomentumResidual(result.u, result.v, result.pressure);
+        result.divergence = computeDivergence(result.u, result.v);
+        result.converged = true;
+        return result;
+    }
 
     // Coefficients for momentum equation (collocated grid)
     // Stokes: -dp/dx + mu*lap(u) + fx = 0
@@ -435,17 +566,21 @@ StokesResult StokesSolver::solve() const {
                     double u_neighbors = a_ew * (u[idx - 1] + u[idx + 1]) +
                                          a_ns * (u[idx - stride] + u[idx + stride]);
                     double dpdx = (p[idx + 1] - p[idx - 1]) / (2.0 * dx);
-                    double fx = fx_(x, y_coord);
+                    double fx = bodyForceX(x, y_coord);
                     double u_new = (u_neighbors - dpdx + fx) / a_p;
+                    requireFiniteNumerical(u_new, "Stokes u-momentum iterate");
                     u[idx] = (1.0 - omega_v_) * u[idx] + omega_v_ * u_new;
+                    requireFiniteNumerical(u[idx], "Stokes relaxed u velocity");
 
                     // v-momentum: a_p*v = a_nb*v_nb - dp/dy + fy
                     double v_neighbors = a_ew * (v[idx - 1] + v[idx + 1]) +
                                          a_ns * (v[idx - stride] + v[idx + stride]);
                     double dpdy = (p[idx + stride] - p[idx - stride]) / (2.0 * dy);
-                    double fy = fy_(x, y_coord);
+                    double fy = bodyForceY(x, y_coord);
                     double v_new = (v_neighbors - dpdy + fy) / a_p;
+                    requireFiniteNumerical(v_new, "Stokes v-momentum iterate");
                     v[idx] = (1.0 - omega_v_) * v[idx] + omega_v_ * v_new;
+                    requireFiniteNumerical(v[idx], "Stokes relaxed v velocity");
                 }
             }
             applyVelocityBCs(u, v);
@@ -473,7 +608,10 @@ StokesResult StokesSolver::solve() const {
                     // Solve: p_a_p * p' = p_neighbors - div_u
                     double p_new = (p_neighbors - div_u) / p_a_p;
                     double corr = p_new - p_prime[idx];
+                    requireFiniteNumerical(p_new, "Stokes pressure-correction iterate");
+                    requireFiniteNumerical(corr, "Stokes pressure-correction update");
                     p_prime[idx] = p_prime[idx] + 0.8 * corr;  // SOR with omega < 1 for stability
+                    requireFiniteNumerical(p_prime[idx], "Stokes relaxed pressure correction");
                     max_corr = std::max(max_corr, std::abs(corr));
                 }
             }
@@ -500,14 +638,17 @@ StokesResult StokesSolver::solve() const {
             }
         }
         p_mean /= ((nx - 1) * (ny - 1));
+        requireFiniteNumerical(p_mean, "Stokes pressure-correction mean");
         for (size_t i = 0; i < p_prime.size(); ++i) {
             p_prime[i] -= p_mean;
         }
+        requireFiniteField(p_prime, "Stokes pressure-correction field");
 
         // Step 3: Update pressure with under-relaxation
         for (size_t i = 0; i < p.size(); ++i) {
             p[i] += omega_p_ * p_prime[i];
         }
+        requireFiniteField(p, "Stokes pressure field");
 
         // Step 4: Correct velocities to satisfy continuity
         // u' = -d_u * dp'/dx, v' = -d_u * dp'/dy
@@ -518,6 +659,8 @@ StokesResult StokesSolver::solve() const {
                 double dp_dy = (p_prime[idx + stride] - p_prime[idx - stride]) / (2.0 * dy);
                 u[idx] -= d_u * dp_dx;
                 v[idx] -= d_u * dp_dy;
+                requireFiniteNumerical(u[idx], "Corrected Stokes u velocity");
+                requireFiniteNumerical(v[idx], "Corrected Stokes v velocity");
             }
         }
         applyVelocityBCs(u, v);
@@ -529,15 +672,20 @@ StokesResult StokesSolver::solve() const {
             max_u_change = std::max(max_u_change, std::abs(v[i] - v_old[i]));
         }
         double div_res = computeDivergence(u, v);
+        double momentum_res = computeMomentumResidual(u, v, p);
+        requireFiniteNumerical(max_u_change, "Stokes velocity iteration change");
+        requireFiniteNumerical(div_res, "Stokes divergence residual");
+        requireFiniteNumerical(momentum_res, "Stokes momentum residual");
 
         result.iterations = iter + 1;
-        result.residual = max_u_change;
+        // StokesResult::residual is the discrete momentum-equation defect,
+        // not the change in velocity between nonlinear iterations.
+        result.residual = momentum_res;
         result.divergence = div_res;
 
         // Check for divergence (blow-up detection)
-        if (max_u_change > 1e10 || std::isnan(max_u_change)) {
-            result.converged = false;
-            break;
+        if (max_u_change > 1e10) {
+            throw std::runtime_error("Stokes velocity iteration diverged");
         }
 
         if (max_u_change < tolerance_ && div_res < tolerance_) {
@@ -546,9 +694,20 @@ StokesResult StokesSolver::solve() const {
         }
     }
 
+    if (!result.converged) {
+        throw std::runtime_error(
+            "Stokes solve did not converge in " + std::to_string(max_iter_) +
+            " iterations; momentum residual=" + std::to_string(result.residual) +
+            ", divergence=" + std::to_string(result.divergence));
+    }
+
     result.u = std::move(u);
     result.v = std::move(v);
     result.pressure = std::move(p);
+
+    requireFiniteField(result.u, "Final Stokes u field");
+    requireFiniteField(result.v, "Final Stokes v field");
+    requireFiniteField(result.pressure, "Final Stokes pressure field");
 
     return result;
 }

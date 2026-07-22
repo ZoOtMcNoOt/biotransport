@@ -3,7 +3,10 @@ Configuration Classes
 
 .. currentmodule:: biotransport
 
-Multi-physics solver configurations are Python dataclasses with documented parameters.
+Multi-physics solver configurations are validated Python dataclasses that feed
+the C++ numerical kernels.  Temperature-bearing bioheat names include ``_K``;
+use ``BioheatCryotherapyConfig.from_celsius(...)`` for explicit Celsius input.
+No default is a universal physiological recommendation.
 
 
 Bioheat Cryotherapy
@@ -11,7 +14,6 @@ Bioheat Cryotherapy
 
 .. autoclass:: BioheatCryotherapyConfig
    :members:
-   :undoc-members:
 
 
 Tumor Drug Delivery
@@ -19,7 +21,6 @@ Tumor Drug Delivery
 
 .. autoclass:: TumorDrugDeliveryConfig
    :members:
-   :undoc-members:
 
 
 Utilities

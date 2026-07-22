@@ -27,33 +27,114 @@
 #include <biotransport/solvers/explicit_fd.hpp>
 #include <biotransport/solvers/multi_species_solver.hpp>
 #include <biotransport/solvers/nernst_planck_solver.hpp>
+#include <cmath>
+#include <string>
 
 namespace biotransport {
 namespace bindings {
+
+namespace {
+
+Boundary checkedBoundary(int boundary_id) {
+    if (boundary_id < to_index(Boundary::Left) || boundary_id > to_index(Boundary::Top)) {
+        throw py::value_error("boundary_id must be between 0 (Left) and 3 (Top)");
+    }
+    return static_cast<Boundary>(boundary_id);
+}
+
+Boundary3D checkedBoundary3D(int boundary_id) {
+    constexpr int first_boundary = static_cast<int>(Boundary3D::XMin);
+    constexpr int last_boundary = static_cast<int>(Boundary3D::ZMax);
+    if (boundary_id < first_boundary || boundary_id > last_boundary) {
+        throw py::value_error("boundary_id must be between 0 (XMin) and 5 (ZMax)");
+    }
+    return static_cast<Boundary3D>(boundary_id);
+}
+
+void copyPythonReactionRates(py::handle values, std::vector<double>& rates,
+                             const char* value_source) {
+    if (py::isinstance<py::array>(values)) {
+        const auto array = py::reinterpret_borrow<py::array>(values);
+        if (array.ndim() != 1) {
+            throw py::value_error(std::string("reaction callback ") + value_source +
+                                  " must be one-dimensional; got " + std::to_string(array.ndim()) +
+                                  " dimensions");
+        }
+    }
+
+    if (PyUnicode_Check(values.ptr()) || PyBytes_Check(values.ptr()) ||
+        !PySequence_Check(values.ptr())) {
+        throw py::type_error(
+            "reaction callback must return None after mutating rates, or return a "
+            "one-dimensional numeric sequence");
+    }
+
+    const auto sequence = py::reinterpret_borrow<py::sequence>(values);
+    const auto actual_size = static_cast<std::size_t>(py::len(sequence));
+    for (std::size_t i = 0; i < actual_size; ++i) {
+        const py::object item = sequence[static_cast<py::ssize_t>(i)];
+        if (!PyUnicode_Check(item.ptr()) && !PyBytes_Check(item.ptr()) &&
+            PySequence_Check(item.ptr())) {
+            throw py::value_error(std::string("reaction callback ") + value_source +
+                                  " must be one-dimensional");
+        }
+    }
+    if (actual_size != rates.size()) {
+        throw py::value_error(std::string("reaction callback ") + value_source + " contains " +
+                              std::to_string(actual_size) + " rates; expected exactly " +
+                              std::to_string(rates.size()));
+    }
+
+    std::vector<double> validated_rates(rates.size());
+    for (std::size_t i = 0; i < rates.size(); ++i) {
+        try {
+            validated_rates[i] = py::cast<double>(sequence[static_cast<py::ssize_t>(i)]);
+        } catch (const py::cast_error&) {
+            throw py::type_error("reaction callback rate at index " + std::to_string(i) +
+                                 " must be a real number");
+        }
+        if (!std::isfinite(validated_rates[i])) {
+            throw py::value_error("reaction callback rate at index " + std::to_string(i) +
+                                  " must be finite");
+        }
+    }
+    rates = std::move(validated_rates);
+}
+
+}  // namespace
 
 void register_diffusion_bindings(py::module_& m) {
     // =========================================================================
     // DiffusionSolver (base class)
     // =========================================================================
     py::class_<DiffusionSolver>(m, "DiffusionSolver")
-        .def(py::init<const StructuredMesh&, double>(), py::arg("mesh"), py::arg("diffusivity"))
+        .def(py::init<const StructuredMesh&, double>(), py::arg("mesh"), py::arg("diffusivity"),
+             py::keep_alive<1, 2>())
         .def("set_initial_condition", &DiffusionSolver::setInitialCondition, py::arg("values"))
-        .def("set_dirichlet_boundary",
-             py::overload_cast<int, double>(&DiffusionSolver::setDirichletBoundary),
-             py::arg("boundary_id"), py::arg("value"))
+        .def(
+            "set_dirichlet_boundary",
+            [](DiffusionSolver& solver, int boundary_id, double value) {
+                solver.setDirichletBoundary(checkedBoundary(boundary_id), value);
+            },
+            py::arg("boundary_id"), py::arg("value"))
         .def("set_dirichlet_boundary",
              py::overload_cast<Boundary, double>(&DiffusionSolver::setDirichletBoundary),
              py::arg("boundary"), py::arg("value"))
-        .def("set_neumann_boundary",
-             py::overload_cast<int, double>(&DiffusionSolver::setNeumannBoundary),
-             py::arg("boundary_id"), py::arg("flux"))
+        .def(
+            "set_neumann_boundary",
+            [](DiffusionSolver& solver, int boundary_id, double flux) {
+                solver.setNeumannBoundary(checkedBoundary(boundary_id), flux);
+            },
+            py::arg("boundary_id"), py::arg("flux"))
         .def("set_neumann_boundary",
              py::overload_cast<Boundary, double>(&DiffusionSolver::setNeumannBoundary),
              py::arg("boundary"), py::arg("flux"))
-        .def("set_boundary_condition",
-             py::overload_cast<int, const BoundaryCondition&>(
-                 &DiffusionSolver::setBoundaryCondition),
-             py::arg("boundary_id"), py::arg("bc"))
+        .def(
+            "set_boundary_condition",
+            [](DiffusionSolver& solver, int boundary_id, const BoundaryCondition& bc) {
+                solver.setBoundaryCondition(checkedBoundary(boundary_id), bc);
+            },
+            py::arg("boundary_id"), py::arg("bc"))
         .def("set_boundary_condition",
              py::overload_cast<Boundary, const BoundaryCondition&>(
                  &DiffusionSolver::setBoundaryCondition),
@@ -72,11 +153,13 @@ void register_diffusion_bindings(py::module_& m) {
         .def_readonly("residual", &CNSolveResult::residual, "Final residual norm")
         .def_readonly("converged", &CNSolveResult::converged, "Whether tolerance was achieved");
 
-    py::class_<CrankNicolsonDiffusion>(m, "CrankNicolsonDiffusion",
-                                       R"(Crank-Nicolson implicit solver for the diffusion equation.
+    py::class_<CrankNicolsonDiffusion>(
+        m, "CrankNicolsonDiffusion",
+        R"(Crank-Nicolson implicit solver for the diffusion equation.
 
-        Second-order accurate in time, unconditionally stable.
-        Allows much larger time steps than explicit methods.
+        The linear diffusion update is A-stable and second-order in time, but
+        it is not L-stable: very large steps can produce bounded oscillations
+        and poor temporal accuracy. Algebraic convergence is checked explicitly.
 
         Example:
             >>> mesh = bt.StructuredMesh(100, 0.0, 1.0)
@@ -86,13 +169,14 @@ void register_diffusion_bindings(py::module_& m) {
             >>> solver.solve(dt=0.1, num_steps=100)  # dt >> explicit CFL limit
         )")
         .def(py::init<const StructuredMesh&, double>(), py::arg("mesh"), py::arg("diffusivity"),
-             "Create a Crank-Nicolson diffusion solver")
+             py::keep_alive<1, 2>(), "Create a Crank-Nicolson diffusion solver")
         .def("set_initial_condition", &CrankNicolsonDiffusion::setInitialCondition,
              py::arg("values"), "Set the initial condition")
         .def("set_dirichlet_boundary", &CrankNicolsonDiffusion::setDirichletBoundary,
              py::arg("boundary"), py::arg("value"), "Set a Dirichlet boundary condition")
         .def("set_neumann_boundary", &CrankNicolsonDiffusion::setNeumannBoundary,
-             py::arg("boundary"), py::arg("flux"), "Set a Neumann boundary condition")
+             py::arg("boundary"), py::arg("normal_derivative"),
+             "Set the outward-normal derivative du/dn (not physical flux)")
         .def("set_tolerance", &CrankNicolsonDiffusion::setTolerance, py::arg("tol"),
              "Set convergence tolerance for implicit solve")
         .def("set_max_iterations", &CrankNicolsonDiffusion::setMaxIterations, py::arg("max_iter"),
@@ -106,7 +190,7 @@ void register_diffusion_bindings(py::module_& m) {
             [](const CrankNicolsonDiffusion& solver) {
                 return to_numpy_with_base(solver.solution(), py::cast(&solver));
             },
-            "Get the current solution as numpy array")
+            "Return an owned copy of the current solution")
         .def("time", &CrankNicolsonDiffusion::time, "Get current simulation time")
         .def_property_readonly("diffusivity", &CrankNicolsonDiffusion::diffusivity,
                                "Diffusion coefficient");
@@ -118,7 +202,7 @@ void register_diffusion_bindings(py::module_& m) {
         .def(py::init<>())
         .def_readonly("steps", &ADISolveResult::steps, "Number of time steps completed")
         .def_readonly("substeps", &ADISolveResult::substeps,
-                      "Number of substeps (2 for 2D, 3 for 3D)")
+                      "Directional solves (3 per 2D step, 5 per 3D step)")
         .def_readonly("time", &ADISolveResult::time, "Current simulation time after step()")
         .def_readonly("total_time", &ADISolveResult::total_time,
                       "Total simulation time after solve()")
@@ -126,28 +210,29 @@ void register_diffusion_bindings(py::module_& m) {
                       "Whether the step completed successfully");
 
     py::class_<ADIDiffusion2D>(m, "ADIDiffusion2D",
-                               R"(2D ADI solver using Peaceman-Rachford splitting.
+                               R"(2D symmetric directionally split Crank-Nicolson solver.
 
-        Solves the 2D diffusion equation using the Alternating Direction Implicit method.
-        Unconditionally stable and second-order accurate in space and time.
-        Uses O(N) Thomas algorithm sweeps - much faster than iterative methods.
+        Uses x/2-y-x/2 symmetric composition. Each directional linear-diffusion
+        subproblem is unconditionally stable; time-independent boundary data and
+        smooth solutions are required for the stated second-order convergence.
 
         Example:
-            >>> mesh = bt.StructuredMesh(1.0, 1.0, 50, 50)  # 50x50 grid
-            >>> solver = bt.ADIDiffusion2D(mesh, 1e-5)      # D = 10^-5 m^2/s
+            >>> mesh = bt.StructuredMesh(50, 50, 0.0, 1.0, 0.0, 1.0)
+            >>> solver = bt.ADIDiffusion2D(mesh, 1e-5)
             >>> solver.set_initial_condition(u0)
             >>> solver.set_dirichlet_boundary(bt.Boundary.Left, 100.0)
             >>> solver.set_dirichlet_boundary(bt.Boundary.Right, 0.0)
             >>> solver.solve(dt=0.1, num_steps=100)  # No CFL restriction
         )")
         .def(py::init<const StructuredMesh&, double>(), py::arg("mesh"), py::arg("diffusivity"),
-             "Create a 2D ADI diffusion solver")
+             py::keep_alive<1, 2>(), "Create a 2D ADI diffusion solver")
         .def("set_initial_condition", &ADIDiffusion2D::setInitialCondition, py::arg("values"),
              "Set the initial condition")
         .def("set_dirichlet_boundary", &ADIDiffusion2D::setDirichletBoundary, py::arg("boundary"),
              py::arg("value"), "Set a Dirichlet boundary condition")
         .def("set_neumann_boundary", &ADIDiffusion2D::setNeumannBoundary, py::arg("boundary"),
-             py::arg("flux"), "Set a Neumann boundary condition")
+             py::arg("normal_derivative"),
+             "Set the outward-normal derivative du/dn (not physical flux)")
         .def("step", &ADIDiffusion2D::step, py::arg("dt"),
              "Advance solution by one time step, returns ADISolveResult")
         .def("solve", &ADIDiffusion2D::solve, py::arg("dt"), py::arg("num_steps"),
@@ -157,20 +242,20 @@ void register_diffusion_bindings(py::module_& m) {
             [](const ADIDiffusion2D& solver) {
                 return to_numpy_with_base(solver.solution(), py::cast(&solver));
             },
-            "Get the current solution as numpy array")
+            "Return an owned copy of the current solution")
         .def("time", &ADIDiffusion2D::time, "Get current simulation time")
         .def_property_readonly("diffusivity", &ADIDiffusion2D::diffusivity,
                                "Diffusion coefficient");
 
     py::class_<ADIDiffusion3D>(m, "ADIDiffusion3D",
-                               R"(3D ADI solver using Douglas-Gunn splitting.
+                               R"(3D symmetric directionally split Crank-Nicolson solver.
 
-        Solves the 3D diffusion equation using the Douglas-Gunn ADI method.
-        Unconditionally stable and second-order accurate in space and time.
-        Uses O(N) Thomas algorithm sweeps - scales efficiently to large 3D problems.
+        Uses x/2-y/2-z-y/2-x/2 symmetric composition. Each directional
+        linear-diffusion subproblem is unconditionally stable; time-independent
+        boundary data and smooth solutions are required for second-order convergence.
 
         Example:
-            >>> mesh = bt.StructuredMesh3D(1.0, 1.0, 1.0, 20, 20, 20)
+            >>> mesh = bt.StructuredMesh3D(20, 20, 20, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
             >>> solver = bt.ADIDiffusion3D(mesh, 1e-5)
             >>> solver.set_initial_condition(u0)
             >>> solver.set_dirichlet_boundary(bt.Boundary3D.XMin, 100.0)
@@ -178,21 +263,29 @@ void register_diffusion_bindings(py::module_& m) {
             >>> solver.solve(dt=0.1, num_steps=100)
         )")
         .def(py::init<const StructuredMesh3D&, double>(), py::arg("mesh"), py::arg("diffusivity"),
-             "Create a 3D ADI diffusion solver")
+             py::keep_alive<1, 2>(), "Create a 3D ADI diffusion solver")
         .def("set_initial_condition", &ADIDiffusion3D::setInitialCondition, py::arg("values"),
              "Set the initial condition")
         .def("set_dirichlet_boundary",
              py::overload_cast<Boundary3D, double>(&ADIDiffusion3D::setDirichletBoundary),
              py::arg("boundary"), py::arg("value"), "Set a Dirichlet boundary condition")
-        .def("set_dirichlet_boundary",
-             py::overload_cast<int, double>(&ADIDiffusion3D::setDirichletBoundary),
-             py::arg("boundary_id"), py::arg("value"), "Set a Dirichlet BC by integer ID")
+        .def(
+            "set_dirichlet_boundary",
+            [](ADIDiffusion3D& solver, int boundary_id, double value) {
+                solver.setDirichletBoundary(checkedBoundary3D(boundary_id), value);
+            },
+            py::arg("boundary_id"), py::arg("value"), "Set a Dirichlet BC by integer ID")
         .def("set_neumann_boundary",
              py::overload_cast<Boundary3D, double>(&ADIDiffusion3D::setNeumannBoundary),
-             py::arg("boundary"), py::arg("flux"), "Set a Neumann boundary condition")
-        .def("set_neumann_boundary",
-             py::overload_cast<int, double>(&ADIDiffusion3D::setNeumannBoundary),
-             py::arg("boundary_id"), py::arg("flux"), "Set a Neumann BC by integer ID")
+             py::arg("boundary"), py::arg("normal_derivative"),
+             "Set the outward-normal derivative du/dn (not physical flux)")
+        .def(
+            "set_neumann_boundary",
+            [](ADIDiffusion3D& solver, int boundary_id, double normal_derivative) {
+                solver.setNeumannBoundary(checkedBoundary3D(boundary_id), normal_derivative);
+            },
+            py::arg("boundary_id"), py::arg("normal_derivative"),
+            "Set outward-normal derivative by integer boundary ID")
         .def("step", &ADIDiffusion3D::step, py::arg("dt"),
              "Advance solution by one time step, returns ADISolveResult")
         .def("solve", &ADIDiffusion3D::solve, py::arg("dt"), py::arg("num_steps"),
@@ -202,7 +295,7 @@ void register_diffusion_bindings(py::module_& m) {
             [](const ADIDiffusion3D& solver) {
                 return to_numpy_with_base(solver.solution(), py::cast(&solver));
             },
-            "Get the current solution as numpy array")
+            "Return an owned copy of the current solution")
         .def("time", &ADIDiffusion3D::time, "Get current simulation time")
         .def_property_readonly("diffusivity", &ADIDiffusion3D::diffusivity,
                                "Diffusion coefficient");
@@ -214,7 +307,7 @@ void register_diffusion_bindings(py::module_& m) {
     // ReactionDiffusionSolver (custom reaction function)
     py::class_<ReactionDiffusionSolver>(m, "ReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, ReactionDiffusionSolver::ReactionFunction>(),
-             py::arg("mesh"), py::arg("diffusivity"), py::arg("reaction"))
+             py::arg("mesh"), py::arg("diffusivity"), py::arg("reaction"), py::keep_alive<1, 2>())
         .def("solve", &ReactionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution",
              [](const ReactionDiffusionSolver& solver) {
@@ -222,27 +315,41 @@ void register_diffusion_bindings(py::module_& m) {
              })
         .def("set_initial_condition", &ReactionDiffusionSolver::setInitialCondition,
              py::arg("values"))
-        .def("set_dirichlet_boundary",
-             py::overload_cast<int, double>(&ReactionDiffusionSolver::setDirichletBoundary),
-             py::arg("boundary_id"), py::arg("value"))
+        .def(
+            "set_dirichlet_boundary",
+            [](ReactionDiffusionSolver& solver, int boundary_id, double value) {
+                solver.setDirichletBoundary(checkedBoundary(boundary_id), value);
+            },
+            py::arg("boundary_id"), py::arg("value"))
         .def("set_dirichlet_boundary",
              py::overload_cast<Boundary, double>(&ReactionDiffusionSolver::setDirichletBoundary),
              py::arg("boundary"), py::arg("value"))
-        .def("set_neumann_boundary",
-             py::overload_cast<int, double>(&ReactionDiffusionSolver::setNeumannBoundary),
-             py::arg("boundary_id"), py::arg("flux"))
+        .def(
+            "set_neumann_boundary",
+            [](ReactionDiffusionSolver& solver, int boundary_id, double flux) {
+                solver.setNeumannBoundary(checkedBoundary(boundary_id), flux);
+            },
+            py::arg("boundary_id"), py::arg("flux"))
         .def("set_neumann_boundary",
              py::overload_cast<Boundary, double>(&ReactionDiffusionSolver::setNeumannBoundary),
              py::arg("boundary"), py::arg("flux"))
-        .def("set_boundary",
-             py::overload_cast<int, const BoundaryCondition&>(
-                 &ReactionDiffusionSolver::setBoundaryCondition),
-             py::arg("side"), py::arg("bc"));
+        .def(
+            "set_boundary",
+            [](ReactionDiffusionSolver& solver, int boundary_id, const BoundaryCondition& bc) {
+                solver.setBoundaryCondition(checkedBoundary(boundary_id), bc);
+            },
+            py::arg("boundary_id"), py::arg("bc"))
+        .def(
+            "set_boundary",
+            [](ReactionDiffusionSolver& solver, Boundary boundary, const BoundaryCondition& bc) {
+                solver.setBoundaryCondition(boundary, bc);
+            },
+            py::arg("boundary"), py::arg("bc"));
 
     // Linear reaction-diffusion (first-order decay)
     py::class_<LinearReactionDiffusionSolver>(m, "LinearReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double>(), py::arg("mesh"),
-             py::arg("diffusivity"), py::arg("decay_rate"))
+             py::arg("diffusivity"), py::arg("decay_rate"), py::keep_alive<1, 2>())
         .def("solve", &LinearReactionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution",
              [](const LinearReactionDiffusionSolver& solver) {
@@ -250,15 +357,24 @@ void register_diffusion_bindings(py::module_& m) {
              })
         .def("set_initial_condition", &LinearReactionDiffusionSolver::setInitialCondition,
              py::arg("values"))
-        .def("set_boundary",
-             py::overload_cast<int, const BoundaryCondition&>(
-                 &LinearReactionDiffusionSolver::setBoundaryCondition),
-             py::arg("side"), py::arg("bc"));
+        .def(
+            "set_boundary",
+            [](LinearReactionDiffusionSolver& solver, int boundary_id,
+               const BoundaryCondition& bc) {
+                solver.setBoundaryCondition(checkedBoundary(boundary_id), bc);
+            },
+            py::arg("boundary_id"), py::arg("bc"))
+        .def(
+            "set_boundary",
+            [](LinearReactionDiffusionSolver& solver, Boundary boundary,
+               const BoundaryCondition& bc) { solver.setBoundaryCondition(boundary, bc); },
+            py::arg("boundary"), py::arg("bc"));
 
     // Logistic reaction-diffusion
     py::class_<LogisticReactionDiffusionSolver>(m, "LogisticReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double, double>(), py::arg("mesh"),
-             py::arg("diffusivity"), py::arg("growth_rate"), py::arg("carrying_capacity"))
+             py::arg("diffusivity"), py::arg("growth_rate"), py::arg("carrying_capacity"),
+             py::keep_alive<1, 2>())
         .def("solve", &LogisticReactionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution",
              [](const LogisticReactionDiffusionSolver& solver) {
@@ -266,15 +382,23 @@ void register_diffusion_bindings(py::module_& m) {
              })
         .def("set_initial_condition", &LogisticReactionDiffusionSolver::setInitialCondition,
              py::arg("values"))
-        .def("set_boundary",
-             py::overload_cast<int, const BoundaryCondition&>(
-                 &LogisticReactionDiffusionSolver::setBoundaryCondition),
-             py::arg("side"), py::arg("bc"));
+        .def(
+            "set_boundary",
+            [](LogisticReactionDiffusionSolver& solver, int boundary_id,
+               const BoundaryCondition& bc) {
+                solver.setBoundaryCondition(checkedBoundary(boundary_id), bc);
+            },
+            py::arg("boundary_id"), py::arg("bc"))
+        .def(
+            "set_boundary",
+            [](LogisticReactionDiffusionSolver& solver, Boundary boundary,
+               const BoundaryCondition& bc) { solver.setBoundaryCondition(boundary, bc); },
+            py::arg("boundary"), py::arg("bc"));
 
     // Michaelis-Menten reaction-diffusion
     py::class_<MichaelisMentenReactionDiffusionSolver>(m, "MichaelisMentenReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double, double>(), py::arg("mesh"),
-             py::arg("diffusivity"), py::arg("vmax"), py::arg("km"))
+             py::arg("diffusivity"), py::arg("vmax"), py::arg("km"), py::keep_alive<1, 2>())
         .def("solve", &MichaelisMentenReactionDiffusionSolver::solve, py::arg("dt"),
              py::arg("num_steps"))
         .def("solution",
@@ -283,10 +407,18 @@ void register_diffusion_bindings(py::module_& m) {
              })
         .def("set_initial_condition", &MichaelisMentenReactionDiffusionSolver::setInitialCondition,
              py::arg("values"))
-        .def("set_boundary",
-             py::overload_cast<int, const BoundaryCondition&>(
-                 &MichaelisMentenReactionDiffusionSolver::setBoundaryCondition),
-             py::arg("side"), py::arg("bc"));
+        .def(
+            "set_boundary",
+            [](MichaelisMentenReactionDiffusionSolver& solver, int boundary_id,
+               const BoundaryCondition& bc) {
+                solver.setBoundaryCondition(checkedBoundary(boundary_id), bc);
+            },
+            py::arg("boundary_id"), py::arg("bc"))
+        .def(
+            "set_boundary",
+            [](MichaelisMentenReactionDiffusionSolver& solver, Boundary boundary,
+               const BoundaryCondition& bc) { solver.setBoundaryCondition(boundary, bc); },
+            py::arg("boundary"), py::arg("bc"));
 
     // Masked Michaelis-Menten
     py::class_<MaskedMichaelisMentenReactionDiffusionSolver>(
@@ -294,7 +426,7 @@ void register_diffusion_bindings(py::module_& m) {
         .def(py::init<const StructuredMesh&, double, double, double, std::vector<std::uint8_t>,
                       double>(),
              py::arg("mesh"), py::arg("diffusivity"), py::arg("vmax"), py::arg("km"),
-             py::arg("mask"), py::arg("pinned_value"))
+             py::arg("mask"), py::arg("pinned_value"), py::keep_alive<1, 2>())
         .def("solve", &MaskedMichaelisMentenReactionDiffusionSolver::solve, py::arg("dt"),
              py::arg("num_steps"))
         .def("solution",
@@ -303,15 +435,23 @@ void register_diffusion_bindings(py::module_& m) {
              })
         .def("set_initial_condition",
              &MaskedMichaelisMentenReactionDiffusionSolver::setInitialCondition, py::arg("values"))
-        .def("set_boundary",
-             py::overload_cast<int, const BoundaryCondition&>(
-                 &MaskedMichaelisMentenReactionDiffusionSolver::setBoundaryCondition),
-             py::arg("side"), py::arg("bc"));
+        .def(
+            "set_boundary",
+            [](MaskedMichaelisMentenReactionDiffusionSolver& solver, int boundary_id,
+               const BoundaryCondition& bc) {
+                solver.setBoundaryCondition(checkedBoundary(boundary_id), bc);
+            },
+            py::arg("boundary_id"), py::arg("bc"))
+        .def(
+            "set_boundary",
+            [](MaskedMichaelisMentenReactionDiffusionSolver& solver, Boundary boundary,
+               const BoundaryCondition& bc) { solver.setBoundaryCondition(boundary, bc); },
+            py::arg("boundary"), py::arg("bc"));
 
     // Constant source reaction-diffusion
     py::class_<ConstantSourceReactionDiffusionSolver>(m, "ConstantSourceReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double>(), py::arg("mesh"),
-             py::arg("diffusivity"), py::arg("source_rate"))
+             py::arg("diffusivity"), py::arg("source_rate"), py::keep_alive<1, 2>())
         .def("solve", &ConstantSourceReactionDiffusionSolver::solve, py::arg("dt"),
              py::arg("num_steps"))
         .def("solution",
@@ -320,10 +460,18 @@ void register_diffusion_bindings(py::module_& m) {
              })
         .def("set_initial_condition", &ConstantSourceReactionDiffusionSolver::setInitialCondition,
              py::arg("values"))
-        .def("set_boundary",
-             py::overload_cast<int, const BoundaryCondition&>(
-                 &ConstantSourceReactionDiffusionSolver::setBoundaryCondition),
-             py::arg("side"), py::arg("bc"));
+        .def(
+            "set_boundary",
+            [](ConstantSourceReactionDiffusionSolver& solver, int boundary_id,
+               const BoundaryCondition& bc) {
+                solver.setBoundaryCondition(checkedBoundary(boundary_id), bc);
+            },
+            py::arg("boundary_id"), py::arg("bc"))
+        .def(
+            "set_boundary",
+            [](ConstantSourceReactionDiffusionSolver& solver, Boundary boundary,
+               const BoundaryCondition& bc) { solver.setBoundaryCondition(boundary, bc); },
+            py::arg("boundary"), py::arg("bc"));
 
     // =========================================================================
     // Gray-Scott (two-species pattern formation)
@@ -334,6 +482,7 @@ void register_diffusion_bindings(py::module_& m) {
         .def_readonly("ny", &GrayScottRunResult::ny)
         .def_readonly("frames", &GrayScottRunResult::frames)
         .def_readonly("steps_run", &GrayScottRunResult::steps_run)
+        .def_readonly("final_time", &GrayScottRunResult::final_time)
         .def_readonly("frame_steps", &GrayScottRunResult::frame_steps)
         .def("u_frames",
              [](const GrayScottRunResult& r) {
@@ -349,7 +498,7 @@ void register_diffusion_bindings(py::module_& m) {
 
     py::class_<GrayScottSolver>(m, "GrayScottSolver")
         .def(py::init<const StructuredMesh&, double, double, double, double>(), py::arg("mesh"),
-             py::arg("Du"), py::arg("Dv"), py::arg("f"), py::arg("k"))
+             py::arg("Du"), py::arg("Dv"), py::arg("f"), py::arg("k"), py::keep_alive<1, 2>())
         .def("simulate", &GrayScottSolver::simulate, py::arg("u0"), py::arg("v0"),
              py::arg("total_steps"), py::arg("dt"), py::arg("steps_between_frames") = 1000,
              py::arg("check_interval") = 1000, py::arg("stable_tol") = 1e-4,
@@ -364,6 +513,19 @@ void register_diffusion_bindings(py::module_& m) {
         .def_readonly("ny", &TumorDrugDeliverySaved::ny)
         .def_readonly("frames", &TumorDrugDeliverySaved::frames)
         .def_readonly("times_s", &TumorDrugDeliverySaved::times_s)
+        .def_readonly("final_time_s", &TumorDrugDeliverySaved::final_time_s)
+        .def_readonly("stability_limit_s", &TumorDrugDeliverySaved::stability_limit_s)
+        .def_readonly("free_amount_per_depth", &TumorDrugDeliverySaved::free_amount_per_depth)
+        .def_readonly("bound_amount_per_depth", &TumorDrugDeliverySaved::bound_amount_per_depth)
+        .def_readonly("cellular_amount_per_depth",
+                      &TumorDrugDeliverySaved::cellular_amount_per_depth)
+        .def_readonly("total_amount_per_depth", &TumorDrugDeliverySaved::total_amount_per_depth)
+        .def_readonly("cumulative_net_vascular_exchange_per_depth",
+                      &TumorDrugDeliverySaved::cumulative_net_vascular_exchange_per_depth)
+        .def_readonly("cumulative_boundary_outflow_per_depth",
+                      &TumorDrugDeliverySaved::cumulative_boundary_outflow_per_depth)
+        .def_readonly("mass_balance_error_per_depth",
+                      &TumorDrugDeliverySaved::mass_balance_error_per_depth)
         .def("free",
              [](const TumorDrugDeliverySaved& r) {
                  return to_numpy_3d(r.free, static_cast<py::ssize_t>(r.frames),
@@ -392,13 +554,13 @@ void register_diffusion_bindings(py::module_& m) {
         .def(py::init<const StructuredMesh&, std::vector<std::uint8_t>, std::vector<double>, double,
                       double>(),
              py::arg("mesh"), py::arg("tumor_mask"), py::arg("hydraulic_conductivity"),
-             py::arg("p_boundary"), py::arg("p_tumor"))
+             py::arg("p_boundary"), py::arg("p_tumor"), py::keep_alive<1, 2>())
         .def("solve_pressure_sor", &TumorDrugDeliverySolver::solvePressureSOR,
              py::arg("max_iter") = 20000, py::arg("tol") = 1e-10, py::arg("omega") = 1.8)
         .def("simulate", &TumorDrugDeliverySolver::simulate, py::arg("pressure"),
-             py::arg("diffusivity"), py::arg("permeability"), py::arg("vessel_density"),
-             py::arg("k_binding"), py::arg("k_uptake"), py::arg("c_plasma"), py::arg("dt"),
-             py::arg("num_steps"), py::arg("times_to_save_s"));
+             py::arg("diffusivity"), py::arg("vessel_wall_solute_permeability"),
+             py::arg("vascular_surface_area_density"), py::arg("k_binding"), py::arg("k_uptake"),
+             py::arg("c_plasma"), py::arg("dt"), py::arg("num_steps"), py::arg("times_to_save_s"));
 
     // =========================================================================
     // Bioheat cryotherapy (temperature + damage)
@@ -409,14 +571,23 @@ void register_diffusion_bindings(py::module_& m) {
         .def_readonly("ny", &BioheatSaved::ny)
         .def_readonly("frames", &BioheatSaved::frames)
         .def_readonly("times_s", &BioheatSaved::times_s)
+        .def_readonly("minimum_temperature_K", &BioheatSaved::minimum_temperature_K)
+        .def_readonly("maximum_temperature_K", &BioheatSaved::maximum_temperature_K)
+        .def_readonly("maximum_stable_dt_s", &BioheatSaved::maximum_stable_dt_s)
         .def("temperature_K",
              [](const BioheatSaved& r) {
                  return to_numpy_3d(r.temperature_K, static_cast<py::ssize_t>(r.frames),
                                     static_cast<py::ssize_t>(r.ny), static_cast<py::ssize_t>(r.nx),
                                     py::cast(&r));
              })
-        .def("damage", [](const BioheatSaved& r) {
-            return to_numpy_3d(r.damage, static_cast<py::ssize_t>(r.frames),
+        .def("damage",
+             [](const BioheatSaved& r) {
+                 return to_numpy_3d(r.damage, static_cast<py::ssize_t>(r.frames),
+                                    static_cast<py::ssize_t>(r.ny), static_cast<py::ssize_t>(r.nx),
+                                    py::cast(&r));
+             })
+        .def("frozen_fraction", [](const BioheatSaved& r) {
+            return to_numpy_3d(r.frozen_fraction, static_cast<py::ssize_t>(r.frames),
                                static_cast<py::ssize_t>(r.ny), static_cast<py::ssize_t>(r.nx),
                                py::cast(&r));
         });
@@ -427,23 +598,50 @@ void register_diffusion_bindings(py::module_& m) {
                       double, double, double, double, double, double, double, double>(),
              py::arg("mesh"), py::arg("probe_mask"), py::arg("perfusion_map"), py::arg("q_met_map"),
              py::arg("rho_tissue"), py::arg("rho_blood"), py::arg("c_blood"), py::arg("k_unfrozen"),
-             py::arg("k_frozen"), py::arg("c_unfrozen"), py::arg("c_frozen"), py::arg("T_body"),
-             py::arg("T_probe"), py::arg("T_freeze"), py::arg("T_freeze_range"),
+             py::arg("k_frozen"), py::arg("c_unfrozen"), py::arg("c_frozen"), py::arg("T_body_K"),
+             py::arg("T_probe_K"), py::arg("T_freeze_K"), py::arg("T_freeze_range_K"),
              py::arg("L_fusion"), py::arg("A"), py::arg("E_a"), py::arg("R_gas"))
+        .def("set_initial_temperature_K", &BioheatCryotherapySolver::setInitialTemperatureK,
+             py::arg("temperature_K"), py::return_value_policy::reference_internal)
+        .def("set_initial_temperature_field_K",
+             &BioheatCryotherapySolver::setInitialTemperatureFieldK, py::arg("temperature_K"),
+             py::return_value_policy::reference_internal)
+        .def("set_arterial_temperature_K", &BioheatCryotherapySolver::setArterialTemperatureK,
+             py::arg("temperature_K"), py::return_value_policy::reference_internal)
+        .def("set_boundary_temperature_K", &BioheatCryotherapySolver::setBoundaryTemperatureK,
+             py::arg("temperature_K"), py::return_value_policy::reference_internal)
+        .def("frozen_fraction", &BioheatCryotherapySolver::frozenFraction, py::arg("temperature_K"))
+        .def("thermal_conductivity", &BioheatCryotherapySolver::thermalConductivity,
+             py::arg("temperature_K"))
+        .def("effective_specific_heat", &BioheatCryotherapySolver::effectiveSpecificHeat,
+             py::arg("temperature_K"))
+        .def("arrhenius_heat_injury_rate", &BioheatCryotherapySolver::arrheniusHeatInjuryRate,
+             py::arg("temperature_K"))
+        .def("maximum_stable_time_step_s", &BioheatCryotherapySolver::maximumStableTimeStep)
         .def("simulate", &BioheatCryotherapySolver::simulate, py::arg("dt"), py::arg("num_steps"),
              py::arg("times_to_save_s"));
 
     // =========================================================================
     // Membrane Diffusion
     // =========================================================================
-    py::class_<MembraneDiffusionResult>(m, "MembraneDiffusionResult")
+    py::class_<MembraneDiffusionResult>(
+        m, "MembraneDiffusionResult",
+        "Steady 1D membrane result. Concentration and flux use the caller's consistent "
+        "amount unit; this API does not assume that amount is molar.")
         .def(py::init<>())
-        .def_readonly("flux", &MembraneDiffusionResult::flux)
-        .def_readonly("permeability", &MembraneDiffusionResult::permeability)
-        .def_readonly("effective_diffusivity", &MembraneDiffusionResult::effective_diffusivity)
-        .def("x", [](const MembraneDiffusionResult& r) { return to_numpy(r.x); })
-        .def("concentration",
-             [](const MembraneDiffusionResult& r) { return to_numpy(r.concentration); });
+        .def_readonly("flux", &MembraneDiffusionResult::flux, "Steady flux [amount/(m² s)]")
+        .def_readonly("permeability", &MembraneDiffusionResult::permeability,
+                      "External-concentration permeability P [m/s]")
+        .def_readonly("effective_diffusivity", &MembraneDiffusionResult::effective_diffusivity,
+                      "Equivalent external-gradient coefficient P*L [m²/s], including "
+                      "partition and any enabled hindrance")
+        .def(
+            "x", [](const MembraneDiffusionResult& r) { return to_numpy(r.x); },
+            "Return an owned coordinate array [m]")
+        .def(
+            "concentration",
+            [](const MembraneDiffusionResult& r) { return to_numpy(r.concentration); },
+            "Return an owned intramembrane concentration profile [amount/m³]");
 
     py::class_<MembraneDiffusion1DSolver>(m, "MembraneDiffusion1DSolver")
         .def(py::init<>())
@@ -509,11 +707,11 @@ void register_diffusion_bindings(py::module_& m) {
     py::class_<AdvectionDiffusionSolver>(m, "AdvectionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double, double, AdvectionScheme>(),
              py::arg("mesh"), py::arg("diffusivity"), py::arg("vx"), py::arg("vy") = 0.0,
-             py::arg("scheme") = AdvectionScheme::HYBRID)
+             py::arg("scheme") = AdvectionScheme::HYBRID, py::keep_alive<1, 2>())
         .def(py::init<const StructuredMesh&, double, const std::vector<double>&,
                       const std::vector<double>&, AdvectionScheme>(),
              py::arg("mesh"), py::arg("diffusivity"), py::arg("vx_field"), py::arg("vy_field"),
-             py::arg("scheme") = AdvectionScheme::HYBRID)
+             py::arg("scheme") = AdvectionScheme::HYBRID, py::keep_alive<1, 2>())
         .def("solve", &AdvectionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("cell_peclet", &AdvectionDiffusionSolver::cellPeclet)
         .def("max_time_step", &AdvectionDiffusionSolver::maxTimeStep, py::arg("safety") = 0.4)
@@ -526,10 +724,18 @@ void register_diffusion_bindings(py::module_& m) {
              })
         .def("set_initial_condition", &AdvectionDiffusionSolver::setInitialCondition,
              py::arg("values"))
-        .def("set_boundary",
-             py::overload_cast<int, const BoundaryCondition&>(
-                 &AdvectionDiffusionSolver::setBoundaryCondition),
-             py::arg("side"), py::arg("bc"));
+        .def(
+            "set_boundary",
+            [](AdvectionDiffusionSolver& solver, int boundary_id, const BoundaryCondition& bc) {
+                solver.setBoundaryCondition(checkedBoundary(boundary_id), bc);
+            },
+            py::arg("boundary_id"), py::arg("bc"))
+        .def(
+            "set_boundary",
+            [](AdvectionDiffusionSolver& solver, Boundary boundary, const BoundaryCondition& bc) {
+                solver.setBoundaryCondition(boundary, bc);
+            },
+            py::arg("boundary"), py::arg("bc"));
 
     // =========================================================================
     // ExplicitFD Facade (Problem + run)
@@ -573,14 +779,53 @@ void register_diffusion_bindings(py::module_& m) {
              static_cast<TransportProblem& (TransportProblem::*)(const std::vector<double>&)>(
                  &TransportProblem::diffusivityField),
              py::arg("D_field"), py::return_value_policy::reference_internal)
+        .def("reaction",
+             py::overload_cast<TransportProblem::ReactionFunc>(&TransportProblem::reaction),
+             py::arg("function"), py::return_value_policy::reference_internal,
+             "Replace the configured reaction with R(c, x, y, t). The explicit stability bound "
+             "is then unknown.")
+        .def("reaction",
+             py::overload_cast<TransportProblem::ReactionFunc, double>(&TransportProblem::reaction),
+             py::arg("function"), py::arg("max_abs_dc"),
+             py::return_value_policy::reference_internal,
+             "Replace the reaction and provide an upper bound for |dR/dc| in 1/time.")
+        .def("add_reaction",
+             py::overload_cast<TransportProblem::ReactionFunc>(&TransportProblem::addReaction),
+             py::arg("function"), py::return_value_policy::reference_internal,
+             "Add R(c, x, y, t) to the existing reaction. The explicit stability bound is then "
+             "unknown.")
+        .def("add_reaction",
+             py::overload_cast<TransportProblem::ReactionFunc, double>(
+                 &TransportProblem::addReaction),
+             py::arg("function"), py::arg("max_abs_dc"),
+             py::return_value_policy::reference_internal,
+             "Add a reaction and its upper bound for |dR/dc| in 1/time.")
         .def("linear_decay", &TransportProblem::linearDecay, py::arg("k"),
-             py::return_value_policy::reference_internal)
+             py::return_value_policy::reference_internal,
+             "Replace the reaction with first-order decay R=-k*c")
+        .def("add_linear_decay", &TransportProblem::addLinearDecay, py::arg("k"),
+             py::return_value_policy::reference_internal,
+             "Add first-order decay R=-k*c to the existing reaction")
         .def("constant_source", &TransportProblem::constantSource, py::arg("S"),
-             py::return_value_policy::reference_internal)
+             py::return_value_policy::reference_internal,
+             "Replace the reaction with a constant source R=S")
+        .def("add_constant_source", &TransportProblem::addConstantSource, py::arg("S"),
+             py::return_value_policy::reference_internal,
+             "Add a constant source R=S to the existing reaction")
         .def("michaelis_menten", &TransportProblem::michaelisMenten, py::arg("Vmax"), py::arg("Km"),
-             py::return_value_policy::reference_internal)
+             py::return_value_policy::reference_internal,
+             "Replace the reaction with Michaelis-Menten consumption")
+        .def("add_michaelis_menten", &TransportProblem::addMichaelisMenten, py::arg("Vmax"),
+             py::arg("Km"), py::return_value_policy::reference_internal,
+             "Add Michaelis-Menten consumption to the existing reaction")
         .def("logistic_growth", &TransportProblem::logisticGrowth, py::arg("r"), py::arg("K"),
-             py::return_value_policy::reference_internal)
+             py::return_value_policy::reference_internal,
+             "Replace the reaction with logistic growth")
+        .def("add_logistic_growth", &TransportProblem::addLogisticGrowth, py::arg("r"),
+             py::arg("K"), py::return_value_policy::reference_internal,
+             "Add logistic growth to the existing reaction")
+        .def("clear_reaction", &TransportProblem::clearReaction,
+             py::return_value_policy::reference_internal, "Remove every configured reaction term")
         .def("velocity", &TransportProblem::velocity, py::arg("vx"), py::arg("vy") = 0.0,
              py::return_value_policy::reference_internal)
         .def("velocity_field",
@@ -614,6 +859,16 @@ void register_diffusion_bindings(py::module_& m) {
              py::arg("c"), py::return_value_policy::reference_internal)
         // Accessors
         .def("mesh", &TransportProblem::mesh, py::return_value_policy::reference_internal)
+        .def("has_uniform_diffusivity", &TransportProblem::hasUniformDiffusivity,
+             "Whether the diffusivity is represented by one uniform value")
+        .def("has_advection", &TransportProblem::hasAdvection,
+             "Whether a nonzero velocity field is configured")
+        .def("has_reaction", &TransportProblem::hasReaction,
+             "Whether any reaction term is configured")
+        .def("reaction_stability_bound_known", &TransportProblem::reactionStabilityBoundKnown,
+             "Whether an explicit |dR/dc| stability bound is available")
+        .def("reaction_stability_rate_bound", &TransportProblem::reactionStabilityRateBound,
+             "Return the configured |dR/dc| bound in 1/time")
         .def("initial",
              [](const TransportProblem& prob) -> py::array_t<double> {
                  const std::vector<double>& vec = prob.initial();
@@ -640,9 +895,10 @@ void register_diffusion_bindings(py::module_& m) {
     // =========================================================================
 
     py::class_<DiffusionSolver3D>(m, "DiffusionSolver3D",
-                                  R"(3D diffusion solver for the equation: ∂u/∂t = D∇²u
+                                  R"(Conservative explicit 3D solver for ∂u/∂t = D∇²u.
 
-        Supports OpenMP parallelization for multi-core acceleration.
+        The enforced Forward Euler diffusion CFL bound is available through
+        max_stable_time_step().
 
         Example:
             >>> mesh = bt.StructuredMesh3D(20, 20, 20, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
@@ -650,20 +906,27 @@ void register_diffusion_bindings(py::module_& m) {
             >>> solver.set_initial_condition(u0)
             >>> solver.solve(dt, num_steps)
         )")
-        .def(py::init<const StructuredMesh3D&, double>(), py::arg("mesh"), py::arg("diffusivity"))
+        .def(py::init<const StructuredMesh3D&, double>(), py::arg("mesh"), py::arg("diffusivity"),
+             py::keep_alive<1, 2>())
         .def("set_initial_condition", &DiffusionSolver3D::setInitialCondition, py::arg("values"))
-        .def("set_dirichlet_boundary",
-             py::overload_cast<int, double>(&DiffusionSolver3D::setDirichletBoundary),
-             py::arg("boundary_id"), py::arg("value"))
+        .def(
+            "set_dirichlet_boundary",
+            [](DiffusionSolver3D& solver, int boundary_id, double value) {
+                solver.setDirichletBoundary(checkedBoundary3D(boundary_id), value);
+            },
+            py::arg("boundary_id"), py::arg("value"))
         .def("set_dirichlet_boundary",
              py::overload_cast<Boundary3D, double>(&DiffusionSolver3D::setDirichletBoundary),
              py::arg("boundary"), py::arg("value"))
-        .def("set_neumann_boundary",
-             py::overload_cast<int, double>(&DiffusionSolver3D::setNeumannBoundary),
-             py::arg("boundary_id"), py::arg("flux"))
+        .def(
+            "set_neumann_boundary",
+            [](DiffusionSolver3D& solver, int boundary_id, double normal_derivative) {
+                solver.setNeumannBoundary(checkedBoundary3D(boundary_id), normal_derivative);
+            },
+            py::arg("boundary_id"), py::arg("normal_derivative"))
         .def("set_neumann_boundary",
              py::overload_cast<Boundary3D, double>(&DiffusionSolver3D::setNeumannBoundary),
-             py::arg("boundary"), py::arg("flux"))
+             py::arg("boundary"), py::arg("normal_derivative"))
         .def("solve", &DiffusionSolver3D::solve, py::arg("dt"), py::arg("num_steps"))
         .def("check_stability", &DiffusionSolver3D::checkStability, py::arg("dt"),
              "Check if the given time step satisfies the CFL stability condition.")
@@ -676,33 +939,41 @@ void register_diffusion_bindings(py::module_& m) {
              })
         .def("mesh", &DiffusionSolver3D::mesh, py::return_value_policy::reference_internal);
 
-    py::class_<LinearReactionDiffusionSolver3D>(m, "LinearReactionDiffusionSolver3D",
-                                                R"(3D reaction-diffusion solver: ∂u/∂t = D∇²u - k*u
+    py::class_<LinearReactionDiffusionSolver3D>(
+        m, "LinearReactionDiffusionSolver3D",
+        R"(3D IMEX reaction-diffusion solver: ∂u/∂t = D∇²u - k*u
 
-        Uses implicit treatment of decay term for unconditional stability.
+        Decay uses Backward Euler, but diffusion uses Forward Euler; the
+        explicit diffusion CFL limit still applies. The method is first order in time.
 
         Example:
             >>> mesh = bt.StructuredMesh3D(20, 1.0)  # 20x20x20 unit cube
             >>> solver = bt.LinearReactionDiffusionSolver3D(mesh, D=1e-5, decay_rate=0.01)
         )")
         .def(py::init<const StructuredMesh3D&, double, double>(), py::arg("mesh"),
-             py::arg("diffusivity"), py::arg("decay_rate"))
+             py::arg("diffusivity"), py::arg("decay_rate"), py::keep_alive<1, 2>())
         .def("set_initial_condition", &LinearReactionDiffusionSolver3D::setInitialCondition,
              py::arg("values"))
-        .def("set_dirichlet_boundary",
-             py::overload_cast<int, double>(&LinearReactionDiffusionSolver3D::setDirichletBoundary),
-             py::arg("boundary_id"), py::arg("value"))
+        .def(
+            "set_dirichlet_boundary",
+            [](LinearReactionDiffusionSolver3D& solver, int boundary_id, double value) {
+                solver.setDirichletBoundary(checkedBoundary3D(boundary_id), value);
+            },
+            py::arg("boundary_id"), py::arg("value"))
         .def("set_dirichlet_boundary",
              py::overload_cast<Boundary3D, double>(
                  &LinearReactionDiffusionSolver3D::setDirichletBoundary),
              py::arg("boundary"), py::arg("value"))
-        .def("set_neumann_boundary",
-             py::overload_cast<int, double>(&LinearReactionDiffusionSolver3D::setNeumannBoundary),
-             py::arg("boundary_id"), py::arg("flux"))
+        .def(
+            "set_neumann_boundary",
+            [](LinearReactionDiffusionSolver3D& solver, int boundary_id, double normal_derivative) {
+                solver.setNeumannBoundary(checkedBoundary3D(boundary_id), normal_derivative);
+            },
+            py::arg("boundary_id"), py::arg("normal_derivative"))
         .def("set_neumann_boundary",
              py::overload_cast<Boundary3D, double>(
                  &LinearReactionDiffusionSolver3D::setNeumannBoundary),
-             py::arg("boundary"), py::arg("flux"))
+             py::arg("boundary"), py::arg("normal_derivative"))
         .def("solve", &LinearReactionDiffusionSolver3D::solve, py::arg("dt"), py::arg("num_steps"))
         .def("check_stability", &LinearReactionDiffusionSolver3D::checkStability, py::arg("dt"))
         .def("max_stable_time_step", &LinearReactionDiffusionSolver3D::maxStableTimeStep)
@@ -728,7 +999,7 @@ void register_diffusion_bindings(py::module_& m) {
         user-defined reaction kinetics.
 
         Example (Lotka-Volterra predator-prey):
-            >>> mesh = bt.StructuredMesh(1.0, 1.0, 50, 50)
+            >>> mesh = bt.StructuredMesh(50, 50, 0.0, 1.0, 0.0, 1.0)
             >>> solver = bt.MultiSpeciesSolver(mesh, [D_prey, D_pred])
             >>> solver.set_reaction_model(bt.LotkaVolterraReaction(alpha, beta, gamma, delta))
             >>> solver.set_initial_condition(0, prey_ic)   # Species 0: prey
@@ -745,16 +1016,46 @@ void register_diffusion_bindings(py::module_& m) {
             >>> solver.set_initial_condition(2, R0)  # Recovered
         )")
         .def(py::init<const StructuredMesh&, const std::vector<double>&, size_t>(), py::arg("mesh"),
-             py::arg("diffusivities"), py::arg("num_species") = 0,
+             py::arg("diffusivities"), py::arg("num_species") = 0, py::keep_alive<1, 2>(),
              "Create a multi-species solver with specified diffusivities")
         .def(
             "set_reaction_function",
-            [](MultiSpeciesSolver& solver,
-               std::function<void(std::vector<double>&, const std::vector<double>&, double, double,
-                                  double)>
-                   func) { solver.setReactionFunction(std::move(func)); },
+            [](MultiSpeciesSolver& solver, py::function reaction) {
+                solver.setReactionFunction([reaction = std::move(reaction)](
+                                               std::vector<double>& rates,
+                                               const std::vector<double>& concentrations, double x,
+                                               double y, double t) {
+                    py::gil_scoped_acquire acquire;
+
+                    py::list python_rates(rates.size());
+                    py::list python_concentrations(concentrations.size());
+                    for (std::size_t i = 0; i < rates.size(); ++i) {
+                        python_rates[static_cast<py::ssize_t>(i)] = rates[i];
+                    }
+                    for (std::size_t i = 0; i < concentrations.size(); ++i) {
+                        python_concentrations[static_cast<py::ssize_t>(i)] = concentrations[i];
+                    }
+
+                    py::object returned_rates =
+                        reaction(python_rates, python_concentrations, x, y, t);
+                    if (returned_rates.is_none()) {
+                        copyPythonReactionRates(python_rates, rates, "mutated rates list");
+                    } else {
+                        // A returned sequence is authoritative. This makes callbacks that
+                        // return rates unambiguous even if they also happen to mutate the list.
+                        copyPythonReactionRates(returned_rates, rates, "returned rate sequence");
+                    }
+                });
+            },
             py::arg("reaction"),
-            "Set a custom reaction function: f(rates, concentrations, x, y, t)")
+            R"doc(Set a custom reaction function ``f(rates, concentrations, x, y, t)``.
+
+``rates`` is a zero-initialized mutable list with one entry per species;
+``concentrations`` is an input list in the same species order. The callback may
+either mutate ``rates`` and return ``None``, or return a one-dimensional rate
+sequence. A returned sequence is authoritative if both forms are used. Exactly
+one finite real rate per species is required. Rates have units of concentration
+per unit time.)doc")
         .def(
             "set_reaction_model",
             [](MultiSpeciesSolver& solver, const LotkaVolterraReaction& model) {
@@ -801,34 +1102,47 @@ void register_diffusion_bindings(py::module_& m) {
              py::overload_cast<size_t, Boundary, double>(&MultiSpeciesSolver::setDirichletBoundary),
              py::arg("species_idx"), py::arg("boundary"), py::arg("value"),
              "Set Dirichlet boundary for a specific species")
-        .def("set_dirichlet_boundary",
-             py::overload_cast<size_t, int, double>(&MultiSpeciesSolver::setDirichletBoundary),
-             py::arg("species_idx"), py::arg("boundary_id"), py::arg("value"),
-             "Set Dirichlet boundary for a specific species (by ID)")
+        .def(
+            "set_dirichlet_boundary",
+            [](MultiSpeciesSolver& solver, size_t species_idx, int boundary_id, double value) {
+                solver.setDirichletBoundary(species_idx, checkedBoundary(boundary_id), value);
+            },
+            py::arg("species_idx"), py::arg("boundary_id"), py::arg("value"),
+            "Set Dirichlet boundary for a specific species (by ID)")
         .def("set_neumann_boundary",
              py::overload_cast<size_t, Boundary, double>(&MultiSpeciesSolver::setNeumannBoundary),
-             py::arg("species_idx"), py::arg("boundary"), py::arg("flux"),
-             "Set Neumann boundary for a specific species")
-        .def("set_neumann_boundary",
-             py::overload_cast<size_t, int, double>(&MultiSpeciesSolver::setNeumannBoundary),
-             py::arg("species_idx"), py::arg("boundary_id"), py::arg("flux"),
-             "Set Neumann boundary for a specific species (by ID)")
+             py::arg("species_idx"), py::arg("boundary"), py::arg("normal_derivative"),
+             "Set the outward-normal concentration derivative for a specific species")
+        .def(
+            "set_neumann_boundary",
+            [](MultiSpeciesSolver& solver, size_t species_idx, int boundary_id,
+               double normal_derivative) {
+                solver.setNeumannBoundary(species_idx, checkedBoundary(boundary_id),
+                                          normal_derivative);
+            },
+            py::arg("species_idx"), py::arg("boundary_id"), py::arg("normal_derivative"),
+            "Set the outward-normal concentration derivative for a species (by ID)")
         .def("set_all_species_dirichlet", &MultiSpeciesSolver::setAllSpeciesDirichlet,
              py::arg("boundary"), py::arg("value"), "Set same Dirichlet boundary for all species")
         .def("set_all_species_neumann", &MultiSpeciesSolver::setAllSpeciesNeumann,
-             py::arg("boundary"), py::arg("flux"), "Set same Neumann boundary for all species")
+             py::arg("boundary"), py::arg("normal_derivative"),
+             "Set the same outward-normal concentration derivative for all species")
         .def("check_stability", &MultiSpeciesSolver::checkStability, py::arg("dt"),
-             "Check CFL stability condition for given time step")
+             "Check the exact Forward Euler diffusion CFL bound; reaction stability is separate")
         .def("max_stable_time_step", &MultiSpeciesSolver::maxStableTimeStep,
-             "Get maximum stable time step (with safety factor)")
+             "Exact forward-Euler diffusion CFL ceiling; reactions may impose a smaller step")
         .def("solve", &MultiSpeciesSolver::solve, py::arg("dt"), py::arg("num_steps"),
              "Run solver for specified number of time steps")
+        .def("solve_until", &MultiSpeciesSolver::solveUntil, py::arg("final_time"),
+             py::arg("maximum_dt"),
+             "Advance to an exact absolute final time using equal stable substeps no larger "
+             "than maximum_dt")
         .def(
             "solution",
             [](const MultiSpeciesSolver& solver, size_t species_idx) {
                 return to_numpy_with_base(solver.solution(species_idx), py::cast(&solver));
             },
-            py::arg("species_idx"), "Get solution for a specific species as numpy array")
+            py::arg("species_idx"), "Return an owned solution copy for a specific species")
         .def(
             "all_solutions",
             [](const MultiSpeciesSolver& solver) {
@@ -838,7 +1152,7 @@ void register_diffusion_bindings(py::module_& m) {
                 }
                 return result;
             },
-            "Get list of solutions for all species")
+            "Return owned solution copies for all species")
         .def("mesh", &MultiSpeciesSolver::mesh, py::return_value_policy::reference_internal)
         .def("num_species", &MultiSpeciesSolver::numSpecies, "Get number of species")
         .def("diffusivity", &MultiSpeciesSolver::diffusivity, py::arg("species_idx"),
@@ -898,7 +1212,9 @@ void register_diffusion_bindings(py::module_& m) {
             gamma: recovery rate
             total_population: N, for normalization
 
-        The basic reproduction number R₀ = β/γ.
+        N is a reference population in the same units as local S, I, and R.
+        For spatial density fields it is a local reference density, not the
+        domain-integrated population. The approximation R₀ = β/γ assumes S≈N.
 
         Example:
             >>> model = bt.SIRReaction(beta=0.3, gamma=0.1, total_population=1000)
@@ -924,7 +1240,8 @@ void register_diffusion_bindings(py::module_& m) {
             beta: transmission rate
             sigma: rate of becoming infectious (1/incubation period)
             gamma: recovery rate
-            total_population: N
+            total_population: reference N in the same local units as S/E/I/R;
+                              for density fields this is not a domain integral
 
         Example:
             >>> model = bt.SEIRReaction(beta=0.5, sigma=0.2, gamma=0.1, total_population=1e6)
@@ -937,7 +1254,7 @@ void register_diffusion_bindings(py::module_& m) {
         .def_property_readonly("N", &SEIRReaction::N);
 
     py::class_<BrusselatorReaction>(m, "BrusselatorReaction",
-                                    R"(Brusselator chemical oscillator model.
+                                    R"(Conventional nondimensional Brusselator model.
 
         Classic 2-species autocatalytic system exhibiting limit cycle oscillations:
             dX/dt = A - (B+1)·X + X²·Y
@@ -1029,20 +1346,28 @@ void register_diffusion_bindings(py::module_& m) {
         .def_readonly("name", &IonSpecies::name, "Species name (e.g., 'Na+', 'K+', 'Cl-')")
         .def_readonly("valence", &IonSpecies::valence, "Ion charge number (z)")
         .def_readonly("diffusivity", &IonSpecies::diffusivity, "Diffusion coefficient [m²/s]")
-        .def_readonly("mobility", &IonSpecies::mobility, "Electrical mobility [m²/(V·s)]")
+        .def_readonly("mobility", &IonSpecies::mobility,
+                      "Electrical mobility magnitude at mobility_temperature [m²/(V·s)]")
+        .def_readonly("mobility_temperature", &IonSpecies::mobility_temperature,
+                      "Absolute temperature used to compute mobility [K]")
+        .def("mobility_at", &IonSpecies::mobilityAt, py::arg("temperature"),
+             "Evaluate electrical mobility magnitude at an absolute temperature [K]")
         .def_static("thermal_voltage", &IonSpecies::thermalVoltage, py::arg("temperature") = 310.0,
                     "Get thermal voltage V_T = RT/F at given temperature");
 
     // Common ions submodule
-    auto ions_mod = m.def_submodule("ions", "Common physiological ion species");
-    ions_mod.def("sodium", &ions::sodium, "Na+ ion (D=1.33e-9 m²/s at 37°C)");
-    ions_mod.def("potassium", &ions::potassium, "K+ ion (D=1.96e-9 m²/s at 37°C)");
-    ions_mod.def("chloride", &ions::chloride, "Cl- ion (D=2.03e-9 m²/s at 37°C)");
-    ions_mod.def("calcium", &ions::calcium, "Ca2+ ion (D=0.79e-9 m²/s at 37°C)");
-    ions_mod.def("magnesium", &ions::magnesium, "Mg2+ ion (D=0.71e-9 m²/s at 37°C)");
-    ions_mod.def("hydrogen", &ions::hydrogen, "H+ ion (D=9.31e-9 m²/s at 37°C)");
-    ions_mod.def("hydroxide", &ions::hydroxide, "OH- ion (D=5.27e-9 m²/s at 37°C)");
-    ions_mod.def("bicarbonate", &ions::bicarbonate, "HCO3- ion (D=1.18e-9 m²/s at 37°C)");
+    auto ions_mod = m.def_submodule(
+        "ions",
+        "Representative aqueous infinite-dilution ion species. Quantitative studies "
+        "should supply coefficients measured or corrected at the model temperature.");
+    ions_mod.def("sodium", &ions::sodium, "Representative Na+ parameters.");
+    ions_mod.def("potassium", &ions::potassium, "Representative K+ parameters.");
+    ions_mod.def("chloride", &ions::chloride, "Representative Cl- parameters.");
+    ions_mod.def("calcium", &ions::calcium, "Representative Ca2+ parameters.");
+    ions_mod.def("magnesium", &ions::magnesium, "Representative Mg2+ parameters.");
+    ions_mod.def("hydrogen", &ions::hydrogen, "Representative H+ parameters.");
+    ions_mod.def("hydroxide", &ions::hydroxide, "Representative OH- parameters.");
+    ions_mod.def("bicarbonate", &ions::bicarbonate, "Representative HCO3- parameters.");
 
     // Single-ion Nernst-Planck solver
     py::class_<NernstPlanckSolver>(m, "NernstPlanckSolver",
@@ -1060,12 +1385,8 @@ void register_diffusion_bindings(py::module_& m) {
             T = temperature [K]
             φ = electric potential [V]
 
-        Applications:
-            - Ion channels and membrane transport
-            - Neural action potentials
-            - Battery electrolytes
-            - Electrophoresis
-            - Drug iontophoresis
+        The electric potential is prescribed. This class does not solve
+        Poisson's equation, membrane gating, or neural action-potential models.
 
         Example (ion transport in uniform electric field):
             >>> mesh = bt.StructuredMesh(100, 0.0, 1e-3)  # 1mm domain
@@ -1078,7 +1399,8 @@ void register_diffusion_bindings(py::module_& m) {
             >>> solver.solve(dt, num_steps)
         )")
         .def(py::init<const StructuredMesh&, const IonSpecies&, double>(), py::arg("mesh"),
-             py::arg("ion"), py::arg("temperature") = 310.0, "Create solver for single ion species")
+             py::arg("ion"), py::arg("temperature") = 310.0, py::keep_alive<1, 2>(),
+             "Create solver for single ion species")
         .def("set_initial_condition", &NernstPlanckSolver::setInitialCondition, py::arg("values"),
              "Set initial concentration field")
         .def("set_potential_field",
@@ -1089,45 +1411,59 @@ void register_diffusion_bindings(py::module_& m) {
         .def("set_dirichlet_boundary",
              py::overload_cast<Boundary, double>(&NernstPlanckSolver::setDirichletBoundary),
              py::arg("boundary"), py::arg("value"), "Set fixed concentration boundary")
-        .def("set_dirichlet_boundary",
-             py::overload_cast<int, double>(&NernstPlanckSolver::setDirichletBoundary),
-             py::arg("boundary_id"), py::arg("value"))
+        .def(
+            "set_dirichlet_boundary",
+            [](NernstPlanckSolver& solver, int boundary_id, double value) {
+                solver.setDirichletBoundary(checkedBoundary(boundary_id), value);
+            },
+            py::arg("boundary_id"), py::arg("value"))
         .def("set_neumann_boundary",
              py::overload_cast<Boundary, double>(&NernstPlanckSolver::setNeumannBoundary),
              py::arg("boundary"), py::arg("flux"), "Set flux boundary condition")
-        .def("set_neumann_boundary",
-             py::overload_cast<int, double>(&NernstPlanckSolver::setNeumannBoundary),
-             py::arg("boundary_id"), py::arg("flux"))
+        .def(
+            "set_neumann_boundary",
+            [](NernstPlanckSolver& solver, int boundary_id, double flux) {
+                solver.setNeumannBoundary(checkedBoundary(boundary_id), flux);
+            },
+            py::arg("boundary_id"), py::arg("flux"))
         .def("check_stability", &NernstPlanckSolver::checkStability, py::arg("dt"),
-             "Check CFL stability for diffusion and drift")
+             "Check the positivity bound of the fitted diffusion-drift operator")
+        .def("maximum_stable_time_step", &NernstPlanckSolver::maximumStableTimeStep,
+             "Largest explicit step allowed by the fitted homogeneous operator")
+        .def("recommended_time_step", &NernstPlanckSolver::recommendedTimeStep,
+             py::arg("safety") = 0.9, "Return safety times the fitted-operator stability bound")
         .def("solve", &NernstPlanckSolver::solve, py::arg("dt"), py::arg("num_steps"),
              "Run simulation for specified time steps")
         .def(
             "solution",
-            [](const NernstPlanckSolver& solver) {
-                return to_numpy_with_base(solver.solution(), py::cast(&solver));
-            },
-            "Get current concentration field")
+            [](const NernstPlanckSolver& solver) { return to_numpy(solver.solution()); },
+            "Return an owned copy of the current concentration field")
         .def(
             "potential",
+            [](const NernstPlanckSolver& solver) { return to_numpy(solver.potential()); },
+            "Return an owned copy of the current electric potential field")
+        .def(
+            "compute_current_density",
             [](const NernstPlanckSolver& solver) {
-                return to_numpy_with_base(solver.potential(), py::cast(&solver));
+                return to_numpy(solver.computeCurrentDensity());
             },
-            "Get current electric potential field")
+            "Return interleaved Cartesian ionic current-density components [A/m²]")
         .def("time", &NernstPlanckSolver::time, "Get current simulation time")
         .def("ion", &NernstPlanckSolver::ion, py::return_value_policy::reference_internal,
              "Get ion species parameters")
         .def("thermal_voltage", &NernstPlanckSolver::thermalVoltage,
              "Get thermal voltage V_T = RT/F")
+        .def("electrical_mobility", &NernstPlanckSolver::electricalMobility,
+             "Mobility magnitude evaluated at this solver's temperature [m²/(V·s)]")
         .def("mesh", &NernstPlanckSolver::mesh, py::return_value_policy::reference_internal);
 
     // Multi-ion solver
     py::class_<MultiIonSolver>(m, "MultiIonSolver",
-                               R"(Solver for multiple ion species with coupling.
+                               R"(Solver for multiple ion species in one prescribed potential.
 
-        Handles N ion species simultaneously with options for:
-        - Prescribed potential field (decoupled)
-        - Electroneutrality constraint (local charge balance)
+        Each species advances independently against the same prescribed
+        potential. This class does not solve Poisson's equation and does not
+        enforce electroneutrality.
 
         Example (Na+, K+, Cl- transport):
             >>> mesh = bt.StructuredMesh(100, 0.0, 1e-3)
@@ -1140,16 +1476,20 @@ void register_diffusion_bindings(py::module_& m) {
             >>> solver.solve(dt, num_steps)
         )")
         .def(py::init<const StructuredMesh&, std::vector<IonSpecies>, double>(), py::arg("mesh"),
-             py::arg("ions"), py::arg("temperature") = 310.0, "Create multi-ion solver")
+             py::arg("ions"), py::arg("temperature") = 310.0, py::keep_alive<1, 2>(),
+             "Create multi-ion solver")
         .def("set_initial_condition", &MultiIonSolver::setInitialCondition, py::arg("species"),
              py::arg("values"), "Set initial concentration for a species")
         .def("set_dirichlet_boundary",
              py::overload_cast<size_t, Boundary, double>(&MultiIonSolver::setDirichletBoundary),
              py::arg("species"), py::arg("boundary"), py::arg("value"),
              "Set Dirichlet boundary for a species")
-        .def("set_dirichlet_boundary",
-             py::overload_cast<size_t, int, double>(&MultiIonSolver::setDirichletBoundary),
-             py::arg("species"), py::arg("boundary_id"), py::arg("value"))
+        .def(
+            "set_dirichlet_boundary",
+            [](MultiIonSolver& solver, size_t species, int boundary_id, double value) {
+                solver.setDirichletBoundary(species, checkedBoundary(boundary_id), value);
+            },
+            py::arg("species"), py::arg("boundary_id"), py::arg("value"))
         .def("set_neumann_boundary",
              py::overload_cast<size_t, Boundary, double>(&MultiIonSolver::setNeumannBoundary),
              py::arg("species"), py::arg("boundary"), py::arg("flux"),
@@ -1160,20 +1500,24 @@ void register_diffusion_bindings(py::module_& m) {
              py::arg("Ey") = 0.0, "Set uniform electric field")
         .def("set_electroneutrality_mode", &MultiIonSolver::setElectroneutralityMode,
              py::arg("enable"), py::arg("background_charge") = 0.0,
-             "Enable/disable electroneutrality constraint")
+             "Compatibility method: enable=True is rejected because electroneutral coupling "
+             "is not implemented")
+        .def("check_stability", &MultiIonSolver::checkStability, py::arg("dt"),
+             "Check the positivity bound for every species")
+        .def("maximum_stable_time_step", &MultiIonSolver::maximumStableTimeStep,
+             "Largest fitted-operator explicit step over all species")
+        .def("recommended_time_step", &MultiIonSolver::recommendedTimeStep, py::arg("safety") = 0.9,
+             "Return safety times the multi-species stability bound")
         .def("solve", &MultiIonSolver::solve, py::arg("dt"), py::arg("num_steps"), "Run simulation")
         .def(
             "concentration",
             [](const MultiIonSolver& solver, size_t species) {
-                return to_numpy_with_base(solver.concentration(species), py::cast(&solver));
+                return to_numpy(solver.concentration(species));
             },
-            py::arg("species"), "Get concentration for a species")
+            py::arg("species"), "Return an owned concentration copy for a species")
         .def(
-            "potential",
-            [](const MultiIonSolver& solver) {
-                return to_numpy_with_base(solver.potential(), py::cast(&solver));
-            },
-            "Get electric potential field")
+            "potential", [](const MultiIonSolver& solver) { return to_numpy(solver.potential()); },
+            "Return an owned copy of the electric potential field")
         .def(
             "charge_density",
             [](const MultiIonSolver& solver) { return to_numpy(solver.chargeDensity()); },
@@ -1182,6 +1526,8 @@ void register_diffusion_bindings(py::module_& m) {
         .def("num_species", &MultiIonSolver::numSpecies, "Get number of ion species")
         .def("ion", &MultiIonSolver::ion, py::arg("index"),
              py::return_value_policy::reference_internal, "Get ion species by index")
+        .def("electrical_mobility", &MultiIonSolver::electricalMobility, py::arg("species"),
+             "Mobility magnitude for a species at this solver's temperature [m²/(V·s)]")
         .def("mesh", &MultiIonSolver::mesh, py::return_value_policy::reference_internal);
 
     // GHK utilities submodule

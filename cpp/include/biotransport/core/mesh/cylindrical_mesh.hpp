@@ -1,317 +1,177 @@
 /**
  * @file cylindrical_mesh.hpp
- * @brief Cylindrical coordinate mesh for axisymmetric and 3D problems.
- *
- * Supports meshes in cylindrical coordinates (r, theta, z) for:
- *   - Axisymmetric problems (r, z) with theta = 0 or 2*pi
- *   - Full 3D cylindrical problems (r, theta, z)
- *   - Pipe flow simulations
- *   - Blood vessel modeling
- *   - Bioreactor design
- *
- * The mesh handles the r = 0 axis singularity by either:
- *   - Avoiding r = 0 (annular meshes with r_min > 0)
- *   - Special treatment at r = 0 for solid cylinder problems
- *
- * Coordinate system:
- *   - r: radial coordinate [0, R] or [r_min, r_max]
- *   - theta: azimuthal angle [0, 2*pi] (or subset)
- *   - z: axial coordinate [z_min, z_max]
- *
- * For 2D axisymmetric problems, theta is ignored and we solve in (r, z).
+ * @brief Uniform meshes and metric-aware operators in cylindrical coordinates.
  */
 
 #ifndef BIOTRANSPORT_CORE_MESH_CYLINDRICAL_MESH_HPP
 #define BIOTRANSPORT_CORE_MESH_CYLINDRICAL_MESH_HPP
 
-#include <cmath>
-#include <stdexcept>
 #include <vector>
 
 namespace biotransport {
 
-/**
- * @brief Mesh type for cylindrical coordinates.
- */
+/** @brief Dimensionality represented by a cylindrical mesh. */
 enum class CylindricalMeshType {
-    AXISYMMETRIC_RZ,  ///< 2D (r, z) for axisymmetric problems
-    RADIAL_R,         ///< 1D radial (r only)
-    FULL_3D           ///< Full 3D (r, theta, z)
+    AXISYMMETRIC_RZ,  ///< Axisymmetric two-dimensional (r,z) mesh
+    RADIAL_R,         ///< Axisymmetric one-dimensional radial mesh
+    FULL_3D           ///< Periodic three-dimensional (r,theta,z) mesh
 };
 
 /**
- * @brief A structured mesh in cylindrical coordinates.
+ * @brief A uniform structured mesh in cylindrical coordinates.
  *
- * Supports three configurations:
- * 1. RADIAL_R: 1D radial problems (r only)
- * 2. AXISYMMETRIC_RZ: 2D axisymmetric problems (r, z)
- * 3. FULL_3D: Complete 3D cylindrical mesh (r, theta, z)
+ * Radial and axisymmetric meshes store ``nr+1`` radial nodes.  Axisymmetric
+ * meshes additionally store ``nz+1`` axial nodes.  A FULL_3D mesh represents
+ * one complete periodic turn and stores ``ntheta`` unique azimuthal nodes;
+ * the duplicate endpoint at ``thetamin+2*pi`` is deliberately omitted.
  *
- * The mesh is uniform in each coordinate direction.
- * Node indexing: i = radial, j = azimuthal (theta), k = axial (z)
- * Linear index = i + j*(nr+1) + k*(nr+1)*(ntheta+1)
+ * Linear storage is radial-fastest.  For FULL_3D,
+ * ``index = i + j*(nr+1) + k*(nr+1)*ntheta``.  For AXISYMMETRIC_RZ,
+ * ``index = i + k*(nr+1)``.
  *
- * Example usage:
- * @code
- *   // Pipe cross-section (2D axisymmetric)
- *   CylindricalMesh mesh(20, 50, 0.0, 0.005, 0.0, 0.1);  // r: 0-5mm, z: 0-10cm
- *
- *   // Blood vessel with wall (annular)
- *   CylindricalMesh mesh(10, 1, 30, 0.003, 0.004, 0.0, 2*M_PI, 0.0, 0.05);
- *
- *   for (int k = 0; k <= mesh.nz(); ++k) {
- *       for (int i = 0; i <= mesh.nr(); ++i) {
- *           double r = mesh.r(i);
- *           double z = mesh.z(k);
- *           // Use (r, z) coordinates
- *       }
- *   }
- * @endcode
+ * Geometry and integration are valid for a FULL_3D mesh that includes
+ * ``r=0``, but its non-axisymmetric cylindrical basis is not single-valued at
+ * the axis.  Differential operators therefore reject that case; use an
+ * annulus or an AXISYMMETRIC_RZ mesh.
  */
 class CylindricalMesh {
 public:
-    /**
-     * @brief Create a 1D radial mesh.
-     *
-     * For purely radial problems (e.g., spherical diffusion, pipe flow profile).
-     *
-     * @param nr Number of cells in radial direction
-     * @param rmin Minimum radius [m] (0 for solid cylinder)
-     * @param rmax Maximum radius [m]
-     */
+    /** @brief Construct a radial mesh on ``rmin <= r <= rmax``. */
     CylindricalMesh(int nr, double rmin, double rmax);
 
-    /**
-     * @brief Create a 2D axisymmetric (r, z) mesh.
-     *
-     * For axisymmetric problems like pipe flow, blood vessel transport.
-     *
-     * @param nr Number of cells in radial direction
-     * @param nz Number of cells in axial direction
-     * @param rmin Minimum radius [m] (0 for solid cylinder)
-     * @param rmax Maximum radius [m]
-     * @param zmin Minimum z coordinate [m]
-     * @param zmax Maximum z coordinate [m]
-     */
+    /** @brief Construct an axisymmetric mesh on ``(r,z)``. */
     CylindricalMesh(int nr, int nz, double rmin, double rmax, double zmin, double zmax);
 
     /**
-     * @brief Create a 3D cylindrical mesh.
+     * @brief Construct a periodic full cylindrical mesh.
      *
-     * For full 3D problems with azimuthal variation.
-     *
-     * @param nr Number of cells in radial direction
-     * @param ntheta Number of cells in azimuthal direction
-     * @param nz Number of cells in axial direction
-     * @param rmin Minimum radius [m]
-     * @param rmax Maximum radius [m]
-     * @param thetamin Minimum angle [rad]
-     * @param thetamax Maximum angle [rad] (2*pi for full cylinder)
-     * @param zmin Minimum z coordinate [m]
-     * @param zmax Maximum z coordinate [m]
+     * ``thetamax-thetamin`` must be one complete turn (2*pi), and
+     * ``ntheta >= 3``.  Partial angular wedges require boundary conditions and
+     * are rejected rather than silently treated as periodic.
      */
     CylindricalMesh(int nr, int ntheta, int nz, double rmin, double rmax, double thetamin,
                     double thetamax, double zmin, double zmax);
 
-    // =========================================================================
-    // Mesh dimensions
-    // =========================================================================
+    int numNodes() const noexcept { return num_nodes_; }
+    int numCells() const noexcept;
 
-    /** @brief Get number of nodes in mesh. */
-    int numNodes() const { return num_nodes_; }
+    CylindricalMeshType type() const noexcept { return type_; }
+    bool isRadial() const noexcept { return type_ == CylindricalMeshType::RADIAL_R; }
+    bool isAxisymmetric() const noexcept { return type_ == CylindricalMeshType::AXISYMMETRIC_RZ; }
+    bool is3D() const noexcept { return type_ == CylindricalMeshType::FULL_3D; }
 
-    /** @brief Get number of cells in mesh. */
-    int numCells() const;
+    int nr() const noexcept { return nr_; }
+    int ntheta() const noexcept { return ntheta_; }
+    int nz() const noexcept { return nz_; }
+    int thetaNodeCount() const noexcept { return is3D() ? ntheta_ : 1; }
+    bool thetaPeriodic() const noexcept { return is3D(); }
 
-    /** @brief Get mesh type. */
-    CylindricalMeshType type() const { return type_; }
+    double dr() const noexcept { return dr_; }
+    double dtheta() const noexcept { return dtheta_; }
+    double dz() const noexcept { return dz_; }
 
-    /** @brief Check if mesh is 1D radial. */
-    bool isRadial() const { return type_ == CylindricalMeshType::RADIAL_R; }
+    double rmin() const noexcept { return rmin_; }
+    double rmax() const noexcept { return rmax_; }
+    double thetamin() const noexcept { return thetamin_; }
+    double thetamax() const noexcept { return thetamax_; }
+    double zmin() const noexcept { return zmin_; }
+    double zmax() const noexcept { return zmax_; }
 
-    /** @brief Check if mesh is 2D axisymmetric. */
-    bool isAxisymmetric() const { return type_ == CylindricalMeshType::AXISYMMETRIC_RZ; }
-
-    /** @brief Check if mesh is full 3D. */
-    bool is3D() const { return type_ == CylindricalMeshType::FULL_3D; }
-
-    // =========================================================================
-    // Cell counts and sizes
-    // =========================================================================
-
-    /** @brief Number of cells in radial direction. */
-    int nr() const { return nr_; }
-
-    /** @brief Number of cells in azimuthal direction. */
-    int ntheta() const { return ntheta_; }
-
-    /** @brief Number of cells in axial direction. */
-    int nz() const { return nz_; }
-
-    /** @brief Cell size in radial direction. */
-    double dr() const { return dr_; }
-
-    /** @brief Cell size in azimuthal direction. */
-    double dtheta() const { return dtheta_; }
-
-    /** @brief Cell size in axial direction. */
-    double dz() const { return dz_; }
-
-    // =========================================================================
-    // Coordinate ranges
-    // =========================================================================
-
-    double rmin() const { return rmin_; }
-    double rmax() const { return rmax_; }
-    double thetamin() const { return thetamin_; }
-    double thetamax() const { return thetamax_; }
-    double zmin() const { return zmin_; }
-    double zmax() const { return zmax_; }
-
-    // =========================================================================
-    // Coordinate access
-    // =========================================================================
+    /** @brief Coordinate accessors with range validation. */
+    double r(int i) const;
+    double theta(int j) const;
+    double z(int k) const;
 
     /**
-     * @brief Get r coordinate of node i.
-     * @param i Radial index (0 to nr)
-     */
-    double r(int i) const { return rmin_ + i * dr_; }
-
-    /**
-     * @brief Get theta coordinate of node j.
-     * @param j Azimuthal index (0 to ntheta)
-     */
-    double theta(int j) const { return thetamin_ + j * dtheta_; }
-
-    /**
-     * @brief Get z coordinate of node k.
-     * @param k Axial index (0 to nz)
-     */
-    double z(int k) const { return zmin_ + k * dz_; }
-
-    // =========================================================================
-    // Index conversion
-    // =========================================================================
-
-    /**
-     * @brief Get linear index from (i, j, k) indices.
+     * @brief Convert coordinate indices to a linear index.
      *
-     * For 1D radial: index(i)
-     * For 2D axisym: index(i, k) where j is ignored
-     * For 3D: index(i, j, k)
+     * For AXISYMMETRIC_RZ, both ``index(i,k)`` and ``index(i,0,k)`` are
+     * accepted.  Supplying both a non-zero second and third index is rejected.
      */
     int index(int i, int j = 0, int k = 0) const;
 
-    /**
-     * @brief Get (i, j, k) indices from linear index.
-     */
+    /** @brief Convert a validated linear index to ``(i,j,k)``. */
     void ijk(int linear_idx, int& i, int& j, int& k) const;
 
-    // =========================================================================
-    // Geometry helpers
-    // =========================================================================
+    bool hasAxisSingularity() const noexcept { return rmin_ == 0.0; }
+    double x(int i, int j = 0) const;
+    double y(int i, int j = 0) const;
 
     /**
-     * @brief Check if mesh includes r = 0 (axis singularity).
-     */
-    bool hasAxisSingularity() const { return rmin_ < 1e-14; }
-
-    /**
-     * @brief Get Cartesian x coordinate from cylindrical.
-     * @param i Radial index
-     * @param j Azimuthal index
-     */
-    double x(int i, int j = 0) const { return r(i) * std::cos(theta(j)); }
-
-    /**
-     * @brief Get Cartesian y coordinate from cylindrical.
-     * @param i Radial index
-     * @param j Azimuthal index
-     */
-    double y(int i, int j = 0) const { return r(i) * std::sin(theta(j)); }
-
-    /**
-     * @brief Get cell volume at node (i, j, k).
+     * @brief Exact nodal control-volume measure.
      *
-     * In cylindrical coordinates, volume element = r * dr * dtheta * dz
-     * For axisymmetric, integrating over theta gives 2*pi*r*dr*dz
+     * RADIAL_R assumes unit axial length.  AXISYMMETRIC_RZ integrates a full
+     * turn.  FULL_3D returns the periodic angular-sector control volume.
+     * Summing this value over every stored node gives the exact domain volume.
      */
     double cellVolume(int i, int j = 0, int k = 0) const;
 
     /**
-     * @brief Get cell area at node i (radial 1D).
+     * @brief Exact annular nodal control area integrated through a full turn.
      *
-     * For radial problems, area = 2*pi*r*dr
+     * Summing over ``i=0..nr`` gives ``crossSectionArea()`` exactly.
      */
     double cellArea(int i) const;
 
-    /**
-     * @brief Get cross-sectional area at z (axisymmetric).
-     *
-     * Area = pi * (rmax^2 - rmin^2)
-     */
-    double crossSectionArea() const;
-
-    // =========================================================================
-    // Differential operators in cylindrical coordinates
-    // =========================================================================
+    double crossSectionArea() const noexcept;
 
     /**
-     * @brief Compute gradient of scalar field (radial component).
+     * @brief Physical radial component ``d(phi)/dr``.
      *
-     * grad_r(phi) = dphi/dr
-     *
-     * @param phi Scalar field values
-     * @return Radial gradient at each node
+     * A regular radial or axisymmetric scalar has an exactly zero radial
+     * gradient at ``r=0``.  Other boundaries use second-order one-sided
+     * differences when at least two cells are available.
      */
     std::vector<double> gradientR(const std::vector<double>& phi) const;
 
-    /**
-     * @brief Compute gradient of scalar field (axial component).
-     *
-     * grad_z(phi) = dphi/dz
-     *
-     * @param phi Scalar field values
-     * @return Axial gradient at each node
-     */
+    /** @brief Physical azimuthal component ``(1/r)d(phi)/dtheta``. */
+    std::vector<double> gradientTheta(const std::vector<double>& phi) const;
+
+    /** @brief Physical axial component ``d(phi)/dz``. */
     std::vector<double> gradientZ(const std::vector<double>& phi) const;
 
     /**
-     * @brief Compute Laplacian in cylindrical coordinates.
+     * @brief Metric-aware scalar Laplacian.
      *
-     * For axisymmetric (no theta dependence):
-     *   lap(phi) = (1/r) * d/dr(r * dphi/dr) + d^2(phi)/dz^2
-     *            = d^2(phi)/dr^2 + (1/r)*dphi/dr + d^2(phi)/dz^2
-     *
-     * For 1D radial:
-     *   lap(phi) = (1/r) * d/dr(r * dphi/dr)
-     *            = d^2(phi)/dr^2 + (1/r)*dphi/dr
-     *
-     * @param phi Scalar field values
-     * @return Laplacian at each node
+     * Radial and axisymmetric meshes use the regular axis limit at ``r=0``.
+     * FULL_3D operators currently require an annulus (``rmin>0``), because a
+     * non-axisymmetric cylindrical basis is undefined at the axis.
+     * At least two cells are required in every non-periodic active direction.
      */
     std::vector<double> laplacian(const std::vector<double>& phi) const;
 
     /**
-     * @brief Compute divergence of vector field (axisymmetric).
+     * @brief Axisymmetric divergence ``(1/r)d(r vr)/dr + d(vz)/dz``.
      *
-     * div(v) = (1/r) * d(r*v_r)/dr + dv_z/dz
-     *
-     * @param vr Radial velocity component
-     * @param vz Axial velocity component
-     * @return Divergence at each node
+     * Calling this overload for FULL_3D throws; use the three-component
+     * overload so the azimuthal metric term cannot be lost.
+     * A mesh containing the axis requires the regularity condition ``vr=0``
+     * there; a field that violates it is rejected.
      */
     std::vector<double> divergence(const std::vector<double>& vr,
                                    const std::vector<double>& vz) const;
 
+    /**
+     * @brief Full divergence
+     * ``(1/r)d(r vr)/dr + (1/r)d(vtheta)/dtheta + d(vz)/dz``.
+     */
+    std::vector<double> divergence(const std::vector<double>& vr, const std::vector<double>& vtheta,
+                                   const std::vector<double>& vz) const;
+
 private:
     CylindricalMeshType type_;
-    int nr_, ntheta_, nz_;
-    double rmin_, rmax_;
-    double thetamin_, thetamax_;
-    double zmin_, zmax_;
-    double dr_, dtheta_, dz_;
+    int nr_;
+    int ntheta_;
+    int nz_;
+    double rmin_;
+    double rmax_;
+    double thetamin_;
+    double thetamax_;
+    double zmin_;
+    double zmax_;
+    double dr_;
+    double dtheta_;
+    double dz_;
     int num_nodes_;
 };
 

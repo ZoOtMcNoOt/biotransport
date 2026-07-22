@@ -1,91 +1,98 @@
+#include "../test_support/science_test.hpp"
+#include <algorithm>
 #include <biotransport/core/mesh/structured_mesh.hpp>
-#include <biotransport/solvers/explicit_fd.hpp>
-#include <cassert>
+#include <biotransport/physics/reactions.hpp>
+#include <biotransport/solvers/diffusion_solvers.hpp>
 #include <cmath>
-#include <iostream>
+#include <limits>
 #include <vector>
 
 using namespace biotransport;
 
-// Exact implicit form for Michaelis–Menten sink ODE:
-//   du/dt = -Vmax * u/(Km + u)
-// Integrating gives:
-//   u + Km * ln(u) = u0 + Km * ln(u0) - Vmax * t
-static double michaelisMentenExactU(double u0, double vmax, double km, double t) {
-    const double c = u0 + km * std::log(u0) - vmax * t;
+namespace {
 
-    // u(t) decreases monotonically for u0>0, vmax>0.
-    double lo = 1e-15;
-    double hi = u0;
+constexpr double kInitialConcentration = 1.1;
+constexpr double kMaximumRate = 0.75;
+constexpr double kMichaelisConstant = 0.4;
+constexpr double kEndTime = 2.0;
 
-    auto f = [km, c](double u) {
-        return u + km * std::log(u) - c;
-    };
+// Positive root of u + Km ln(u) = u0 + Km ln(u0) - Vmax t.
+double michaelisMentenExact(double initial, double maximum_rate, double michaelis_constant,
+                            double time) {
+    const double target = initial + michaelis_constant * std::log(initial) - maximum_rate * time;
+    double lower = std::numeric_limits<double>::min();
+    double upper = initial;
 
-    // Ensure bracket contains root.
-    // f(lo) -> -inf, f(hi)=vmax*t>=0 so bracket should hold, but guard anyway.
-    if (f(hi) < 0.0) {
-        // If due to numerical issues, expand hi until f(hi) >= 0.
-        hi = std::max(hi, 1.0);
-        for (int k = 0; k < 100 && f(hi) < 0.0; ++k) {
-            hi *= 2.0;
-        }
-    }
-
-    for (int it = 0; it < 200; ++it) {
-        const double mid = 0.5 * (lo + hi);
-        const double fm = f(mid);
-        if (fm > 0.0) {
-            hi = mid;
+    for (int iteration = 0; iteration < 200; ++iteration) {
+        const double midpoint = 0.5 * (lower + upper);
+        const double residual = midpoint + michaelis_constant * std::log(midpoint) - target;
+        if (residual > 0.0) {
+            upper = midpoint;
         } else {
-            lo = mid;
+            lower = midpoint;
         }
     }
-
-    return 0.5 * (lo + hi);
+    return 0.5 * (lower + upper);
 }
 
-void testMichaelisMentenSink1DMatchesODEForUniformField() {
-    std::cout << "Testing Michaelis–Menten reaction-diffusion (1D) vs ODE..." << std::endl;
+struct UniformRun {
+    double concentration;
+    double spatial_range;
+};
 
-    StructuredMesh mesh(200, 0.0, 1.0);
+UniformRun solveUniformMichaelisMenten(double dt) {
+    StructuredMesh mesh(20, 0.0, 1.0);
+    std::vector<double> initial(mesh.numNodes(), kInitialConcentration);
 
-    const double D = 1e-12;  // effectively no diffusion
-    const double vmax = 0.75;
-    const double km = 0.4;
+    ReactionDiffusionSolver solver(mesh, 1.0e-3,
+                                   reactions::michaelisMenten(kMaximumRate, kMichaelisConstant));
+    solver.setInitialCondition(initial);
+    solver.setNeumannBoundary(Boundary::Left, 0.0);
+    solver.setNeumannBoundary(Boundary::Right, 0.0);
 
-    const double u0 = 1.1;
-    std::vector<double> initial(mesh.numNodes(), u0);
+    const int steps = static_cast<int>(std::llround(kEndTime / dt));
+    SCIENCE_REQUIRE_NEAR(steps * dt, kEndTime, 1.0e-14, 0.0, "integrated end time");
+    solver.solve(dt, steps);
 
-    TransportProblem problem(mesh);
-    problem.diffusivity(D)
-        .michaelisMenten(vmax, km)
-        .initialCondition(initial)
-        .neumann(Boundary::Left, 0.0)
-        .neumann(Boundary::Right, 0.0);
-
-    const double t_end = 2.0;  // dt=5e-4 * 4000 steps
-
-    ExplicitFD solver;
-    auto result = solver.safetyFactor(0.4).run(problem, t_end);
-
-    const double u_exact = michaelisMentenExactU(u0, vmax, km, t_end);
-
-    const auto& u = result.solution;
-    const int mid = mesh.nx() / 2;
-
-    const double err = std::abs(u[mid] - u_exact);
-    assert(err < 7e-3);
-
-    assert(u[mid] > 0.0);
-    assert(u[mid] < u0 + 1e-12);
-
-    std::cout << "Michaelis–Menten ODE agreement test passed!" << std::endl;
+    const auto& solution = solver.solution();
+    const auto range = std::minmax_element(solution.begin(), solution.end());
+    return {solution[mesh.nx() / 2], *range.second - *range.first};
 }
+
+void testUniformFieldMatchesMichaelisMentenOde() {
+    const UniformRun coarse = solveUniformMichaelisMenten(0.02);
+    const UniformRun fine = solveUniformMichaelisMenten(0.01);
+    const double exact =
+        michaelisMentenExact(kInitialConcentration, kMaximumRate, kMichaelisConstant, kEndTime);
+    const double coarse_error = std::abs(coarse.concentration - exact);
+    const double fine_error = std::abs(fine.concentration - exact);
+    const double observed_order = std::log(coarse_error / fine_error) / std::log(2.0);
+    const double fine_relative_error = fine_error / exact;
+
+    science_test::report("exact concentration", exact);
+    science_test::report("dt=0.02 absolute error", coarse_error);
+    science_test::report("dt=0.01 absolute error", fine_error);
+    science_test::report("observed temporal order", observed_order);
+
+    SCIENCE_REQUIRE(fine.concentration > 0.0,
+                    "resolved Michaelis-Menten consumption must preserve positivity");
+    SCIENCE_REQUIRE(fine.concentration < kInitialConcentration,
+                    "positive consumption rate must decrease concentration");
+    SCIENCE_REQUIRE(fine_relative_error < 5.0e-3,
+                    "dt=0.01 must resolve the analytical trajectory to <0.5% relative error; "
+                    "actual=" +
+                        science_test::number(fine_relative_error));
+    SCIENCE_REQUIRE(observed_order > 0.9 && observed_order < 1.1,
+                    "forward Euler should demonstrate first-order temporal convergence; actual=" +
+                        science_test::number(observed_order));
+    SCIENCE_REQUIRE(coarse.spatial_range < 1.0e-13 && fine.spatial_range < 1.0e-13,
+                    "zero-flux diffusion must preserve a spatially uniform field");
+}
+
+}  // namespace
 
 int main() {
-    testMichaelisMentenSink1DMatchesODEForUniformField();
-
-    std::cout << "All Michaelis–Menten reaction-diffusion tests passed!" << std::endl;
-    return 0;
+    return science_test::runSuite("Michaelis-Menten reaction-diffusion",
+                                  {{"uniform PDE reduction agrees with Michaelis-Menten ODE",
+                                    testUniformFieldMatchesMichaelisMentenOde}});
 }

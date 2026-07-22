@@ -12,10 +12,57 @@
 #include <array>
 #include <biotransport/core/boundary.hpp>
 #include <biotransport/core/mesh/structured_mesh.hpp>
+#include <cmath>
 #include <functional>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace biotransport {
+
+namespace velocity_bc_detail {
+
+inline void validateFieldLayout(const StructuredMesh& mesh, const std::vector<double>& field,
+                                const char* name) {
+    if (mesh.is1D()) {
+        throw std::invalid_argument(
+            "Velocity boundary application requires a two-dimensional mesh");
+    }
+    const auto expected = static_cast<std::size_t>(mesh.numNodes());
+    if (field.size() != expected) {
+        throw std::invalid_argument(std::string(name) + " field size must equal mesh.numNodes()");
+    }
+}
+
+inline double finiteBoundaryValue(double value, const char* name) {
+    if (!std::isfinite(value)) {
+        throw std::domain_error(std::string(name) + " boundary value must be finite");
+    }
+    return value;
+}
+
+inline void validateBoundaryContracts(const std::array<VelocityBC, 4>& velocity_bcs) {
+    for (const auto& bc : velocity_bcs) {
+        switch (bc.type) {
+            case VelocityBCType::NOSLIP:
+            case VelocityBCType::OUTFLOW:
+                break;
+            case VelocityBCType::DIRICHLET:
+            case VelocityBCType::INFLOW:
+                (void)finiteBoundaryValue(bc.u_value, "u");
+                (void)finiteBoundaryValue(bc.v_value, "v");
+                break;
+            case VelocityBCType::NEUMANN:
+                throw std::invalid_argument(
+                    "StressFree/NEUMANN traction is not implemented; copying velocity from the "
+                    "interior would impose only a zero velocity gradient");
+            default:
+                throw std::invalid_argument("Unknown velocity boundary-condition type");
+        }
+    }
+}
+
+}  // namespace velocity_bc_detail
 
 /**
  * @brief Applies velocity boundary conditions to u and v fields.
@@ -25,7 +72,13 @@ namespace biotransport {
  * - NOSLIP: u = v = 0
  * - DIRICHLET: u = u_value, v = v_value
  * - INFLOW: use profile functions or constant values
- * - OUTFLOW/NEUMANN: zero gradient (extrapolate from interior)
+ * - OUTFLOW: zero normal derivative of velocity (copy from the adjacent node)
+ * - NEUMANN/StressFree: rejected because zero velocity gradient is not a
+ *   traction-free boundary for incompressible viscous flow
+ *
+ * OUTFLOW is only a velocity extrapolation. It does not enforce zero normal
+ * stress or a pressure condition; a solver using it must provide a compatible
+ * open-boundary pressure formulation separately.
  *
  * @param mesh The structured mesh
  * @param velocity_bcs Array of VelocityBC for [Left, Right, Bottom, Top]
@@ -39,6 +92,9 @@ inline void applyVelocityBoundaryConditions(
     const std::array<std::function<double(double, double)>, 4>& u_inlet,
     const std::array<std::function<double(double, double)>, 4>& v_inlet, std::vector<double>& u,
     std::vector<double>& v) {
+    velocity_bc_detail::validateFieldLayout(mesh, u, "u");
+    velocity_bc_detail::validateFieldLayout(mesh, v, "v");
+    velocity_bc_detail::validateBoundaryContracts(velocity_bcs);
     int nx = mesh.nx();
     int ny = mesh.ny();
     int stride = nx + 1;
@@ -52,24 +108,34 @@ inline void applyVelocityBoundaryConditions(
                 v[idx] = 0.0;
                 break;
             case VelocityBCType::DIRICHLET:
-                u[idx] = bc.u_value;
-                v[idx] = bc.v_value;
+                u[idx] = velocity_bc_detail::finiteBoundaryValue(bc.u_value, "u");
+                v[idx] = velocity_bc_detail::finiteBoundaryValue(bc.v_value, "v");
                 break;
             case VelocityBCType::INFLOW:
                 if (u_inlet[bc_idx]) {
-                    u[idx] = u_inlet[bc_idx](x, y);
-                    v[idx] = v_inlet[bc_idx] ? v_inlet[bc_idx](x, y) : bc.v_value;
+                    u[idx] = velocity_bc_detail::finiteBoundaryValue(u_inlet[bc_idx](x, y),
+                                                                     "u inlet profile");
+                    v[idx] = velocity_bc_detail::finiteBoundaryValue(
+                        v_inlet[bc_idx] ? v_inlet[bc_idx](x, y) : bc.v_value, "v inlet profile");
                 } else {
-                    u[idx] = bc.u_value;
-                    v[idx] = bc.v_value;
+                    u[idx] = velocity_bc_detail::finiteBoundaryValue(bc.u_value, "u inflow");
+                    v[idx] = velocity_bc_detail::finiteBoundaryValue(bc.v_value, "v inflow");
                 }
                 break;
             case VelocityBCType::OUTFLOW:
-            case VelocityBCType::NEUMANN:
-                // Zero gradient: copy from interior
-                u[idx] = u[idx + interior_offset];
-                v[idx] = v[idx + interior_offset];
+                // Zero normal velocity derivative only. This is not a traction
+                // condition and must not be presented as one.
+                u[idx] = velocity_bc_detail::finiteBoundaryValue(u[idx + interior_offset],
+                                                                 "interior u outflow");
+                v[idx] = velocity_bc_detail::finiteBoundaryValue(v[idx + interior_offset],
+                                                                 "interior v outflow");
                 break;
+            case VelocityBCType::NEUMANN:
+                throw std::invalid_argument(
+                    "StressFree/NEUMANN traction is not implemented; copying velocity from the "
+                    "interior would impose only a zero velocity gradient");
+            default:
+                throw std::invalid_argument("Unknown velocity boundary-condition type");
         }
     };
 
@@ -127,6 +193,7 @@ inline void applyVelocityBoundaryConditions(const StructuredMesh& mesh,
  * @param p Pressure field (modified)
  */
 inline void applyPressureNeumannBCs(const StructuredMesh& mesh, std::vector<double>& p) {
+    velocity_bc_detail::validateFieldLayout(mesh, p, "pressure");
     int nx = mesh.nx();
     int ny = mesh.ny();
     int stride = nx + 1;
@@ -153,6 +220,7 @@ inline void applyPressureNeumannBCs(const StructuredMesh& mesh, std::vector<doub
  * @param p Pressure field (modified)
  */
 inline void subtractMeanPressure(const StructuredMesh& mesh, std::vector<double>& p) {
+    velocity_bc_detail::validateFieldLayout(mesh, p, "pressure");
     int nx = mesh.nx();
     int ny = mesh.ny();
     int stride = nx + 1;

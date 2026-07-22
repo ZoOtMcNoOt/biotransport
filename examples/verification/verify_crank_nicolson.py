@@ -1,28 +1,23 @@
-"""
-Example: Crank-Nicolson Accuracy Verification
+"""Temporal-order evidence for one semidiscrete 1D diffusion problem.
 
-This example verifies the temporal accuracy of the Crank-Nicolson method
-against analytical solutions for 1D diffusion problems. We compare:
-
-1. Explicit method (FTCS) - First-order accurate in time
-2. Crank-Nicolson - Second-order accurate in time
-
-The analytical solution for 1D diffusion with Dirichlet BCs:
-    u(x,t) = sum[n=1 to ∞] B_n * sin(n*π*x/L) * exp(-D*(n*π/L)²*t)
-
-We verify the order of accuracy by measuring error vs time step size.
+The spatially discretized sine mode has a known exact evolution.  Using that
+method-of-lines reference isolates time-integration error from spatial error.
+The script checks whether explicit Euler and Crank-Nicolson meet declared
+observed-order criteria over one timestep sequence, plus one explicitly scoped
+single-step error criterion.  It does not establish accuracy or stability for
+other meshes, equations, timesteps, or the library as a whole.
 
 BMEN 341 Reference: Numerical Methods Verification (Week 5)
 """
 
+import biotransport as bt
 import matplotlib.pyplot as plt
 import numpy as np
-import biotransport as bt
 
 EXAMPLE_NAME = "crank_nicolson_verification"
 
 print("=" * 70)
-print("Crank-Nicolson Temporal Accuracy Verification")
+print("Crank-Nicolson Temporal-Order Evidence")
 print("=" * 70)
 
 # ========================================================================
@@ -30,28 +25,18 @@ print("=" * 70)
 # ========================================================================
 
 
-def analytical_solution_1d(x, t, D, L, n_terms=50):
-    """
-    Analytical solution for 1D diffusion with:
-    - Initial condition: u(x,0) = sin(π*x/L)
-    - Boundary conditions: u(0,t) = u(L,t) = 0
-
-    Solution: u(x,t) = sin(π*x/L) * exp(-D*(π/L)²*t)
-    """
-    # For initial condition sin(π*x/L), only the n=1 term is non-zero
-    # and B_1 = 1
-    return np.sin(np.pi * x / L) * np.exp(-D * (np.pi / L) ** 2 * t)
-
-
-def analytical_solution_gaussian(x, t, D, x0, sigma0):
-    """
-    Analytical solution for 1D diffusion with Gaussian initial condition
-    on infinite domain (approximation for large domain with zero BCs).
-
-    u(x,t) = 1/sqrt(4πDt + 2πσ₀²) * exp(-(x-x₀)²/(4Dt + 2σ₀²))
-    """
-    sigma_t_sq = 2 * sigma0**2 + 4 * D * t
-    return (sigma0 / np.sqrt(sigma_t_sq)) * np.exp(-((x - x0) ** 2) / sigma_t_sq)
+def semidiscrete_sine_reference(
+    x: np.ndarray,
+    t: float,
+    diffusivity: float,
+    length: float,
+    spacing: float,
+) -> np.ndarray:
+    """Exact evolution of the first sine mode under the discrete Laplacian."""
+    eigenvalue = (
+        -4.0 * diffusivity / spacing**2 * np.sin(np.pi * spacing / (2.0 * length)) ** 2
+    )
+    return np.sin(np.pi * x / length) * np.exp(eigenvalue * t)
 
 
 # ========================================================================
@@ -73,19 +58,20 @@ print(f"  Diffusion coefficient: D = {D}")
 print(f"  End time: t = {t_end}")
 print(f"  Mesh points: {mesh.num_nodes()}")
 print(f"  Spatial resolution: dx = {dx:.6f}")
+print("  Error reference: exact first eigenmode of the discrete Laplacian")
 
 # ========================================================================
 # Test Case 1: Sine wave initial condition
 # ========================================================================
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("Test Case 1: Sine Wave Initial Condition")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
 
 initial_sine = np.sin(np.pi * x / L)
-analytical_sine = analytical_solution_1d(x, t_end, D, L)
+reference_sine = semidiscrete_sine_reference(x, t_end, D, L, dx)
 
-# Test different time step sizes
-dt_values = np.array([0.001, 0.002, 0.005, 0.01, 0.02])
+# Coarse-to-fine steps; each divides t_end and all satisfy the 1D explicit limit.
+dt_values = np.array([0.005, 0.0025, 0.00125, 0.000625, 0.0003125])
 errors_explicit = []
 errors_cn = []
 
@@ -101,15 +87,27 @@ for dt in dt_values:
         .dirichlet(bt.Boundary.Left, 0.0)
         .dirichlet(bt.Boundary.Right, 0.0)
     )
-    result_explicit = bt.solve(problem_explicit, t=t_end, dt=dt, method="explicit")
-    solution_explicit = result_explicit.solution()
-    error_explicit = np.sqrt(np.mean((solution_explicit - analytical_sine) ** 2))
+    result_explicit = bt.solve(
+        problem_explicit,
+        end_time=t_end,
+        time_step=dt,
+        method="explicit",
+    )
+    solution_explicit = np.asarray(result_explicit.concentration)
+    error_explicit = np.sqrt(np.mean((solution_explicit - reference_sine) ** 2))
     errors_explicit.append(error_explicit)
 
-    # Crank-Nicolson method
-    result_cn = bt.solve(problem_explicit, t=t_end, dt=dt, method="crank_nicolson")
-    solution_cn = result_cn.solution()
-    error_cn = np.sqrt(np.mean((solution_cn - analytical_sine) ** 2))
+    # Specialized C++ Crank-Nicolson solver.
+    num_steps = int(round(t_end / dt))
+    if not np.isclose(num_steps * dt, t_end, rtol=0.0, atol=1e-14):
+        raise ValueError(f"dt={dt} does not divide t_end={t_end}")
+    solver_cn = bt.CrankNicolsonDiffusion(mesh, D)
+    solver_cn.set_initial_condition(initial_sine)
+    solver_cn.set_dirichlet_boundary(bt.Boundary.Left, 0.0)
+    solver_cn.set_dirichlet_boundary(bt.Boundary.Right, 0.0)
+    solver_cn.solve(dt=dt, num_steps=num_steps)
+    solution_cn = np.asarray(solver_cn.solution())
+    error_cn = np.sqrt(np.mean((solution_cn - reference_sine) ** 2))
     errors_cn.append(error_cn)
 
     ratio = error_explicit / error_cn if error_cn > 0 else np.inf
@@ -118,82 +116,104 @@ for dt in dt_values:
 errors_explicit = np.array(errors_explicit)
 errors_cn = np.array(errors_cn)
 
+if (
+    np.any(~np.isfinite(errors_explicit))
+    or np.any(~np.isfinite(errors_cn))
+    or np.any(errors_explicit <= 0.0)
+    or np.any(errors_cn <= 0.0)
+):
+    raise RuntimeError("Temporal-order fit requires finite, positive RMS errors")
+
 # ========================================================================
 # Compute convergence rates
 # ========================================================================
-print(f"\n{'='*70}")
+print(f"\n{'=' * 70}")
 print("Convergence Rate Analysis")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
 
-# Compute slopes in log-log plot (should be ~1 for explicit, ~2 for CN)
+# Compute slopes in a log-log least-squares fit over the stated sequence.
 log_dt = np.log(dt_values)
 log_error_explicit = np.log(errors_explicit)
 log_error_cn = np.log(errors_cn)
 
 # Linear fit: log(error) = slope * log(dt) + intercept
-slope_explicit = np.polyfit(log_dt[-3:], log_error_explicit[-3:], 1)[
-    0
-]  # Use last 3 points
-slope_cn = np.polyfit(log_dt[-3:], log_error_cn[-3:], 1)[0]
+slope_explicit = np.polyfit(log_dt, log_error_explicit, 1)[0]
+slope_cn = np.polyfit(log_dt, log_error_cn, 1)[0]
 
-print("\nMeasured temporal convergence rates:")
-print(f"  Explicit method: {slope_explicit:.2f} (theoretical: 1.0)")
-print(f"  Crank-Nicolson:  {slope_cn:.2f} (theoretical: 2.0)")
+print("\nObserved temporal orders from all five RMS-error values:")
+print(f"  Explicit method: {slope_explicit:.3f} (comparison value: 1.0)")
+print(f"  Crank-Nicolson:  {slope_cn:.3f} (comparison value: 2.0)")
 
 # ========================================================================
 # Test Case 2: Large time step comparison
 # ========================================================================
-print(f"\n{'='*70}")
-print("Test Case 2: Large Time Step Performance")
-print(f"{'='*70}")
+print(f"\n{'=' * 70}")
+print("Test Case 2: One Configured Large-Step Observation")
+print(f"{'=' * 70}")
 
 # Use a very large time step
 dt_large = 0.05  # Same as total simulation time - single step!
 
 print(f"\nTesting with single time step: dt = {dt_large} (entire simulation)")
+explicit_stability_limit = dx**2 / (2 * D)
 print(
-    f"This exceeds explicit stability limit by ~{dt_large / (0.5 * dx**2 / (2*D)):.1f}x"
+    "Requested dt / 1D explicit diffusion limit = "
+    f"{dt_large / explicit_stability_limit:.1f}"
 )
 
-# Explicit with large dt (will be inaccurate or unstable)
+# Record exactly how the explicit solver handles this out-of-limit request.
 try:
     result_explicit_large = bt.solve(
-        problem_explicit, t=t_end, dt=dt_large, method="explicit"
+        problem_explicit,
+        end_time=t_end,
+        time_step=dt_large,
+        method="explicit",
     )
-    solution_explicit_large = result_explicit_large.solution()
+    solution_explicit_large = np.asarray(result_explicit_large.concentration)
     error_explicit_large = np.sqrt(
-        np.mean((solution_explicit_large - analytical_sine) ** 2)
+        np.mean((solution_explicit_large - reference_sine) ** 2)
     )
-
-    if np.any(np.abs(solution_explicit_large) > 1e10) or np.any(
-        np.isnan(solution_explicit_large)
-    ):
-        print("\n✗ Explicit method: UNSTABLE (solution diverged)")
-        solution_explicit_large[:] = np.nan
-        error_explicit_large = np.inf
-    else:
-        print(f"\n✓ Explicit method: Error = {error_explicit_large:.10f}")
+    explicit_large_status = (
+        "completed; "
+        f"finite={bool(np.all(np.isfinite(solution_explicit_large)))}, "
+        f"RMS error={error_explicit_large:.3e}"
+    )
 except Exception as e:
-    print(f"\n✗ Explicit method: FAILED - {str(e)}")
+    explicit_large_status = f"rejected with {type(e).__name__}: {e}"
     solution_explicit_large = np.full_like(x, np.nan)
     error_explicit_large = np.inf
+print(f"\nExplicit out-of-limit request: {explicit_large_status}")
 
-# Crank-Nicolson with large dt
-result_cn_large = bt.solve(
-    problem_explicit, t=t_end, dt=dt_large, method="crank_nicolson"
+# Crank-Nicolson with one large step.
+solver_cn_large = bt.CrankNicolsonDiffusion(mesh, D)
+solver_cn_large.set_initial_condition(initial_sine)
+solver_cn_large.set_dirichlet_boundary(bt.Boundary.Left, 0.0)
+solver_cn_large.set_dirichlet_boundary(bt.Boundary.Right, 0.0)
+solver_cn_large.solve(dt=dt_large, num_steps=1)
+solution_cn_large = np.asarray(solver_cn_large.solution())
+error_cn_large = np.sqrt(np.mean((solution_cn_large - reference_sine) ** 2))
+
+print(f"Crank-Nicolson one-step RMS error: {error_cn_large:.3e}")
+print(f"Crank-Nicolson reported final time: {solver_cn_large.time():.6f}")
+
+ORDER_TOLERANCE = 0.3
+SINGLE_STEP_RMS_LIMIT = 1e-6
+explicit_order_passed = (
+    np.isfinite(slope_explicit) and abs(slope_explicit - 1.0) < ORDER_TOLERANCE
 )
-solution_cn_large = result_cn_large.solution()
-error_cn_large = np.sqrt(np.mean((solution_cn_large - analytical_sine) ** 2))
-
-print(f"✓ Crank-Nicolson: Error = {error_cn_large:.10f}")
-print(f"  Steps taken: {result_cn_large.stats.steps} (just 1!)")
+cn_order_passed = np.isfinite(slope_cn) and abs(slope_cn - 2.0) < ORDER_TOLERANCE
+cn_single_step_passed = (
+    np.all(np.isfinite(solution_cn_large))
+    and error_cn_large < SINGLE_STEP_RMS_LIMIT
+    and np.isclose(solver_cn_large.time(), t_end, rtol=0.0, atol=1e-14)
+)
 
 # ========================================================================
 # Visualization
 # ========================================================================
-print(f"\n{'='*70}")
-print("Creating verification plots...")
-print(f"{'='*70}")
+print(f"\n{'=' * 70}")
+print("Creating scoped numerical-evidence plots...")
+print(f"{'=' * 70}")
 
 # Figure 1: Convergence plot
 fig1, ax1 = plt.subplots(figsize=(10, 7))
@@ -239,24 +259,41 @@ ax1.loglog(
 ax1.set_xlabel("Time step size (dt)", fontsize=12)
 ax1.set_ylabel("RMS Error", fontsize=12)
 ax1.set_title(
-    "Temporal Accuracy: Explicit vs Crank-Nicolson", fontsize=14, fontweight="bold"
+    "Temporal RMS Error vs Timestep: Explicit and Crank-Nicolson",
+    fontsize=14,
+    fontweight="bold",
 )
 ax1.legend(fontsize=11)
 ax1.grid(True, which="both", alpha=0.3)
 plt.tight_layout()
 plt.savefig(bt.get_result_path("convergence_rates.png", EXAMPLE_NAME), dpi=150)
 
-# Figure 2: Solution comparison at t_end with small dt
+# Figure 2: Solution comparison at t_end with the finest tested dt.
 fig2, axes2 = plt.subplots(2, 1, figsize=(12, 10))
 
 # Top: Full solutions
 ax_top = axes2[0]
-ax_top.plot(x, analytical_sine, "k-", linewidth=3, label="Analytical", alpha=0.7)
 ax_top.plot(
-    x, solution_explicit, "b--", linewidth=2, label=f"Explicit (dt={dt_values[2]:.4f})"
+    x,
+    reference_sine,
+    "k-",
+    linewidth=3,
+    label="Semidiscrete exact reference",
+    alpha=0.7,
 )
 ax_top.plot(
-    x, solution_cn, "r:", linewidth=2, label=f"Crank-Nicolson (dt={dt_values[2]:.4f})"
+    x,
+    solution_explicit,
+    "b--",
+    linewidth=2,
+    label=f"Explicit (dt={dt_values[-1]:.7f})",
+)
+ax_top.plot(
+    x,
+    solution_cn,
+    "r:",
+    linewidth=2,
+    label=f"Crank-Nicolson (dt={dt_values[-1]:.7f})",
 )
 ax_top.set_xlabel("Position x", fontsize=12)
 ax_top.set_ylabel("Concentration", fontsize=12)
@@ -266,17 +303,21 @@ ax_top.grid(True, alpha=0.3)
 
 # Bottom: Errors
 ax_bottom = axes2[1]
-error_plot_explicit = solution_explicit - analytical_sine
-error_plot_cn = solution_cn - analytical_sine
+error_plot_explicit = solution_explicit - reference_sine
+error_plot_cn = solution_cn - reference_sine
 ax_bottom.plot(
     x,
     error_plot_explicit,
     "b--",
     linewidth=2,
-    label=f"Explicit Error (RMS={errors_explicit[2]:.6f})",
+    label=f"Explicit Error (RMS={errors_explicit[-1]:.3e})",
 )
 ax_bottom.plot(
-    x, error_plot_cn, "r:", linewidth=2, label=f"CN Error (RMS={errors_cn[2]:.6f})"
+    x,
+    error_plot_cn,
+    "r:",
+    linewidth=2,
+    label=f"CN Error (RMS={errors_cn[-1]:.3e})",
 )
 ax_bottom.axhline(0, color="k", linestyle="-", alpha=0.3)
 ax_bottom.set_xlabel("Position x", fontsize=12)
@@ -290,14 +331,21 @@ plt.savefig(bt.get_result_path("solution_comparison.png", EXAMPLE_NAME), dpi=150
 
 # Figure 3: Large time step comparison
 fig3, ax3 = plt.subplots(figsize=(12, 7))
-ax3.plot(x, analytical_sine, "k-", linewidth=3, label="Analytical", alpha=0.7)
+ax3.plot(
+    x,
+    reference_sine,
+    "k-",
+    linewidth=3,
+    label="Semidiscrete exact reference",
+    alpha=0.7,
+)
 if not np.all(np.isnan(solution_explicit_large)):
     ax3.plot(
         x,
         solution_explicit_large,
         "b--",
         linewidth=2,
-        label=f"Explicit (dt={dt_large}, UNSTABLE)",
+        label=f"Explicit requested dt={dt_large}",
     )
 ax3.plot(
     x, solution_cn_large, "r-", linewidth=2, label=f"Crank-Nicolson (dt={dt_large})"
@@ -317,33 +365,47 @@ plt.show()
 # ========================================================================
 # Summary
 # ========================================================================
-print(f"\n{'='*70}")
-print("VERIFICATION SUMMARY")
-print(f"{'='*70}")
+print(f"\n{'=' * 70}")
+print("NUMERICAL CHECK SUMMARY")
+print(f"{'=' * 70}")
 
-print("\n📊 Temporal Accuracy:")
-print(f"  Explicit method: ~{slope_explicit:.1f} order (expected: 1st order)")
-print(f"  Crank-Nicolson:  ~{slope_cn:.1f} order (expected: 2nd order)")
-
-if abs(slope_explicit - 1.0) < 0.3:
-    print("  ✓ Explicit first-order accuracy VERIFIED")
-else:
-    print(f"  ⚠ Explicit order {slope_explicit:.2f} deviates from theoretical 1.0")
-
-if abs(slope_cn - 2.0) < 0.3:
-    print("  ✓ Crank-Nicolson second-order accuracy VERIFIED")
-else:
-    print(f"  ⚠ CN order {slope_cn:.2f} deviates from theoretical 2.0")
-
-print("\n💡 Key Findings:")
+print("\nChecked reference and norm:")
+print("  Exact first eigenmode of the discrete 1D Laplacian; RMS field error")
+print("\nObserved-order criteria over the five stated dt values:")
 print(
-    f"  • CN is {errors_explicit[-1]/errors_cn[-1]:.1f}x more accurate at dt={dt_values[-1]}"
+    "  Explicit: "
+    f"p={slope_explicit:.3f}, |p-1|={abs(slope_explicit - 1.0):.3f}, "
+    f"required < {ORDER_TOLERANCE:.1f}: "
+    f"{'PASS' if explicit_order_passed else 'FAIL'}"
 )
-print(f"  • CN remains stable with dt={dt_large} (single time step)")
 print(
-    f"  • Explicit method requires {int(t_end/dt_values[0])} steps for similar accuracy"
+    "  Crank-Nicolson: "
+    f"p={slope_cn:.3f}, |p-2|={abs(slope_cn - 2.0):.3f}, "
+    f"required < {ORDER_TOLERANCE:.1f}: "
+    f"{'PASS' if cn_order_passed else 'FAIL'}"
 )
 
-print("\n📁 Results saved to:")
+print("\nSingle configured CN step criterion:")
+print(
+    f"  dt={dt_large}, RMS error={error_cn_large:.3e}, "
+    f"required < {SINGLE_STEP_RMS_LIMIT:.1e}, final time={solver_cn_large.time():.6f}: "
+    f"{'PASS' if cn_single_step_passed else 'FAIL'}"
+)
+
+print("\nDescriptive comparisons (not additional acceptance checks):")
+print(f"  Explicit out-of-limit request: {explicit_large_status}")
+print(
+    f"  At dt={dt_values[-1]:.7f}, explicit/CN RMS-error ratio="
+    f"{errors_explicit[-1] / errors_cn[-1]:.3e}"
+)
+print("  No conclusion is claimed outside the configured problem and sequences.")
+
+checks_passed = explicit_order_passed and cn_order_passed and cn_single_step_passed
+print(f"\nOverall declared checks: {'PASS' if checks_passed else 'FAIL'}")
+
+print("\nResults saved to:")
 print(f"  {bt.get_result_path('', EXAMPLE_NAME)}")
-print(f"{'='*70}")
+print(f"{'=' * 70}")
+
+if not checks_passed:
+    raise SystemExit(1)

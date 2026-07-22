@@ -27,7 +27,7 @@ def verify_maxwell_model():
     print("\nParameters:")
     print(f"  E = {E:.0f} Pa")
     print(f"  eta = {eta:.0f} Pa*s")
-    print(f"  eps0 = {eps0*100:.1f}%")
+    print(f"  eps0 = {eps0 * 100:.1f}%")
     print(f"  tau = eta/E = {tau:.3f} s")
 
     # Time array (0 to 5tau)
@@ -42,10 +42,10 @@ def verify_maxwell_model():
     max_error = np.max(np.abs(sigma - sigma_expected))
 
     print("\nVerification:")
-    print(f"  sigma(0) = {sigma[0]:.4f} Pa (expected {E*eps0:.4f})")
+    print(f"  sigma(0) = {sigma[0]:.4f} Pa (expected {E * eps0:.4f})")
     print(
         f"  sigma(tau) = {bt.analytical.maxwell_relaxation(E, eta, eps0, tau):.4f} Pa "
-        f"(expected {E*eps0/np.e:.4f})"
+        f"(expected {E * eps0 / np.e:.4f})"
     )
     print(f"  Max error: {max_error:.2e} Pa")
 
@@ -158,8 +158,8 @@ def verify_burgers_model():
     max_error = np.max(np.abs(J - J_expected))
 
     print("\nVerification:")
-    print(f"  eps(0) = {eps[0]:.6f} (expected {sigma0/E1:.6f})")
-    print(f"  J(0) = {J[0]:.6f} Pa^-1 (expected {1/E1:.6f})")
+    print(f"  eps(0) = {eps[0]:.6f} (expected {sigma0 / E1:.6f})")
+    print(f"  J(0) = {J[0]:.6f} Pa^-1 (expected {1 / E1:.6f})")
     print(f"  Max compliance error: {max_error:.2e} Pa^-1")
 
     passed = max_error < 1e-10
@@ -182,7 +182,7 @@ def verify_complex_modulus():
 
     print(f"\nTest case: G1 = {G1}, G2 = {G2}")
     print(f"  |G*| = sqrt(G1² + G2²) = {G_star:.6f} (expected 5.0)")
-    print(f"  tan(delta) = G2/G1 = {tan_delta:.6f} (expected {4/3:.6f})")
+    print(f"  tan(delta) = G2/G1 = {tan_delta:.6f} (expected {4 / 3:.6f})")
     print(
         f"  delta = atan2(G2, G1) = {np.degrees(delta):.4f}° "
         f"(expected {np.degrees(np.arctan2(4, 3)):.4f}°)"
@@ -336,3 +336,5 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print(f"SUMMARY: {sum(results)}/{len(results)} verifications passed")
     print("=" * 60)
+    if not all(results):
+        raise SystemExit(1)

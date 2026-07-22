@@ -1,24 +1,25 @@
-"""Tumor drug delivery with interstitial pressure and transport (C++).
+"""Tumor drug delivery with prescribed interstitial pressure (C++).
 
 This example couples:
 - elevated tumor interstitial fluid pressure (IFP)
 - Darcy interstitial flow from pressure gradients
 - drug convection + diffusion
-- vascular source (permeability × vessel density)
-- binding + cellular uptake
+- vascular exchange (permeability × vascular surface area density)
+- irreversible tissue sequestration + cellular uptake
+
+The pressure calculation is an empirical prescribed-IFP surrogate. It does not
+predict pressure from Starling filtration or lymphatic drainage. The tumor IFP
+must therefore come from measurement or a separately validated model.
+The pressure clamp also implies an unresolved fluid source; this example treats
+that source as solute-free and does not model Starling solvent-drag delivery.
 
 Units:
 - length in meters (plots in mm)
 - pressure specified in mmHg (converted to Pa)
 
-Configuration:
-    This example supports optional use of TumorDrugDeliveryConfig for parameter
-    management. Set USE_CONFIG=True to use the config dataclass, or False to use
-    inline parameters (default behavior for backward compatibility).
-
-    Example with config:
+Configuration example:
         from biotransport import TumorDrugDeliveryConfig
-        config = bt.TumorDrugDeliveryConfig(
+        config = TumorDrugDeliveryConfig(
             domain_size=0.005,
             tumor_radius=0.002,
             D_drug_tumor=1e-11,  # lower diffusivity in dense tumor
@@ -26,101 +27,43 @@ Configuration:
         print(config.describe())  # View all parameters
 """
 
-import numpy as np
+import biotransport as bt
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
-import biotransport as bt
+import numpy as np
 
 EXAMPLE_NAME = "tumor_drug_delivery"
 
-# ============================================================================
-# Configuration Mode
-# ============================================================================
-# Set to True to use TumorDrugDeliveryConfig dataclass for parameter management
-# Set to False to use inline parameters (backward compatible)
-USE_CONFIG = False
+config = bt.TumorDrugDeliveryConfig()
+print(config.describe())
 
-if USE_CONFIG:
-    # Use configuration dataclass for organized parameter management
-    config = bt.TumorDrugDeliveryConfig(
-        domain_size=5e-3,
-        tumor_radius=2e-3,
-        D_drug_normal=5e-11,
-        D_drug_tumor=2e-11,
-        k_binding=1e-3,
-        k_uptake=5e-4,
-        MVD_normal=100.0,
-        MVD_tumor=200.0,  # Rim value; core computed below
-        P_vessel_normal=1e-7,
-        P_vessel_tumor=5e-7,
-        IFP_normal=0.0,
-        IFP_tumor=20.0,
-        K_hydraulic_normal=5e-12,
-        K_hydraulic_tumor=2.5e-12,
-        C_plasma=1.0,
-        nx=100,
-        ny=100,
-    )
+L = config.domain_size
+R_tumor = config.tumor_radius
+assert config.tumor_center is not None
+center_x, center_y = config.tumor_center
+D_drug_normal = config.D_drug_normal
+D_drug_tumor = config.D_drug_tumor
+k_binding = config.k_binding
+k_uptake = config.k_uptake
+MVD_normal = config.MVD_normal
+MVD_tumor_core = config.MVD_tumor_core
+MVD_tumor_rim = config.MVD_tumor_rim
+SA_V_normal = config.vascular_surface_area_normal
+SA_V_tumor_core = config.vascular_surface_area_tumor_core
+SA_V_tumor_rim = config.vascular_surface_area_tumor_rim
+P_normal = config.P_vessel_normal
+P_tumor = config.P_vessel_tumor
+C_plasma = config.C_plasma
+IFP_normal_pa = config.IFP_normal_Pa
+IFP_tumor_pa = config.IFP_tumor_Pa
+K_normal = config.K_hydraulic_normal
+K_tumor = config.K_hydraulic_tumor
+nx, ny = config.nx, config.ny
 
-    # Extract parameters from config
-    L = config.domain_size
-    R_tumor = config.tumor_radius
-    center_x, center_y = L / 2, L / 2
-    D_drug_normal = config.D_drug_normal
-    D_drug_tumor = config.D_drug_tumor
-    k_binding = config.k_binding
-    k_uptake = config.k_uptake
-    MVD_normal = config.MVD_normal
-    MVD_tumor_rim = config.MVD_tumor
-    MVD_tumor_core = 20  # Hypoxic core has fewer vessels
-    P_normal = config.P_vessel_normal
-    P_tumor = config.P_vessel_tumor
-    C_plasma = config.C_plasma
-    IFP_normal_pa = config.IFP_normal_Pa
-    IFP_tumor_pa = config.IFP_tumor_Pa
-    K_normal = config.K_hydraulic_normal
-    K_tumor = config.K_hydraulic_tumor
-    nx, ny = config.nx, config.ny
-
-    # Display configuration summary
-    print("=" * 60)
-    print("Tumor Drug Delivery Simulation")
-    print("=" * 60)
-    print(config.describe())
-    print("=" * 60)
-
-else:
-    # Inline parameters (original behavior)
-    L = 5e-3  # Domain size (m) - 5mm tissue region
-    R_tumor = 2e-3  # Tumor radius (m)
-    center_x, center_y = L / 2, L / 2  # Tumor center position
-
-    D_drug_normal = 5e-11  # Drug diffusion coefficient in normal tissue (m²/s)
-    D_drug_tumor = 2e-11  # Drug diffusion coefficient in tumor (m²/s) - often lower due to dense ECM
-    k_binding = 1e-3  # Drug binding rate to tissue (1/s)
-    k_uptake = 5e-4  # Cellular uptake rate (1/s)
-
-    MVD_normal = 100  # Microvascular density in normal tissue (vessels/mm²)
-    MVD_tumor_core = 20  # Microvascular density in tumor core - hypoxic, fewer vessels
-    MVD_tumor_rim = 200  # Microvascular density in tumor periphery - angiogenic rim
-
-    P_normal = 1e-7  # Vessel permeability in normal tissue (m/s)
-    P_tumor = 5e-7  # Vessel permeability in tumor (m/s) - enhanced due to leaky vessels
-    C_plasma = 1.0  # Normalized drug concentration in plasma
-
-    IFP_normal = 0.0  # Normal tissue IFP (mmHg)
-    IFP_tumor = 20.0  # Tumor IFP (mmHg) - elevated in tumors
-    IFP_normal_pa = IFP_normal * 133.322
-    IFP_tumor_pa = IFP_tumor * 133.322
-
-    K_normal = 5e-12  # Hydraulic conductivity in normal tissue (m²/(Pa·s))
-    K_tumor = 2.5e-12  # Hydraulic conductivity in tumor (m²/(Pa·s))
-
-    nx, ny = 100, 100
 mesh = bt.StructuredMesh(nx, ny, 0.0, L, 0.0, L)
 dx, dy = mesh.dx(), mesh.dy()
 
-rim_size = 0.5e-3
+rim_size = config.rim_thickness
 extent_mm = (0, L * 1e3, 0, L * 1e3)
 
 
@@ -154,9 +97,14 @@ tissue_map = np.zeros((ny + 1, nx + 1), dtype=np.int8)
 tissue_map[mask_rim] = 1
 tissue_map[mask_core] = 2
 
-vessel_density = np.full((ny + 1, nx + 1), MVD_normal, dtype=np.float64)
-vessel_density[mask_rim] = MVD_tumor_rim
-vessel_density[mask_core] = MVD_tumor_core
+mvd_map = np.full((ny + 1, nx + 1), MVD_normal, dtype=np.float64)
+mvd_map[mask_rim] = MVD_tumor_rim
+mvd_map[mask_core] = MVD_tumor_core
+
+# The solver source is P*S_v*(C_plasma-C), so S_v must have units 1/m.
+vascular_surface_area = np.full((ny + 1, nx + 1), SA_V_normal, dtype=np.float64)
+vascular_surface_area[mask_rim] = SA_V_tumor_rim
+vascular_surface_area[mask_core] = SA_V_tumor_core
 
 permeability = np.full((ny + 1, nx + 1), P_normal, dtype=np.float64)
 permeability[mask_tumor] = P_tumor
@@ -197,7 +145,7 @@ def solve_drug_transport(num_steps=10000, dt=0.1, times_to_save=None):
         pressure_flat,
         diffusivity.ravel(order="C").tolist(),
         permeability.ravel(order="C").tolist(),
-        vessel_density.ravel(order="C").tolist(),
+        vascular_surface_area.ravel(order="C").tolist(),
         k_binding,
         k_uptake,
         C_plasma,
@@ -246,7 +194,7 @@ cbar0 = plt.colorbar(im0, ax=axes[0, 0])
 cbar0.set_ticks([0, 1, 2])
 cbar0.set_ticklabels(["Normal", "Tumor Rim", "Tumor Core"])
 
-im1 = axes[0, 1].imshow(vessel_density, origin="lower", extent=extent_mm, cmap="plasma")
+im1 = axes[0, 1].imshow(mvd_map, origin="lower", extent=extent_mm, cmap="plasma")
 axes[0, 1].set_title("Vessel Density (vessels/mm²)")
 axes[0, 1].set_xlabel("x (mm)")
 axes[0, 1].set_ylabel("y (mm)")

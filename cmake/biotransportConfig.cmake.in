@@ -1,0 +1,15 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+if("@BIOTRANSPORT_OPENMP@" STREQUAL "ON" AND "@OpenMP_CXX_FOUND@" STREQUAL "TRUE")
+  find_dependency(OpenMP COMPONENTS CXX)
+endif()
+
+if("@BIOTRANSPORT_EIGEN@" STREQUAL "ON")
+  find_dependency(Eigen3 3.4 CONFIG)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/biotransportTargets.cmake")
+
+check_required_components(biotransport)

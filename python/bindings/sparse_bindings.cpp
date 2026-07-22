@@ -23,6 +23,10 @@ namespace bindings {
 
 void register_sparse_bindings(py::module_& m) {
 #ifdef BIOTRANSPORT_ENABLE_EIGEN
+    m.def(
+        "sparse_matrix_available", []() { return true; },
+        "Return whether this build includes the Eigen-backed sparse and implicit solvers.");
+
     // SparseSolverType enum
     py::enum_<linalg::SparseSolverType>(m, "SparseSolverType", "Sparse linear solver types")
         .value("SparseLU", linalg::SparseSolverType::SparseLU,
@@ -138,63 +142,130 @@ Returns:
           py::arg("alpha"), py::arg("dt"), "Build 3D implicit diffusion matrix");
 
     // ImplicitSolveResult
-    py::class_<ImplicitSolveResult>(m, "ImplicitSolveResult", "Result of implicit diffusion solve")
+    py::class_<ImplicitSolveResult>(
+        m, "ImplicitSolveResult",
+        "Metadata from a completed Backward Euler diffusion solve. Failures raise exceptions.")
         .def(py::init<>())
-        .def_readonly("steps", &ImplicitSolveResult::steps)
-        .def_readonly("total_time", &ImplicitSolveResult::total_time)
-        .def_readonly("residual", &ImplicitSolveResult::residual)
-        .def_readonly("success", &ImplicitSolveResult::success);
+        .def_readonly("steps", &ImplicitSolveResult::steps, "Number of completed time steps.")
+        .def_readonly("total_time", &ImplicitSolveResult::total_time,
+                      "Simulation time after the solve [s].")
+        .def_readonly("residual", &ImplicitSolveResult::residual,
+                      "Scaled infinity norm of the final algebraic residual A*u-b.")
+        .def_readonly("success", &ImplicitSolveResult::success,
+                      "True for a returned result; failed solves raise an exception.");
 
     // ImplicitDiffusion2D
-    py::class_<ImplicitDiffusion2D>(m, "ImplicitDiffusion2D",
-                                    R"(2D implicit diffusion solver using sparse matrices.
+    py::class_<ImplicitDiffusion2D>(
+        m, "ImplicitDiffusion2D",
+        R"(Conservative 2D Backward Euler solver for diffusion with an optional source.
 
-Solves ∂u/∂t = D∇²u using Backward Euler with sparse LU factorization.
-Unconditionally stable, supports spatially-varying diffusivity.
+The solved equation is
+
+    du/dt = div(D grad(u)) + source(x, y, t).
+
+Coordinates are measured in metres, time in seconds, and diffusivity D in m²/s.
+D may be a positive scalar or one positive value per mesh node. Harmonic face
+averaging preserves diffusive flux across material interfaces. Backward Euler is
+L-stable for the linear diffusion operator.
+
+Neumann values are outward-normal derivatives du/dn in field-units/m. They are
+not Fickian fluxes; the corresponding outward Fickian flux is -D*du/dn.
 
 Example:
     >>> mesh = bt.StructuredMesh(50, 50, 0.0, 1.0, 0.0, 1.0)
-    >>> solver = bt.ImplicitDiffusion2D(mesh, D=0.01)
+    >>> solver = bt.ImplicitDiffusion2D(mesh, diffusivity=0.01)
     >>> solver.set_initial_condition(ic)
+    >>> solver.set_neumann_boundary(bt.Boundary.Left, 0.0)
     >>> solver.set_solver_type(bt.SparseSolverType.SparseLU)
     >>> result = solver.solve(dt=0.1, num_steps=10)
 )")
-        .def(py::init<const StructuredMesh&, double>(), py::arg("mesh"), py::arg("diffusivity"))
-        .def("set_initial_condition", &ImplicitDiffusion2D::setInitialCondition, py::arg("values"))
+        .def(py::init<const StructuredMesh&, double>(), py::arg("mesh"), py::arg("diffusivity"),
+             py::keep_alive<1, 2>(),
+             "Create a solver with uniform diffusivity [m²/s]. The mesh must be 2D.")
+        .def(py::init<const StructuredMesh&, const std::vector<double>&>(), py::arg("mesh"),
+             py::arg("diffusivity"), py::keep_alive<1, 2>(),
+             "Create a solver with positive nodal diffusivities [m²/s].")
+        .def("set_initial_condition", &ImplicitDiffusion2D::setInitialCondition, py::arg("values"),
+             "Copy one finite initial field value per mesh node.")
         .def("set_dirichlet_boundary", &ImplicitDiffusion2D::setDirichletBoundary,
-             py::arg("boundary"), py::arg("value"))
+             py::arg("boundary"), py::arg("value"), "Set a fixed field value on one boundary.")
         .def("set_neumann_boundary", &ImplicitDiffusion2D::setNeumannBoundary, py::arg("boundary"),
-             py::arg("flux"))
-        .def("set_solver_type", &ImplicitDiffusion2D::setSolverType, py::arg("solver_type"))
-        .def("set_tolerance", &ImplicitDiffusion2D::setTolerance, py::arg("tol"))
-        .def("set_max_iterations", &ImplicitDiffusion2D::setMaxIterations, py::arg("max_iter"))
-        .def("step", &ImplicitDiffusion2D::step, py::arg("dt"))
-        .def("solve", &ImplicitDiffusion2D::solve, py::arg("dt"), py::arg("num_steps"))
+             py::arg("normal_derivative"),
+             "Set the outward-normal derivative du/dn [field-units/m], not a flux.")
+        .def("set_source_term", &ImplicitDiffusion2D::setSourceTerm, py::arg("source"),
+             "Set source(x_m, y_m, time_s), returning field-units/s.")
+        .def("clear_source_term", &ImplicitDiffusion2D::clearSourceTerm,
+             "Remove the configured source term.")
+        .def("set_solver_type", &ImplicitDiffusion2D::setSolverType, py::arg("solver_type"),
+             "Select the Eigen sparse linear solver.")
+        .def("set_tolerance", &ImplicitDiffusion2D::setTolerance, py::arg("tolerance"),
+             "Set the positive iterative-solver tolerance.")
+        .def("set_max_iterations", &ImplicitDiffusion2D::setMaxIterations,
+             py::arg("max_iterations"), "Set the positive iterative-solver iteration limit.")
+        .def("step", &ImplicitDiffusion2D::step, py::arg("dt"),
+             "Advance one positive time step dt [s].")
+        .def("solve", &ImplicitDiffusion2D::solve, py::arg("dt"), py::arg("num_steps"),
+             "Advance num_steps equal time steps of dt seconds.")
         .def(
             "solution",
-            [](const ImplicitDiffusion2D& solver) {
-                return to_numpy_with_base(solver.solution(), py::cast(&solver));
-            },
-            "Get current solution as numpy array")
-        .def("time", &ImplicitDiffusion2D::time);
+            [](const ImplicitDiffusion2D& solver) { return copy_to_numpy(solver.solution()); },
+            "Return an owned copy of the current flat row-major field.")
+        .def(
+            "diffusivity",
+            [](const ImplicitDiffusion2D& solver) { return copy_to_numpy(solver.diffusivity()); },
+            "Return an owned copy of the nodal diffusivity field [m²/s].")
+        .def("time", &ImplicitDiffusion2D::time, "Return current simulation time [s].")
+        .def("mesh", &ImplicitDiffusion2D::mesh, py::return_value_policy::reference_internal,
+             "Return the solver's 2D mesh.");
 
     // ImplicitDiffusion3D
-    py::class_<ImplicitDiffusion3D>(m, "ImplicitDiffusion3D",
-                                    "3D implicit diffusion solver using sparse matrices")
-        .def(py::init<const StructuredMesh3D&, double>(), py::arg("mesh"), py::arg("diffusivity"))
-        .def("set_initial_condition", &ImplicitDiffusion3D::setInitialCondition, py::arg("values"))
+    py::class_<ImplicitDiffusion3D>(
+        m, "ImplicitDiffusion3D",
+        R"(Conservative 3D Backward Euler solver for diffusion with an optional source.
+
+Solves du/dt = div(D grad(u)) + source(x, y, z, t) on a uniform Cartesian
+mesh. Coordinates are in metres, time in seconds, and diffusivity in m²/s.
+D may be uniform or specified at every node; harmonic face averaging preserves
+interface fluxes. Neumann data mean the outward derivative du/dn, not Fickian
+flux. Backward Euler is L-stable for the linear diffusion operator.
+)")
+        .def(py::init<const StructuredMesh3D&, double>(), py::arg("mesh"), py::arg("diffusivity"),
+             py::keep_alive<1, 2>(), "Create a solver with uniform diffusivity [m²/s].")
+        .def(py::init<const StructuredMesh3D&, const std::vector<double>&>(), py::arg("mesh"),
+             py::arg("diffusivity"), py::keep_alive<1, 2>(),
+             "Create a solver with positive nodal diffusivities [m²/s].")
+        .def("set_initial_condition", &ImplicitDiffusion3D::setInitialCondition, py::arg("values"),
+             "Copy one finite initial field value per mesh node.")
         .def("set_dirichlet_boundary", &ImplicitDiffusion3D::setDirichletBoundary,
-             py::arg("boundary"), py::arg("value"))
-        .def("set_solver_type", &ImplicitDiffusion3D::setSolverType, py::arg("solver_type"))
-        .def("step", &ImplicitDiffusion3D::step, py::arg("dt"))
-        .def("solve", &ImplicitDiffusion3D::solve, py::arg("dt"), py::arg("num_steps"))
+             py::arg("boundary"), py::arg("value"), "Set a fixed field value on one boundary face.")
+        .def("set_neumann_boundary", &ImplicitDiffusion3D::setNeumannBoundary, py::arg("boundary"),
+             py::arg("normal_derivative"),
+             "Set outward-normal derivative du/dn [field-units/m], not a flux.")
+        .def("set_source_term", &ImplicitDiffusion3D::setSourceTerm, py::arg("source"),
+             "Set source(x_m, y_m, z_m, time_s), returning field-units/s.")
+        .def("clear_source_term", &ImplicitDiffusion3D::clearSourceTerm,
+             "Remove the configured source term.")
+        .def("set_solver_type", &ImplicitDiffusion3D::setSolverType, py::arg("solver_type"),
+             "Select the Eigen sparse linear solver.")
+        .def("set_tolerance", &ImplicitDiffusion3D::setTolerance, py::arg("tolerance"),
+             "Set the positive iterative-solver tolerance.")
+        .def("set_max_iterations", &ImplicitDiffusion3D::setMaxIterations,
+             py::arg("max_iterations"), "Set the positive iterative-solver iteration limit.")
+        .def("step", &ImplicitDiffusion3D::step, py::arg("dt"),
+             "Advance one positive time step dt [s].")
+        .def("solve", &ImplicitDiffusion3D::solve, py::arg("dt"), py::arg("num_steps"),
+             "Advance num_steps equal time steps of dt seconds.")
         .def(
             "solution",
-            [](const ImplicitDiffusion3D& solver) {
-                return to_numpy_with_base(solver.solution(), py::cast(&solver));
-            },
-            "Get current solution as numpy array")
-        .def("time", &ImplicitDiffusion3D::time);
+            [](const ImplicitDiffusion3D& solver) { return copy_to_numpy(solver.solution()); },
+            "Return an owned copy of the current flat row-major field.")
+        .def(
+            "diffusivity",
+            [](const ImplicitDiffusion3D& solver) { return copy_to_numpy(solver.diffusivity()); },
+            "Return an owned copy of the nodal diffusivity field [m²/s].")
+        .def("time", &ImplicitDiffusion3D::time, "Return current simulation time [s].")
+        .def("mesh", &ImplicitDiffusion3D::mesh, py::return_value_policy::reference_internal,
+             "Return the solver's 3D mesh.");
 
 #else
     // Stub when Eigen not available

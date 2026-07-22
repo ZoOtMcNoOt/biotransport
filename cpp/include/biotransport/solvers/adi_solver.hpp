@@ -1,1150 +1,630 @@
 /**
  * @file adi_solver.hpp
- * @brief Alternating Direction Implicit (ADI) method for 2D/3D diffusion.
+ * @brief Directionally split Crank--Nicolson solvers for Cartesian diffusion.
  *
- * ADI splits the multidimensional implicit problem into a sequence of 1D
- * tridiagonal systems that can be solved efficiently with the Thomas algorithm.
- * This provides O(N) complexity per time step while maintaining unconditional
- * stability.
+ * These solvers integrate
  *
- * **2D Peaceman-Rachford ADI:**
- * For solving: ∂u/∂t = D(∂²u/∂x² + ∂²u/∂y²)
+ *     du/dt = D laplacian(u)
  *
- * The time step is split into two half-steps:
- * - Step 1: (I - r_x*δ_x²)u* = (I + r_y*δ_y²)uⁿ     (implicit in x)
- * - Step 2: (I - r_y*δ_y²)u^{n+1} = (I + r_x*δ_x²)u* (implicit in y)
+ * on uniform node-centred Cartesian meshes.  Each directional subproblem is a
+ * one-dimensional Crank--Nicolson solve, so a substep is unconditionally stable
+ * for the linear diffusion operator.  Symmetric (Strang) composition is used:
+ * x/2-y-x/2 in two dimensions and x/2-y/2-z-y/2-x/2 in three dimensions.
+ * This is second order in time and space for smooth solutions with time-
+ * independent boundary data.
  *
- * where r_x = D*dt/(2*dx²), r_y = D*dt/(2*dy²)
- *
- * **3D Douglas-Gunn ADI:**
- * For solving: ∂u/∂t = D(∂²u/∂x² + ∂²u/∂y² + ∂²u/∂z²)
- *
- * The time step uses three stages:
- * - Stage 1: (I - r_x*δ_x²)u* = uⁿ + dt*D*∇²uⁿ
- * - Stage 2: (I - r_y*δ_y²)u** = u* + r_y*δ_y²uⁿ
- * - Stage 3: (I - r_z*δ_z²)u^{n+1} = u** + r_z*δ_z²uⁿ
- *
- * @see CrankNicolsonDiffusion for iterative implicit solver
- * @see solve_tridiagonal for Thomas algorithm
- *
- * @author BioTransport Development Team
- * @date December 2025
+ * Neumann data always mean the outward-normal derivative du/dn, not a Fickian
+ * flux.  Boundary nodes use half control volumes, which preserves the
+ * trapezoidal-volume integral exactly for homogeneous Neumann data (up to
+ * roundoff).  Dirichlet traces that meet at one node must agree to within
+ * 64*epsilon*max(1, |a|, |b|).  Larger discrepancies are contradictory data
+ * and raise std::invalid_argument before the public solution is advanced.
  */
 
 #ifndef BIOTRANSPORT_SOLVERS_ADI_SOLVER_HPP
 #define BIOTRANSPORT_SOLVERS_ADI_SOLVER_HPP
 
+#include <algorithm>
 #include <array>
 #include <biotransport/core/boundary.hpp>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/core/mesh/structured_mesh_3d.hpp>
 #include <biotransport/core/numerics/linear_algebra/tridiagonal.hpp>
 #include <cmath>
+#include <limits>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
-
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
-#include <omp.h>
-#endif
 
 namespace biotransport {
 
-/**
- * @brief Result of an ADI solve step.
- */
 struct ADISolveResult {
-    int steps = 0;            ///< Number of time steps completed
-    int substeps = 0;         ///< Number of substeps (2 for 2D, 3 for 3D)
-    double time = 0.0;        ///< Current simulation time after step()
-    double total_time = 0.0;  ///< Total simulation time after solve()
-    bool success = true;      ///< Whether the step completed successfully
+    int steps = 0;            ///< Number of complete time steps.
+    int substeps = 0;         ///< Directional solves (3 in 2D, 5 in 3D per step).
+    double time = 0.0;        ///< Current time after step().
+    double total_time = 0.0;  ///< Current time after solve().
+    bool success = true;
 };
 
 /**
- * @brief 2D ADI solver using Peaceman-Rachford splitting.
- *
- * Solves the 2D diffusion equation:
- *   ∂u/∂t = D(∂²u/∂x² + ∂²u/∂y²)
- *
- * The method is:
- * - Unconditionally stable (no CFL restriction)
- * - Second-order accurate in space and time
- * - O(N) per time step (N = number of grid points)
- *
- * @code
- *   StructuredMesh mesh(1.0, 1.0, 50, 50);  // 50x50 grid
- *   ADIDiffusion2D solver(mesh, 1e-5);      // D = 10⁻⁵ m²/s
- *
- *   solver.setInitialCondition(u0);
- *   solver.setDirichletBoundary(Boundary::Left, 100.0);
- *   solver.setDirichletBoundary(Boundary::Right, 0.0);
- *
- *   double dt = 0.1;  // Can be much larger than explicit CFL limit
- *   solver.solve(dt, 100);  // 100 time steps
- * @endcode
+ * @brief Symmetric alternating-direction solver for constant-D 2D diffusion.
  */
 class ADIDiffusion2D {
 public:
-    /**
-     * @brief Construct a 2D ADI diffusion solver.
-     *
-     * @param mesh 2D structured mesh
-     * @param diffusivity Diffusion coefficient D [m²/s]
-     * @throws std::invalid_argument if mesh is 1D or diffusivity <= 0
-     */
     ADIDiffusion2D(const StructuredMesh& mesh, double diffusivity)
-        : mesh_(mesh), diffusivity_(diffusivity) {
+        : mesh_(mesh), diffusivity_(diffusivity), solution_(mesh.numNodes(), 0.0) {
         if (mesh.is1D()) {
             throw std::invalid_argument("ADIDiffusion2D requires a 2D mesh");
         }
-        if (diffusivity <= 0.0) {
-            throw std::invalid_argument("Diffusivity must be positive");
-        }
-
-        const int num_nodes = mesh.numNodes();
-        solution_.resize(num_nodes, 0.0);
-        intermediate_.resize(num_nodes, 0.0);
-
-        // Pre-allocate tridiagonal system vectors for max dimension
-        const int max_dim = std::max(mesh.nx() + 1, mesh.ny() + 1);
-        a_.resize(max_dim);
-        b_.resize(max_dim);
-        c_.resize(max_dim);
-        d_.resize(max_dim);
-
-        // Default Dirichlet boundary conditions
-        for (int i = 0; i < 4; ++i) {
-            boundary_conditions_[i] = BoundaryCondition::Dirichlet(0.0);
-        }
-
-        // Precompute mesh spacing
-        dx_ = mesh.dx();
-        dy_ = mesh.dy();
+        requirePositiveFinite(diffusivity, "Diffusivity");
+        boundary_conditions_.fill(BoundaryCondition::Dirichlet(0.0));
     }
 
-    /**
-     * @brief Set the initial condition.
-     */
     void setInitialCondition(const std::vector<double>& values) {
         if (values.size() != solution_.size()) {
-            throw std::invalid_argument("Initial condition size doesn't match mesh");
+            throw std::invalid_argument("Initial condition size does not match mesh");
         }
+        requireFiniteInput(values, "Initial condition");
         solution_ = values;
     }
 
-    /**
-     * @brief Set a Dirichlet boundary condition.
-     */
     void setDirichletBoundary(Boundary boundary, double value) {
-        boundary_conditions_[to_index(boundary)] = BoundaryCondition::Dirichlet(value);
+        requireFinite(value, "Dirichlet value");
+        boundary_conditions_[checkedIndex(boundary)] = BoundaryCondition::Dirichlet(value);
     }
 
-    /**
-     * @brief Set a Neumann boundary condition.
-     */
-    void setNeumannBoundary(Boundary boundary, double flux) {
-        boundary_conditions_[to_index(boundary)] = BoundaryCondition::Neumann(flux);
+    void setNeumannBoundary(Boundary boundary, double normal_derivative) {
+        requireFinite(normal_derivative, "Neumann outward-normal derivative");
+        boundary_conditions_[checkedIndex(boundary)] =
+            BoundaryCondition::Neumann(normal_derivative);
     }
 
-    /**
-     * @brief Advance the solution by one time step using ADI.
-     *
-     * @param dt Time step size [s]
-     * @return ADISolveResult with status information
-     */
     ADISolveResult step(double dt) {
-        if (dt <= 0.0) {
-            throw std::invalid_argument("Time step must be positive");
-        }
+        requirePositiveFinite(dt, "Time step");
+
+        // Work on temporaries so a failed tridiagonal solve cannot leave a
+        // partially advanced public solution.
+        std::vector<double> work = solution_;
+        imposeDirichlet(work);
+        work = sweepX(work, 0.5 * dt);
+        work = sweepY(work, dt);
+        work = sweepX(work, 0.5 * dt);
+        imposeDirichlet(work);
+        requireFiniteResult(work, "ADI solution");
+
+        solution_.swap(work);
+        time_ += dt;
 
         ADISolveResult result;
-        result.substeps = 2;
-
-        // Coefficients for half-step
-        const double rx = diffusivity_ * dt / (2.0 * dx_ * dx_);
-        const double ry = diffusivity_ * dt / (2.0 * dy_ * dy_);
-
-        const int nx = mesh_.nx();
-        const int ny = mesh_.ny();
-        const int stride = nx + 1;  // Number of nodes per row
-
-        // Pre-allocate max size for thread-local vectors
-        const int max_dim = std::max(nx, ny);
-
-        // ========== STEP 1: Implicit in x, explicit in y ==========
-        // Solve: (I - rx*δ_x²)u* = (I + ry*δ_y²)uⁿ for each row
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
-#pragma omp parallel
-        {
-            // Thread-local tridiagonal vectors
-            std::vector<double> a_local(max_dim), b_local(max_dim);
-            std::vector<double> c_local(max_dim), d_local(max_dim);
-
-#pragma omp for schedule(static)
-            for (int j = 1; j < ny; ++j) {
-                const int n = nx - 1;
-
-                for (int i = 1; i < nx; ++i) {
-                    const int idx = j * stride + i;
-                    const int k = i - 1;
-
-                    double u_yy =
-                        solution_[idx - stride] - 2.0 * solution_[idx] + solution_[idx + stride];
-                    d_local[k] = solution_[idx] + ry * u_yy;
-                    a_local[k] = -rx;
-                    b_local[k] = 1.0 + 2.0 * rx;
-                    c_local[k] = -rx;
-                }
-
-                applyTridiagonalBCs_X_local(j, stride, rx, n, a_local, b_local, c_local, d_local);
-
-                auto x_solution = linalg::solve_tridiagonal(
-                    std::vector<double>(a_local.begin(), a_local.begin() + n),
-                    std::vector<double>(b_local.begin(), b_local.begin() + n),
-                    std::vector<double>(c_local.begin(), c_local.begin() + n),
-                    std::vector<double>(d_local.begin(), d_local.begin() + n));
-
-                for (int i = 1; i < nx; ++i) {
-                    intermediate_[j * stride + i] = x_solution[i - 1];
-                }
-            }
-        }
-#else
-        // Serial version
-        for (int j = 1; j < ny; ++j) {
-            const int n = nx - 1;
-
-            for (int i = 1; i < nx; ++i) {
-                const int idx = j * stride + i;
-                const int k = i - 1;
-
-                double u_yy =
-                    solution_[idx - stride] - 2.0 * solution_[idx] + solution_[idx + stride];
-                d_[k] = solution_[idx] + ry * u_yy;
-                a_[k] = -rx;
-                b_[k] = 1.0 + 2.0 * rx;
-                c_[k] = -rx;
-            }
-
-            applyTridiagonalBCs_X(j, stride, rx, n);
-
-            auto x_solution =
-                linalg::solve_tridiagonal(std::vector<double>(a_.begin(), a_.begin() + n),
-                                          std::vector<double>(b_.begin(), b_.begin() + n),
-                                          std::vector<double>(c_.begin(), c_.begin() + n),
-                                          std::vector<double>(d_.begin(), d_.begin() + n));
-
-            for (int i = 1; i < nx; ++i) {
-                intermediate_[j * stride + i] = x_solution[i - 1];
-            }
-        }
-#endif
-
-        // Apply boundary values to intermediate solution
-        applyBoundaryConditions(intermediate_);
-
-        // ========== STEP 2: Implicit in y, explicit in x ==========
-        // Solve: (I - ry*δ_y²)u^{n+1} = (I + rx*δ_x²)u* for each column
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
-#pragma omp parallel
-        {
-            std::vector<double> a_local(max_dim), b_local(max_dim);
-            std::vector<double> c_local(max_dim), d_local(max_dim);
-
-#pragma omp for schedule(static)
-            for (int i = 1; i < nx; ++i) {
-                const int n = ny - 1;
-
-                for (int j = 1; j < ny; ++j) {
-                    const int idx = j * stride + i;
-                    const int k = j - 1;
-
-                    double u_xx =
-                        intermediate_[idx - 1] - 2.0 * intermediate_[idx] + intermediate_[idx + 1];
-                    d_local[k] = intermediate_[idx] + rx * u_xx;
-                    a_local[k] = -ry;
-                    b_local[k] = 1.0 + 2.0 * ry;
-                    c_local[k] = -ry;
-                }
-
-                applyTridiagonalBCs_Y_local(i, stride, ry, n, a_local, b_local, c_local, d_local);
-
-                auto y_solution = linalg::solve_tridiagonal(
-                    std::vector<double>(a_local.begin(), a_local.begin() + n),
-                    std::vector<double>(b_local.begin(), b_local.begin() + n),
-                    std::vector<double>(c_local.begin(), c_local.begin() + n),
-                    std::vector<double>(d_local.begin(), d_local.begin() + n));
-
-                for (int j = 1; j < ny; ++j) {
-                    solution_[j * stride + i] = y_solution[j - 1];
-                }
-            }
-        }
-#else
-        // Serial version
-        for (int i = 1; i < nx; ++i) {
-            const int n = ny - 1;
-
-            for (int j = 1; j < ny; ++j) {
-                const int idx = j * stride + i;
-                const int k = j - 1;
-
-                double u_xx =
-                    intermediate_[idx - 1] - 2.0 * intermediate_[idx] + intermediate_[idx + 1];
-                d_[k] = intermediate_[idx] + rx * u_xx;
-                a_[k] = -ry;
-                b_[k] = 1.0 + 2.0 * ry;
-                c_[k] = -ry;
-            }
-
-            applyTridiagonalBCs_Y(i, stride, ry, n);
-
-            auto y_solution =
-                linalg::solve_tridiagonal(std::vector<double>(a_.begin(), a_.begin() + n),
-                                          std::vector<double>(b_.begin(), b_.begin() + n),
-                                          std::vector<double>(c_.begin(), c_.begin() + n),
-                                          std::vector<double>(d_.begin(), d_.begin() + n));
-
-            for (int j = 1; j < ny; ++j) {
-                solution_[j * stride + i] = y_solution[j - 1];
-            }
-        }
-#endif
-
-        // Apply boundary conditions to final solution
-        applyBoundaryConditions(solution_);
-
-        time_ += dt;
+        result.steps = 1;
+        result.substeps = 3;
         result.time = time_;
-        result.success = true;
         return result;
     }
 
-    /**
-     * @brief Run the solver for specified number of steps.
-     *
-     * @param dt Time step size
-     * @param num_steps Number of time steps
-     * @return ADISolveResult with cumulative statistics
-     */
     ADISolveResult solve(double dt, int num_steps) {
-        ADISolveResult total_result;
-        total_result.steps = 0;
-        total_result.substeps = 0;
-        total_result.success = true;
-
-        for (int step_count = 0; step_count < num_steps; ++step_count) {
-            ADISolveResult result = this->step(dt);
-            if (!result.success) {
-                total_result.success = false;
-                total_result.total_time = time_;
-                return total_result;
-            }
-            total_result.steps++;
-            total_result.substeps += result.substeps;
+        requirePositiveFinite(dt, "Time step");
+        if (num_steps < 0) {
+            throw std::invalid_argument("Number of steps must be non-negative");
         }
-        total_result.total_time = time_;
-        return total_result;
+
+        ADISolveResult result;
+        for (int count = 0; count < num_steps; ++count) {
+            const auto one_step = step(dt);
+            ++result.steps;
+            result.substeps += one_step.substeps;
+        }
+        result.time = time_;
+        result.total_time = time_;
+        return result;
     }
 
-    /**
-     * @brief Get the current solution.
-     */
     const std::vector<double>& solution() const { return solution_; }
-
-    /**
-     * @brief Get the mesh.
-     */
     const StructuredMesh& mesh() const { return mesh_; }
-
-    /**
-     * @brief Get diffusivity.
-     */
     double diffusivity() const { return diffusivity_; }
-
-    /**
-     * @brief Get current simulation time.
-     */
     double time() const { return time_; }
 
 private:
     const StructuredMesh& mesh_;
     double diffusivity_;
     std::vector<double> solution_;
-    std::vector<double> intermediate_;
-
-    // Tridiagonal system vectors (reused)
-    std::vector<double> a_, b_, c_, d_;
-
     std::array<BoundaryCondition, 4> boundary_conditions_;
-
-    double dx_ = 0.0;
-    double dy_ = 0.0;
     double time_ = 0.0;
 
-    /**
-     * @brief Apply x-direction boundary conditions to tridiagonal system.
-     */
-    void applyTridiagonalBCs_X(int j, int stride, double rx, int n) {
-        const auto& left_bc = boundary_conditions_[to_index(Boundary::Left)];
-        const auto& right_bc = boundary_conditions_[to_index(Boundary::Right)];
-
-        // Left boundary affects first equation
-        if (left_bc.type == BoundaryType::DIRICHLET) {
-            d_[0] += rx * left_bc.value;
-        } else {
-            // Neumann: u_0 = u_1 - flux*dx
-            b_[0] -= rx;  // Adjust diagonal to account for ghost point
-            d_[0] -= rx * left_bc.value * dx_;
-        }
-
-        // Right boundary affects last equation
-        if (right_bc.type == BoundaryType::DIRICHLET) {
-            d_[n - 1] += rx * right_bc.value;
-        } else {
-            // Neumann: u_{nx} = u_{nx-1} + flux*dx
-            b_[n - 1] -= rx;
-            d_[n - 1] += rx * right_bc.value * dx_;
+    static void requirePositiveFinite(double value, const char* name) {
+        if (!std::isfinite(value) || value <= 0.0) {
+            throw std::invalid_argument(std::string(name) + " must be finite and positive");
         }
     }
 
-    /**
-     * @brief Apply y-direction boundary conditions to tridiagonal system.
-     */
-    void applyTridiagonalBCs_Y(int i, int stride, double ry, int n) {
-        const auto& bottom_bc = boundary_conditions_[to_index(Boundary::Bottom)];
-        const auto& top_bc = boundary_conditions_[to_index(Boundary::Top)];
-
-        // Bottom boundary affects first equation
-        if (bottom_bc.type == BoundaryType::DIRICHLET) {
-            d_[0] += ry * bottom_bc.value;
-        } else {
-            b_[0] -= ry;
-            d_[0] -= ry * bottom_bc.value * dy_;
-        }
-
-        // Top boundary affects last equation
-        if (top_bc.type == BoundaryType::DIRICHLET) {
-            d_[n - 1] += ry * top_bc.value;
-        } else {
-            b_[n - 1] -= ry;
-            d_[n - 1] += ry * top_bc.value * dy_;
+    static void requireFinite(double value, const char* name) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(std::string(name) + " must be finite");
         }
     }
 
-    /**
-     * @brief Apply x-direction BCs to local tridiagonal vectors (for OpenMP).
-     */
-    void applyTridiagonalBCs_X_local(int j, int stride, double rx, int n,
-                                     std::vector<double>& a_local, std::vector<double>& b_local,
-                                     std::vector<double>& c_local,
-                                     std::vector<double>& d_local) const {
-        const auto& left_bc = boundary_conditions_[to_index(Boundary::Left)];
-        const auto& right_bc = boundary_conditions_[to_index(Boundary::Right)];
-
-        if (left_bc.type == BoundaryType::DIRICHLET) {
-            d_local[0] += rx * left_bc.value;
-        } else {
-            b_local[0] -= rx;
-            d_local[0] -= rx * left_bc.value * dx_;
-        }
-
-        if (right_bc.type == BoundaryType::DIRICHLET) {
-            d_local[n - 1] += rx * right_bc.value;
-        } else {
-            b_local[n - 1] -= rx;
-            d_local[n - 1] += rx * right_bc.value * dx_;
+    static void requireFiniteInput(const std::vector<double>& values, const char* name) {
+        for (double value : values) {
+            requireFinite(value, name);
         }
     }
 
-    /**
-     * @brief Apply y-direction BCs to local tridiagonal vectors (for OpenMP).
-     */
-    void applyTridiagonalBCs_Y_local(int i, int stride, double ry, int n,
-                                     std::vector<double>& a_local, std::vector<double>& b_local,
-                                     std::vector<double>& c_local,
-                                     std::vector<double>& d_local) const {
-        const auto& bottom_bc = boundary_conditions_[to_index(Boundary::Bottom)];
-        const auto& top_bc = boundary_conditions_[to_index(Boundary::Top)];
-
-        if (bottom_bc.type == BoundaryType::DIRICHLET) {
-            d_local[0] += ry * bottom_bc.value;
-        } else {
-            b_local[0] -= ry;
-            d_local[0] -= ry * bottom_bc.value * dy_;
-        }
-
-        if (top_bc.type == BoundaryType::DIRICHLET) {
-            d_local[n - 1] += ry * top_bc.value;
-        } else {
-            b_local[n - 1] -= ry;
-            d_local[n - 1] += ry * top_bc.value * dy_;
+    static void requireFiniteResult(const std::vector<double>& values, const char* name) {
+        for (double value : values) {
+            if (!std::isfinite(value))
+                throw std::runtime_error(std::string(name) + " contains a non-finite value");
         }
     }
 
-    /**
-     * @brief Apply boundary conditions to the solution vector.
-     */
-    void applyBoundaryConditions(std::vector<double>& u) {
-        const int nx = mesh_.nx();
-        const int ny = mesh_.ny();
-        const int stride = nx + 1;
+    static std::size_t checkedIndex(Boundary boundary) {
+        const int index = to_index(boundary);
+        if (index < 0 || index >= 4) {
+            throw std::invalid_argument("Boundary identifier is outside [0, 3]");
+        }
+        return static_cast<std::size_t>(index);
+    }
 
-        const auto& left_bc = boundary_conditions_[to_index(Boundary::Left)];
-        const auto& right_bc = boundary_conditions_[to_index(Boundary::Right)];
-        const auto& bottom_bc = boundary_conditions_[to_index(Boundary::Bottom)];
-        const auto& top_bc = boundary_conditions_[to_index(Boundary::Top)];
-
-        // Left/Right boundaries
-        for (int j = 0; j <= ny; ++j) {
-            const int left_idx = j * stride;
-            const int right_idx = j * stride + nx;
-
-            if (left_bc.type == BoundaryType::DIRICHLET) {
-                u[left_idx] = left_bc.value;
-            } else {
-                u[left_idx] = u[left_idx + 1] - left_bc.value * dx_;
+    std::optional<double> dirichletValue(int i, int j) const {
+        double sum = 0.0;
+        int count = 0;
+        double reference = 0.0;
+        const auto add = [&](Boundary face) {
+            const auto& bc = boundary_conditions_[checkedIndex(face)];
+            if (bc.type == BoundaryType::DIRICHLET) {
+                if (count == 0) {
+                    reference = bc.value;
+                } else {
+                    const double scale = std::max({1.0, std::abs(reference), std::abs(bc.value)});
+                    if (std::abs(reference - bc.value) >
+                        64.0 * std::numeric_limits<double>::epsilon() * scale) {
+                        throw std::invalid_argument(
+                            "Conflicting Dirichlet values meet at a two-dimensional corner");
+                    }
+                }
+                sum += bc.value;
+                ++count;
             }
+        };
 
-            if (right_bc.type == BoundaryType::DIRICHLET) {
-                u[right_idx] = right_bc.value;
-            } else {
-                u[right_idx] = u[right_idx - 1] + right_bc.value * dx_;
+        if (i == 0)
+            add(Boundary::Left);
+        if (i == mesh_.nx())
+            add(Boundary::Right);
+        if (j == 0)
+            add(Boundary::Bottom);
+        if (j == mesh_.ny())
+            add(Boundary::Top);
+        if (count == 0)
+            return std::nullopt;
+        return sum / static_cast<double>(count);
+    }
+
+    void imposeDirichlet(std::vector<double>& values) const {
+        for (int j = 0; j <= mesh_.ny(); ++j) {
+            for (int i = 0; i <= mesh_.nx(); ++i) {
+                if (const auto fixed = dirichletValue(i, j)) {
+                    values[static_cast<std::size_t>(mesh_.index(i, j))] = *fixed;
+                }
             }
         }
+    }
 
-        // Bottom/Top boundaries
-        for (int i = 0; i <= nx; ++i) {
-            if (bottom_bc.type == BoundaryType::DIRICHLET) {
-                u[i] = bottom_bc.value;
-            } else {
-                u[i] = u[i + stride] - bottom_bc.value * dy_;
+    std::vector<double> sweepX(const std::vector<double>& input, double duration) const {
+        const int nodes = mesh_.nx() + 1;
+        const double h = mesh_.dx();
+        const double r = diffusivity_ * duration / (2.0 * h * h);
+        std::vector<double> output(input);
+        std::vector<double> a(nodes), b(nodes), c(nodes), d(nodes);
+
+        for (int j = 0; j <= mesh_.ny(); ++j) {
+            std::fill(a.begin(), a.end(), 0.0);
+            std::fill(b.begin(), b.end(), 0.0);
+            std::fill(c.begin(), c.end(), 0.0);
+            std::fill(d.begin(), d.end(), 0.0);
+
+            for (int i = 0; i <= mesh_.nx(); ++i) {
+                const int index = mesh_.index(i, j);
+                if (const auto fixed = dirichletValue(i, j)) {
+                    b[i] = 1.0;
+                    d[i] = *fixed;
+                } else if (i == 0) {
+                    const auto& bc = boundary_conditions_[checkedIndex(Boundary::Left)];
+                    b[i] = 1.0 + 2.0 * r;
+                    c[i] = -2.0 * r;
+                    d[i] = input[index] + 2.0 * r * (input[index + 1] - input[index]) +
+                           4.0 * r * bc.value * h;
+                } else if (i == mesh_.nx()) {
+                    const auto& bc = boundary_conditions_[checkedIndex(Boundary::Right)];
+                    a[i] = -2.0 * r;
+                    b[i] = 1.0 + 2.0 * r;
+                    d[i] = input[index] + 2.0 * r * (input[index - 1] - input[index]) +
+                           4.0 * r * bc.value * h;
+                } else {
+                    a[i] = -r;
+                    b[i] = 1.0 + 2.0 * r;
+                    c[i] = -r;
+                    d[i] = input[index] +
+                           r * (input[index - 1] - 2.0 * input[index] + input[index + 1]);
+                }
             }
 
-            const int top_idx = ny * stride + i;
-            if (top_bc.type == BoundaryType::DIRICHLET) {
-                u[top_idx] = top_bc.value;
-            } else {
-                u[top_idx] = u[top_idx - stride] + top_bc.value * dy_;
+            const auto line = linalg::solve_tridiagonal(a, b, c, d);
+            for (int i = 0; i <= mesh_.nx(); ++i) {
+                output[static_cast<std::size_t>(mesh_.index(i, j))] = line[i];
             }
         }
+        return output;
+    }
+
+    std::vector<double> sweepY(const std::vector<double>& input, double duration) const {
+        const int nodes = mesh_.ny() + 1;
+        const int stride = mesh_.nx() + 1;
+        const double h = mesh_.dy();
+        const double r = diffusivity_ * duration / (2.0 * h * h);
+        std::vector<double> output(input);
+        std::vector<double> a(nodes), b(nodes), c(nodes), d(nodes);
+
+        for (int i = 0; i <= mesh_.nx(); ++i) {
+            std::fill(a.begin(), a.end(), 0.0);
+            std::fill(b.begin(), b.end(), 0.0);
+            std::fill(c.begin(), c.end(), 0.0);
+            std::fill(d.begin(), d.end(), 0.0);
+
+            for (int j = 0; j <= mesh_.ny(); ++j) {
+                const int index = mesh_.index(i, j);
+                if (const auto fixed = dirichletValue(i, j)) {
+                    b[j] = 1.0;
+                    d[j] = *fixed;
+                } else if (j == 0) {
+                    const auto& bc = boundary_conditions_[checkedIndex(Boundary::Bottom)];
+                    b[j] = 1.0 + 2.0 * r;
+                    c[j] = -2.0 * r;
+                    d[j] = input[index] + 2.0 * r * (input[index + stride] - input[index]) +
+                           4.0 * r * bc.value * h;
+                } else if (j == mesh_.ny()) {
+                    const auto& bc = boundary_conditions_[checkedIndex(Boundary::Top)];
+                    a[j] = -2.0 * r;
+                    b[j] = 1.0 + 2.0 * r;
+                    d[j] = input[index] + 2.0 * r * (input[index - stride] - input[index]) +
+                           4.0 * r * bc.value * h;
+                } else {
+                    a[j] = -r;
+                    b[j] = 1.0 + 2.0 * r;
+                    c[j] = -r;
+                    d[j] = input[index] +
+                           r * (input[index - stride] - 2.0 * input[index] + input[index + stride]);
+                }
+            }
+
+            const auto line = linalg::solve_tridiagonal(a, b, c, d);
+            for (int j = 0; j <= mesh_.ny(); ++j) {
+                output[static_cast<std::size_t>(mesh_.index(i, j))] = line[j];
+            }
+        }
+        return output;
     }
 };
 
 /**
- * @brief 3D ADI solver using Douglas-Gunn splitting.
- *
- * Solves the 3D diffusion equation:
- *   ∂u/∂t = D(∂²u/∂x² + ∂²u/∂y² + ∂²u/∂z²)
- *
- * Uses a three-stage Douglas-Gunn ADI scheme that is:
- * - Unconditionally stable
- * - Second-order accurate in space and time
- * - O(N) per time step
- *
- * @code
- *   StructuredMesh3D mesh(1.0, 1.0, 1.0, 20, 20, 20);
- *   ADIDiffusion3D solver(mesh, 1e-5);
- *
- *   solver.setInitialCondition(u0);
- *   solver.setDirichletBoundary(Boundary3D::XMin, 100.0);
- *   solver.setDirichletBoundary(Boundary3D::XMax, 0.0);
- *
- *   solver.solve(0.1, 100);  // 100 steps at dt=0.1
- * @endcode
+ * @brief Symmetric alternating-direction solver for constant-D 3D diffusion.
  */
 class ADIDiffusion3D {
 public:
-    /**
-     * @brief Construct a 3D ADI diffusion solver.
-     *
-     * @param mesh 3D structured mesh
-     * @param diffusivity Diffusion coefficient D [m²/s]
-     * @throws std::invalid_argument if diffusivity <= 0
-     */
     ADIDiffusion3D(const StructuredMesh3D& mesh, double diffusivity)
-        : mesh_(mesh), diffusivity_(diffusivity) {
-        if (diffusivity <= 0.0) {
-            throw std::invalid_argument("Diffusivity must be positive");
-        }
-
-        const int num_nodes = mesh.numNodes();
-        solution_.resize(num_nodes, 0.0);
-        stage1_.resize(num_nodes, 0.0);
-        stage2_.resize(num_nodes, 0.0);
-
-        // Pre-allocate tridiagonal vectors
-        const int max_dim = std::max({mesh.nx() + 1, mesh.ny() + 1, mesh.nz() + 1});
-        a_.resize(max_dim);
-        b_.resize(max_dim);
-        c_.resize(max_dim);
-        d_.resize(max_dim);
-
-        // Default Dirichlet boundary conditions
-        for (int i = 0; i < 6; ++i) {
-            boundary_conditions_[i] = BoundaryCondition::Dirichlet(0.0);
-        }
-
-        // Precompute mesh spacing
-        dx_ = mesh.dx();
-        dy_ = mesh.dy();
-        dz_ = mesh.dz();
+        : mesh_(mesh), diffusivity_(diffusivity), solution_(mesh.numNodes(), 0.0) {
+        requirePositiveFinite(diffusivity, "Diffusivity");
+        boundary_conditions_.fill(BoundaryCondition::Dirichlet(0.0));
     }
 
-    /**
-     * @brief Set the initial condition.
-     */
     void setInitialCondition(const std::vector<double>& values) {
         if (values.size() != solution_.size()) {
-            throw std::invalid_argument("Initial condition size doesn't match mesh");
+            throw std::invalid_argument("Initial condition size does not match mesh");
         }
+        requireFiniteInput(values, "Initial condition");
         solution_ = values;
     }
 
-    /**
-     * @brief Set a Dirichlet boundary condition on a face.
-     */
     void setDirichletBoundary(Boundary3D boundary, double value) {
-        boundary_conditions_[to_index(boundary)] = BoundaryCondition::Dirichlet(value);
+        requireFinite(value, "Dirichlet value");
+        boundary_conditions_[checkedIndex(boundary)] = BoundaryCondition::Dirichlet(value);
     }
 
     void setDirichletBoundary(int boundary_id, double value) {
-        setDirichletBoundary(static_cast<Boundary3D>(boundary_id), value);
+        setDirichletBoundary(checkedBoundary(boundary_id), value);
     }
 
-    /**
-     * @brief Set a Neumann boundary condition on a face.
-     */
-    void setNeumannBoundary(Boundary3D boundary, double flux) {
-        boundary_conditions_[to_index(boundary)] = BoundaryCondition::Neumann(flux);
+    void setNeumannBoundary(Boundary3D boundary, double normal_derivative) {
+        requireFinite(normal_derivative, "Neumann outward-normal derivative");
+        boundary_conditions_[checkedIndex(boundary)] =
+            BoundaryCondition::Neumann(normal_derivative);
     }
 
-    void setNeumannBoundary(int boundary_id, double flux) {
-        setNeumannBoundary(static_cast<Boundary3D>(boundary_id), flux);
+    void setNeumannBoundary(int boundary_id, double normal_derivative) {
+        setNeumannBoundary(checkedBoundary(boundary_id), normal_derivative);
     }
 
-    /**
-     * @brief Advance the solution by one time step using Douglas-Gunn ADI.
-     *
-     * @param dt Time step size [s]
-     * @return ADISolveResult with status information
-     */
     ADISolveResult step(double dt) {
-        if (dt <= 0.0) {
-            throw std::invalid_argument("Time step must be positive");
-        }
+        requirePositiveFinite(dt, "Time step");
+
+        std::vector<double> work = solution_;
+        imposeDirichlet(work);
+        work = sweepX(work, 0.5 * dt);
+        work = sweepY(work, 0.5 * dt);
+        work = sweepZ(work, dt);
+        work = sweepY(work, 0.5 * dt);
+        work = sweepX(work, 0.5 * dt);
+        imposeDirichlet(work);
+        requireFiniteResult(work, "ADI solution");
+
+        solution_.swap(work);
+        time_ += dt;
 
         ADISolveResult result;
-        result.substeps = 3;
-
-        // Coefficients
-        const double rx = diffusivity_ * dt / (dx_ * dx_);
-        const double ry = diffusivity_ * dt / (dy_ * dy_);
-        const double rz = diffusivity_ * dt / (dz_ * dz_);
-
-        const int nx = mesh_.nx();
-        const int ny = mesh_.ny();
-        const int nz = mesh_.nz();
-        const int stride_j = mesh_.strideJ();  // (nx+1)
-        const int stride_k = mesh_.strideK();  // (nx+1)*(ny+1)
-
-        // Pre-allocate max size for thread-local vectors
-        const int max_dim = std::max({nx, ny, nz});
-
-        // ========== STAGE 1: Implicit in x ==========
-        // (I - rx*δ_x²)u* = uⁿ + dt*D*∇²uⁿ
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
-#pragma omp parallel
-        {
-            std::vector<double> a_local(max_dim), b_local(max_dim);
-            std::vector<double> c_local(max_dim), d_local(max_dim);
-
-#pragma omp for schedule(static) collapse(2)
-            for (int k = 1; k < nz; ++k) {
-                for (int j = 1; j < ny; ++j) {
-                    const int n = nx - 1;
-
-                    for (int i = 1; i < nx; ++i) {
-                        const int idx = k * stride_k + j * stride_j + i;
-                        const int m = i - 1;
-
-                        double u_xx =
-                            (solution_[idx - 1] - 2.0 * solution_[idx] + solution_[idx + 1]) /
-                            (dx_ * dx_);
-                        double u_yy = (solution_[idx - stride_j] - 2.0 * solution_[idx] +
-                                       solution_[idx + stride_j]) /
-                                      (dy_ * dy_);
-                        double u_zz = (solution_[idx - stride_k] - 2.0 * solution_[idx] +
-                                       solution_[idx + stride_k]) /
-                                      (dz_ * dz_);
-
-                        d_local[m] = solution_[idx] + dt * diffusivity_ * (u_xx + u_yy + u_zz);
-                        a_local[m] = -rx;
-                        b_local[m] = 1.0 + 2.0 * rx;
-                        c_local[m] = -rx;
-                    }
-
-                    applyTridiagonalBCs_X_local(j, k, rx, n, a_local, b_local, c_local, d_local);
-
-                    auto x_sol = linalg::solve_tridiagonal(
-                        std::vector<double>(a_local.begin(), a_local.begin() + n),
-                        std::vector<double>(b_local.begin(), b_local.begin() + n),
-                        std::vector<double>(c_local.begin(), c_local.begin() + n),
-                        std::vector<double>(d_local.begin(), d_local.begin() + n));
-
-                    for (int i = 1; i < nx; ++i) {
-                        stage1_[k * stride_k + j * stride_j + i] = x_sol[i - 1];
-                    }
-                }
-            }
-        }
-#else
-        // Serial version
-        for (int k = 1; k < nz; ++k) {
-            for (int j = 1; j < ny; ++j) {
-                const int n = nx - 1;
-
-                for (int i = 1; i < nx; ++i) {
-                    const int idx = k * stride_k + j * stride_j + i;
-                    const int m = i - 1;
-
-                    double u_xx = (solution_[idx - 1] - 2.0 * solution_[idx] + solution_[idx + 1]) /
-                                  (dx_ * dx_);
-                    double u_yy = (solution_[idx - stride_j] - 2.0 * solution_[idx] +
-                                   solution_[idx + stride_j]) /
-                                  (dy_ * dy_);
-                    double u_zz = (solution_[idx - stride_k] - 2.0 * solution_[idx] +
-                                   solution_[idx + stride_k]) /
-                                  (dz_ * dz_);
-
-                    d_[m] = solution_[idx] + dt * diffusivity_ * (u_xx + u_yy + u_zz);
-                    a_[m] = -rx;
-                    b_[m] = 1.0 + 2.0 * rx;
-                    c_[m] = -rx;
-                }
-
-                applyTridiagonalBCs_X(j, k, rx, n);
-
-                auto x_sol =
-                    linalg::solve_tridiagonal(std::vector<double>(a_.begin(), a_.begin() + n),
-                                              std::vector<double>(b_.begin(), b_.begin() + n),
-                                              std::vector<double>(c_.begin(), c_.begin() + n),
-                                              std::vector<double>(d_.begin(), d_.begin() + n));
-
-                for (int i = 1; i < nx; ++i) {
-                    stage1_[k * stride_k + j * stride_j + i] = x_sol[i - 1];
-                }
-            }
-        }
-#endif
-        applyBoundaryConditions(stage1_);
-
-        // ========== STAGE 2: Implicit in y ==========
-        // (I - ry*δ_y²)u** = u* + ry*δ_y²uⁿ
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
-#pragma omp parallel
-        {
-            std::vector<double> a_local(max_dim), b_local(max_dim);
-            std::vector<double> c_local(max_dim), d_local(max_dim);
-
-#pragma omp for schedule(static) collapse(2)
-            for (int k = 1; k < nz; ++k) {
-                for (int i = 1; i < nx; ++i) {
-                    const int n = ny - 1;
-
-                    for (int j = 1; j < ny; ++j) {
-                        const int idx = k * stride_k + j * stride_j + i;
-                        const int m = j - 1;
-
-                        double u_yy_old = solution_[idx - stride_j] - 2.0 * solution_[idx] +
-                                          solution_[idx + stride_j];
-                        d_local[m] = stage1_[idx] + ry * u_yy_old;
-                        a_local[m] = -ry;
-                        b_local[m] = 1.0 + 2.0 * ry;
-                        c_local[m] = -ry;
-                    }
-
-                    applyTridiagonalBCs_Y_local(i, k, ry, n, a_local, b_local, c_local, d_local);
-
-                    auto y_sol = linalg::solve_tridiagonal(
-                        std::vector<double>(a_local.begin(), a_local.begin() + n),
-                        std::vector<double>(b_local.begin(), b_local.begin() + n),
-                        std::vector<double>(c_local.begin(), c_local.begin() + n),
-                        std::vector<double>(d_local.begin(), d_local.begin() + n));
-
-                    for (int j = 1; j < ny; ++j) {
-                        stage2_[k * stride_k + j * stride_j + i] = y_sol[j - 1];
-                    }
-                }
-            }
-        }
-#else
-        // Serial version
-        for (int k = 1; k < nz; ++k) {
-            for (int i = 1; i < nx; ++i) {
-                const int n = ny - 1;
-
-                for (int j = 1; j < ny; ++j) {
-                    const int idx = k * stride_k + j * stride_j + i;
-                    const int m = j - 1;
-
-                    double u_yy_old = solution_[idx - stride_j] - 2.0 * solution_[idx] +
-                                      solution_[idx + stride_j];
-                    d_[m] = stage1_[idx] + ry * u_yy_old;
-                    a_[m] = -ry;
-                    b_[m] = 1.0 + 2.0 * ry;
-                    c_[m] = -ry;
-                }
-
-                applyTridiagonalBCs_Y(i, k, ry, n);
-
-                auto y_sol =
-                    linalg::solve_tridiagonal(std::vector<double>(a_.begin(), a_.begin() + n),
-                                              std::vector<double>(b_.begin(), b_.begin() + n),
-                                              std::vector<double>(c_.begin(), c_.begin() + n),
-                                              std::vector<double>(d_.begin(), d_.begin() + n));
-
-                for (int j = 1; j < ny; ++j) {
-                    stage2_[k * stride_k + j * stride_j + i] = y_sol[j - 1];
-                }
-            }
-        }
-#endif
-        applyBoundaryConditions(stage2_);
-
-        // ========== STAGE 3: Implicit in z ==========
-        // (I - rz*δ_z²)u^{n+1} = u** + rz*δ_z²uⁿ
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
-#pragma omp parallel
-        {
-            std::vector<double> a_local(max_dim), b_local(max_dim);
-            std::vector<double> c_local(max_dim), d_local(max_dim);
-
-#pragma omp for schedule(static) collapse(2)
-            for (int j = 1; j < ny; ++j) {
-                for (int i = 1; i < nx; ++i) {
-                    const int n = nz - 1;
-
-                    for (int k = 1; k < nz; ++k) {
-                        const int idx = k * stride_k + j * stride_j + i;
-                        const int m = k - 1;
-
-                        double u_zz_old = solution_[idx - stride_k] - 2.0 * solution_[idx] +
-                                          solution_[idx + stride_k];
-                        d_local[m] = stage2_[idx] + rz * u_zz_old;
-                        a_local[m] = -rz;
-                        b_local[m] = 1.0 + 2.0 * rz;
-                        c_local[m] = -rz;
-                    }
-
-                    applyTridiagonalBCs_Z_local(i, j, rz, n, a_local, b_local, c_local, d_local);
-
-                    auto z_sol = linalg::solve_tridiagonal(
-                        std::vector<double>(a_local.begin(), a_local.begin() + n),
-                        std::vector<double>(b_local.begin(), b_local.begin() + n),
-                        std::vector<double>(c_local.begin(), c_local.begin() + n),
-                        std::vector<double>(d_local.begin(), d_local.begin() + n));
-
-                    for (int k = 1; k < nz; ++k) {
-                        solution_[k * stride_k + j * stride_j + i] = z_sol[k - 1];
-                    }
-                }
-            }
-        }
-#else
-        // Serial version
-        for (int j = 1; j < ny; ++j) {
-            for (int i = 1; i < nx; ++i) {
-                const int n = nz - 1;
-
-                for (int k = 1; k < nz; ++k) {
-                    const int idx = k * stride_k + j * stride_j + i;
-                    const int m = k - 1;
-
-                    double u_zz_old = solution_[idx - stride_k] - 2.0 * solution_[idx] +
-                                      solution_[idx + stride_k];
-                    d_[m] = stage2_[idx] + rz * u_zz_old;
-                    a_[m] = -rz;
-                    b_[m] = 1.0 + 2.0 * rz;
-                    c_[m] = -rz;
-                }
-
-                applyTridiagonalBCs_Z(i, j, rz, n);
-
-                auto z_sol =
-                    linalg::solve_tridiagonal(std::vector<double>(a_.begin(), a_.begin() + n),
-                                              std::vector<double>(b_.begin(), b_.begin() + n),
-                                              std::vector<double>(c_.begin(), c_.begin() + n),
-                                              std::vector<double>(d_.begin(), d_.begin() + n));
-
-                for (int k = 1; k < nz; ++k) {
-                    solution_[k * stride_k + j * stride_j + i] = z_sol[k - 1];
-                }
-            }
-        }
-#endif
-        applyBoundaryConditions(solution_);
-
-        time_ += dt;
+        result.steps = 1;
+        result.substeps = 5;
         result.time = time_;
-        result.success = true;
         return result;
     }
 
-    /**
-     * @brief Run the solver for specified number of steps.
-     * @return ADISolveResult with cumulative statistics
-     */
     ADISolveResult solve(double dt, int num_steps) {
-        ADISolveResult total_result;
-        total_result.steps = 0;
-        total_result.substeps = 0;
-        total_result.success = true;
-
-        for (int step_count = 0; step_count < num_steps; ++step_count) {
-            ADISolveResult result = this->step(dt);
-            if (!result.success) {
-                total_result.success = false;
-                total_result.total_time = time_;
-                return total_result;
-            }
-            total_result.steps++;
-            total_result.substeps += result.substeps;
+        requirePositiveFinite(dt, "Time step");
+        if (num_steps < 0) {
+            throw std::invalid_argument("Number of steps must be non-negative");
         }
-        total_result.total_time = time_;
-        return total_result;
+
+        ADISolveResult result;
+        for (int count = 0; count < num_steps; ++count) {
+            const auto one_step = step(dt);
+            ++result.steps;
+            result.substeps += one_step.substeps;
+        }
+        result.time = time_;
+        result.total_time = time_;
+        return result;
     }
 
-    /**
-     * @brief Get the current solution.
-     */
     const std::vector<double>& solution() const { return solution_; }
-
-    /**
-     * @brief Get the mesh.
-     */
     const StructuredMesh3D& mesh() const { return mesh_; }
-
-    /**
-     * @brief Get diffusivity.
-     */
     double diffusivity() const { return diffusivity_; }
-
-    /**
-     * @brief Get current simulation time.
-     */
     double time() const { return time_; }
 
 private:
     const StructuredMesh3D& mesh_;
     double diffusivity_;
     std::vector<double> solution_;
-    std::vector<double> stage1_;
-    std::vector<double> stage2_;
-
-    std::vector<double> a_, b_, c_, d_;
-
     std::array<BoundaryCondition, 6> boundary_conditions_;
-
-    double dx_ = 0.0;
-    double dy_ = 0.0;
-    double dz_ = 0.0;
     double time_ = 0.0;
 
-    void applyTridiagonalBCs_X(int j, int k, double rx, int n) {
-        const auto& xmin_bc = boundary_conditions_[to_index(Boundary3D::XMin)];
-        const auto& xmax_bc = boundary_conditions_[to_index(Boundary3D::XMax)];
-
-        if (xmin_bc.type == BoundaryType::DIRICHLET) {
-            d_[0] += rx * xmin_bc.value;
-        } else {
-            b_[0] -= rx;
-            d_[0] -= rx * xmin_bc.value * dx_;
-        }
-
-        if (xmax_bc.type == BoundaryType::DIRICHLET) {
-            d_[n - 1] += rx * xmax_bc.value;
-        } else {
-            b_[n - 1] -= rx;
-            d_[n - 1] += rx * xmax_bc.value * dx_;
+    static void requirePositiveFinite(double value, const char* name) {
+        if (!std::isfinite(value) || value <= 0.0) {
+            throw std::invalid_argument(std::string(name) + " must be finite and positive");
         }
     }
 
-    void applyTridiagonalBCs_Y(int i, int k, double ry, int n) {
-        const auto& ymin_bc = boundary_conditions_[to_index(Boundary3D::YMin)];
-        const auto& ymax_bc = boundary_conditions_[to_index(Boundary3D::YMax)];
-
-        if (ymin_bc.type == BoundaryType::DIRICHLET) {
-            d_[0] += ry * ymin_bc.value;
-        } else {
-            b_[0] -= ry;
-            d_[0] -= ry * ymin_bc.value * dy_;
-        }
-
-        if (ymax_bc.type == BoundaryType::DIRICHLET) {
-            d_[n - 1] += ry * ymax_bc.value;
-        } else {
-            b_[n - 1] -= ry;
-            d_[n - 1] += ry * ymax_bc.value * dy_;
+    static void requireFinite(double value, const char* name) {
+        if (!std::isfinite(value)) {
+            throw std::invalid_argument(std::string(name) + " must be finite");
         }
     }
 
-    void applyTridiagonalBCs_Z(int i, int j, double rz, int n) {
-        const auto& zmin_bc = boundary_conditions_[to_index(Boundary3D::ZMin)];
-        const auto& zmax_bc = boundary_conditions_[to_index(Boundary3D::ZMax)];
-
-        if (zmin_bc.type == BoundaryType::DIRICHLET) {
-            d_[0] += rz * zmin_bc.value;
-        } else {
-            b_[0] -= rz;
-            d_[0] -= rz * zmin_bc.value * dz_;
-        }
-
-        if (zmax_bc.type == BoundaryType::DIRICHLET) {
-            d_[n - 1] += rz * zmax_bc.value;
-        } else {
-            b_[n - 1] -= rz;
-            d_[n - 1] += rz * zmax_bc.value * dz_;
+    static void requireFiniteInput(const std::vector<double>& values, const char* name) {
+        for (double value : values) {
+            requireFinite(value, name);
         }
     }
 
-    // Thread-local versions for OpenMP
-    void applyTridiagonalBCs_X_local(int j, int k, double rx, int n, std::vector<double>& a_local,
-                                     std::vector<double>& b_local, std::vector<double>& c_local,
-                                     std::vector<double>& d_local) const {
-        const auto& xmin_bc = boundary_conditions_[to_index(Boundary3D::XMin)];
-        const auto& xmax_bc = boundary_conditions_[to_index(Boundary3D::XMax)];
-
-        if (xmin_bc.type == BoundaryType::DIRICHLET) {
-            d_local[0] += rx * xmin_bc.value;
-        } else {
-            b_local[0] -= rx;
-            d_local[0] -= rx * xmin_bc.value * dx_;
-        }
-
-        if (xmax_bc.type == BoundaryType::DIRICHLET) {
-            d_local[n - 1] += rx * xmax_bc.value;
-        } else {
-            b_local[n - 1] -= rx;
-            d_local[n - 1] += rx * xmax_bc.value * dx_;
+    static void requireFiniteResult(const std::vector<double>& values, const char* name) {
+        for (double value : values) {
+            if (!std::isfinite(value))
+                throw std::runtime_error(std::string(name) + " contains a non-finite value");
         }
     }
 
-    void applyTridiagonalBCs_Y_local(int i, int k, double ry, int n, std::vector<double>& a_local,
-                                     std::vector<double>& b_local, std::vector<double>& c_local,
-                                     std::vector<double>& d_local) const {
-        const auto& ymin_bc = boundary_conditions_[to_index(Boundary3D::YMin)];
-        const auto& ymax_bc = boundary_conditions_[to_index(Boundary3D::YMax)];
-
-        if (ymin_bc.type == BoundaryType::DIRICHLET) {
-            d_local[0] += ry * ymin_bc.value;
-        } else {
-            b_local[0] -= ry;
-            d_local[0] -= ry * ymin_bc.value * dy_;
+    static Boundary3D checkedBoundary(int boundary_id) {
+        if (boundary_id < 0 || boundary_id >= 6) {
+            throw std::invalid_argument("3D boundary identifier is outside [0, 5]");
         }
-
-        if (ymax_bc.type == BoundaryType::DIRICHLET) {
-            d_local[n - 1] += ry * ymax_bc.value;
-        } else {
-            b_local[n - 1] -= ry;
-            d_local[n - 1] += ry * ymax_bc.value * dy_;
-        }
+        return static_cast<Boundary3D>(boundary_id);
     }
 
-    void applyTridiagonalBCs_Z_local(int i, int j, double rz, int n, std::vector<double>& a_local,
-                                     std::vector<double>& b_local, std::vector<double>& c_local,
-                                     std::vector<double>& d_local) const {
-        const auto& zmin_bc = boundary_conditions_[to_index(Boundary3D::ZMin)];
-        const auto& zmax_bc = boundary_conditions_[to_index(Boundary3D::ZMax)];
-
-        if (zmin_bc.type == BoundaryType::DIRICHLET) {
-            d_local[0] += rz * zmin_bc.value;
-        } else {
-            b_local[0] -= rz;
-            d_local[0] -= rz * zmin_bc.value * dz_;
+    static std::size_t checkedIndex(Boundary3D boundary) {
+        const int index = to_index(boundary);
+        if (index < 0 || index >= 6) {
+            throw std::invalid_argument("3D boundary identifier is outside [0, 5]");
         }
-
-        if (zmax_bc.type == BoundaryType::DIRICHLET) {
-            d_local[n - 1] += rz * zmax_bc.value;
-        } else {
-            b_local[n - 1] -= rz;
-            d_local[n - 1] += rz * zmax_bc.value * dz_;
-        }
+        return static_cast<std::size_t>(index);
     }
 
-    void applyBoundaryConditions(std::vector<double>& u) {
-        const int nx = mesh_.nx();
-        const int ny = mesh_.ny();
-        const int nz = mesh_.nz();
-        const int stride_j = mesh_.strideJ();
-        const int stride_k = mesh_.strideK();
-
-        const auto& xmin_bc = boundary_conditions_[to_index(Boundary3D::XMin)];
-        const auto& xmax_bc = boundary_conditions_[to_index(Boundary3D::XMax)];
-        const auto& ymin_bc = boundary_conditions_[to_index(Boundary3D::YMin)];
-        const auto& ymax_bc = boundary_conditions_[to_index(Boundary3D::YMax)];
-        const auto& zmin_bc = boundary_conditions_[to_index(Boundary3D::ZMin)];
-        const auto& zmax_bc = boundary_conditions_[to_index(Boundary3D::ZMax)];
-
-        // X boundaries
-        for (int k = 0; k <= nz; ++k) {
-            for (int j = 0; j <= ny; ++j) {
-                int idx_min = k * stride_k + j * stride_j + 0;
-                int idx_max = k * stride_k + j * stride_j + nx;
-
-                if (xmin_bc.type == BoundaryType::DIRICHLET) {
-                    u[idx_min] = xmin_bc.value;
+    std::optional<double> dirichletValue(int i, int j, int k) const {
+        double sum = 0.0;
+        int count = 0;
+        double reference = 0.0;
+        const auto add = [&](Boundary3D face) {
+            const auto& bc = boundary_conditions_[checkedIndex(face)];
+            if (bc.type == BoundaryType::DIRICHLET) {
+                if (count == 0) {
+                    reference = bc.value;
                 } else {
-                    u[idx_min] = u[idx_min + 1] - xmin_bc.value * dx_;
+                    const double scale = std::max({1.0, std::abs(reference), std::abs(bc.value)});
+                    if (std::abs(reference - bc.value) >
+                        64.0 * std::numeric_limits<double>::epsilon() * scale) {
+                        throw std::invalid_argument(
+                            "Conflicting Dirichlet values meet at a three-dimensional edge or "
+                            "corner");
+                    }
                 }
+                sum += bc.value;
+                ++count;
+            }
+        };
+        if (i == 0)
+            add(Boundary3D::XMin);
+        if (i == mesh_.nx())
+            add(Boundary3D::XMax);
+        if (j == 0)
+            add(Boundary3D::YMin);
+        if (j == mesh_.ny())
+            add(Boundary3D::YMax);
+        if (k == 0)
+            add(Boundary3D::ZMin);
+        if (k == mesh_.nz())
+            add(Boundary3D::ZMax);
+        if (count == 0)
+            return std::nullopt;
+        return sum / static_cast<double>(count);
+    }
 
-                if (xmax_bc.type == BoundaryType::DIRICHLET) {
-                    u[idx_max] = xmax_bc.value;
-                } else {
-                    u[idx_max] = u[idx_max - 1] + xmax_bc.value * dx_;
+    void imposeDirichlet(std::vector<double>& values) const {
+        for (int k = 0; k <= mesh_.nz(); ++k) {
+            for (int j = 0; j <= mesh_.ny(); ++j) {
+                for (int i = 0; i <= mesh_.nx(); ++i) {
+                    if (const auto fixed = dirichletValue(i, j, k)) {
+                        values[static_cast<std::size_t>(mesh_.index(i, j, k))] = *fixed;
+                    }
                 }
             }
         }
+    }
 
-        // Y boundaries
-        for (int k = 0; k <= nz; ++k) {
-            for (int i = 0; i <= nx; ++i) {
-                int idx_min = k * stride_k + 0 * stride_j + i;
-                int idx_max = k * stride_k + ny * stride_j + i;
+    std::vector<double> sweepX(const std::vector<double>& input, double duration) const {
+        const int nodes = mesh_.nx() + 1;
+        const double h = mesh_.dx();
+        const double r = diffusivity_ * duration / (2.0 * h * h);
+        std::vector<double> output(input);
+        std::vector<double> a(nodes), b(nodes), c(nodes), d(nodes);
 
-                if (ymin_bc.type == BoundaryType::DIRICHLET) {
-                    u[idx_min] = ymin_bc.value;
-                } else {
-                    u[idx_min] = u[idx_min + stride_j] - ymin_bc.value * dy_;
+        for (int k = 0; k <= mesh_.nz(); ++k) {
+            for (int j = 0; j <= mesh_.ny(); ++j) {
+                std::fill(a.begin(), a.end(), 0.0);
+                std::fill(b.begin(), b.end(), 0.0);
+                std::fill(c.begin(), c.end(), 0.0);
+                std::fill(d.begin(), d.end(), 0.0);
+                for (int i = 0; i <= mesh_.nx(); ++i) {
+                    const int index = mesh_.index(i, j, k);
+                    if (const auto fixed = dirichletValue(i, j, k)) {
+                        b[i] = 1.0;
+                        d[i] = *fixed;
+                    } else if (i == 0) {
+                        const auto& bc = boundary_conditions_[checkedIndex(Boundary3D::XMin)];
+                        b[i] = 1.0 + 2.0 * r;
+                        c[i] = -2.0 * r;
+                        d[i] = input[index] + 2.0 * r * (input[index + 1] - input[index]) +
+                               4.0 * r * bc.value * h;
+                    } else if (i == mesh_.nx()) {
+                        const auto& bc = boundary_conditions_[checkedIndex(Boundary3D::XMax)];
+                        a[i] = -2.0 * r;
+                        b[i] = 1.0 + 2.0 * r;
+                        d[i] = input[index] + 2.0 * r * (input[index - 1] - input[index]) +
+                               4.0 * r * bc.value * h;
+                    } else {
+                        a[i] = -r;
+                        b[i] = 1.0 + 2.0 * r;
+                        c[i] = -r;
+                        d[i] = input[index] +
+                               r * (input[index - 1] - 2.0 * input[index] + input[index + 1]);
+                    }
                 }
-
-                if (ymax_bc.type == BoundaryType::DIRICHLET) {
-                    u[idx_max] = ymax_bc.value;
-                } else {
-                    u[idx_max] = u[idx_max - stride_j] + ymax_bc.value * dy_;
-                }
+                const auto line = linalg::solve_tridiagonal(a, b, c, d);
+                for (int i = 0; i <= mesh_.nx(); ++i)
+                    output[static_cast<std::size_t>(mesh_.index(i, j, k))] = line[i];
             }
         }
+        return output;
+    }
 
-        // Z boundaries
-        for (int j = 0; j <= ny; ++j) {
-            for (int i = 0; i <= nx; ++i) {
-                int idx_min = 0 * stride_k + j * stride_j + i;
-                int idx_max = nz * stride_k + j * stride_j + i;
+    std::vector<double> sweepY(const std::vector<double>& input, double duration) const {
+        const int nodes = mesh_.ny() + 1;
+        const int stride = mesh_.strideJ();
+        const double h = mesh_.dy();
+        const double r = diffusivity_ * duration / (2.0 * h * h);
+        std::vector<double> output(input);
+        std::vector<double> a(nodes), b(nodes), c(nodes), d(nodes);
 
-                if (zmin_bc.type == BoundaryType::DIRICHLET) {
-                    u[idx_min] = zmin_bc.value;
-                } else {
-                    u[idx_min] = u[idx_min + stride_k] - zmin_bc.value * dz_;
+        for (int k = 0; k <= mesh_.nz(); ++k) {
+            for (int i = 0; i <= mesh_.nx(); ++i) {
+                std::fill(a.begin(), a.end(), 0.0);
+                std::fill(b.begin(), b.end(), 0.0);
+                std::fill(c.begin(), c.end(), 0.0);
+                std::fill(d.begin(), d.end(), 0.0);
+                for (int j = 0; j <= mesh_.ny(); ++j) {
+                    const int index = mesh_.index(i, j, k);
+                    if (const auto fixed = dirichletValue(i, j, k)) {
+                        b[j] = 1.0;
+                        d[j] = *fixed;
+                    } else if (j == 0) {
+                        const auto& bc = boundary_conditions_[checkedIndex(Boundary3D::YMin)];
+                        b[j] = 1.0 + 2.0 * r;
+                        c[j] = -2.0 * r;
+                        d[j] = input[index] + 2.0 * r * (input[index + stride] - input[index]) +
+                               4.0 * r * bc.value * h;
+                    } else if (j == mesh_.ny()) {
+                        const auto& bc = boundary_conditions_[checkedIndex(Boundary3D::YMax)];
+                        a[j] = -2.0 * r;
+                        b[j] = 1.0 + 2.0 * r;
+                        d[j] = input[index] + 2.0 * r * (input[index - stride] - input[index]) +
+                               4.0 * r * bc.value * h;
+                    } else {
+                        a[j] = -r;
+                        b[j] = 1.0 + 2.0 * r;
+                        c[j] = -r;
+                        d[j] = input[index] + r * (input[index - stride] - 2.0 * input[index] +
+                                                   input[index + stride]);
+                    }
                 }
-
-                if (zmax_bc.type == BoundaryType::DIRICHLET) {
-                    u[idx_max] = zmax_bc.value;
-                } else {
-                    u[idx_max] = u[idx_max - stride_k] + zmax_bc.value * dz_;
-                }
+                const auto line = linalg::solve_tridiagonal(a, b, c, d);
+                for (int j = 0; j <= mesh_.ny(); ++j)
+                    output[static_cast<std::size_t>(mesh_.index(i, j, k))] = line[j];
             }
         }
+        return output;
+    }
+
+    std::vector<double> sweepZ(const std::vector<double>& input, double duration) const {
+        const int nodes = mesh_.nz() + 1;
+        const int stride = mesh_.strideK();
+        const double h = mesh_.dz();
+        const double r = diffusivity_ * duration / (2.0 * h * h);
+        std::vector<double> output(input);
+        std::vector<double> a(nodes), b(nodes), c(nodes), d(nodes);
+
+        for (int j = 0; j <= mesh_.ny(); ++j) {
+            for (int i = 0; i <= mesh_.nx(); ++i) {
+                std::fill(a.begin(), a.end(), 0.0);
+                std::fill(b.begin(), b.end(), 0.0);
+                std::fill(c.begin(), c.end(), 0.0);
+                std::fill(d.begin(), d.end(), 0.0);
+                for (int k = 0; k <= mesh_.nz(); ++k) {
+                    const int index = mesh_.index(i, j, k);
+                    if (const auto fixed = dirichletValue(i, j, k)) {
+                        b[k] = 1.0;
+                        d[k] = *fixed;
+                    } else if (k == 0) {
+                        const auto& bc = boundary_conditions_[checkedIndex(Boundary3D::ZMin)];
+                        b[k] = 1.0 + 2.0 * r;
+                        c[k] = -2.0 * r;
+                        d[k] = input[index] + 2.0 * r * (input[index + stride] - input[index]) +
+                               4.0 * r * bc.value * h;
+                    } else if (k == mesh_.nz()) {
+                        const auto& bc = boundary_conditions_[checkedIndex(Boundary3D::ZMax)];
+                        a[k] = -2.0 * r;
+                        b[k] = 1.0 + 2.0 * r;
+                        d[k] = input[index] + 2.0 * r * (input[index - stride] - input[index]) +
+                               4.0 * r * bc.value * h;
+                    } else {
+                        a[k] = -r;
+                        b[k] = 1.0 + 2.0 * r;
+                        c[k] = -r;
+                        d[k] = input[index] + r * (input[index - stride] - 2.0 * input[index] +
+                                                   input[index + stride]);
+                    }
+                }
+                const auto line = linalg::solve_tridiagonal(a, b, c, d);
+                for (int k = 0; k <= mesh_.nz(); ++k)
+                    output[static_cast<std::size_t>(mesh_.index(i, j, k))] = line[k];
+            }
+        }
+        return output;
     }
 };
 

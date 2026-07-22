@@ -1,638 +1,217 @@
 # BioTransport repository footprint
 
-This document is a navigable map of the repository: directories/files, what they do, and the public API surface (C++ and Python).
+This document is a navigable map of the source tree and its scientific
+responsibilities. Generated build products, caches, plots, and local virtual
+environments are intentionally omitted.
 
-## Scope and conventions
+BioTransport is alpha research and teaching software. This map describes where
+capabilities live; it is not evidence that every class is equally verified or
+that any biological model is clinically validated.
 
-- This document focuses on the *source-of-truth* code and configuration.
-- Generated/build artifacts are intentionally not exhaustively documented (they are machine outputs and can be deleted/recreated).
+## Language and precision policy
 
-Generated (non-source) directories in this repo include:
-- build/
-- build-cpp-tests/
-- cmake-build-debug/
-- _deps/
-- __pycache__/
-- .pytest_cache/
-- .ruff_cache/
+Performance-critical canonical and specialized solver kernels are C++17 and
+normally use `double`. NumPy-facing scientific fields therefore ordinarily use
+`float64`. `GrayScottSolver` is a documented legacy exception: its
+dimensionless periodic pattern fields use `float32`. Invariant and deterministic
+execution tests exist, but there is no float-versus-double validation or timing
+study supporting a broader precision/performance claim.
 
-## Precision policy (float vs double)
-
-The library uses **`double`** precision for all scientific computation by default. This ensures:
-- Sufficient precision for transport coefficients spanning many orders of magnitude
-- Compatibility with standard scientific Python (NumPy defaults to float64)
-- Accurate gradient calculations in fine meshes
-
-**Exception:** `GrayScottSolver` uses **`float`** precision because:
-- Pattern formation is qualitative, not quantitative
-- Massive speedup on cache-limited 2D stencil operations
-- Single precision is sufficient for visualization-focused output
-
-When extending the library:
-- Use `double` for new solvers unless performance profiling shows otherwise
-- If adding GPU kernels, consider `float` for memory bandwidth
-- Always document precision choice in class-level comments
+Python contains bindings and scientific workflow code. Unit conversion,
+parameter provenance, sensitivity/uncertainty orchestration, reproducibility
+manifests, plotting, and configuration are intentionally Python. Some older
+numerical helpers also remain implemented in Python and do not automatically
+inherit evidence from similarly named native solvers.
 
 ## Top-level layout
 
-- CMakeLists.txt: Top-level CMake project. Builds the C++ library and (optionally) the Python extension.
-- cpp/: C++ library (headers, sources, tests).
-- python/: Python package, plus pybind11 bindings for the compiled extension.
-- examples/: End-user scripts (basic/intermediate/advanced).
-- docs/: Documentation.
-- results/: Example output location (plots, images, data dumps). Many examples write here by default.
-- run_examples.py: Headless regression runner that executes every script in examples/.
-- dev.sh: Convenience script for build/install/test/run in Unix-like environments.
-- Dockerfile + docker-compose.yml: Containerized dev environment.
-- environment.yml: Conda environment definition.
-- pyproject.toml + setup.py: Python build metadata and CMake-backed extension build.
-- pytest.ini: Pytest configuration.
-- readme.md: User-facing introduction and quickstart.
-- LICENSE: License.
+| Path | Responsibility |
+|---|---|
+| `CMakeLists.txt` | Top-level native build and feature options. |
+| `cpp/` | Public C++ headers, implementations, tests, and engineering benchmarks. |
+| `python/biotransport/` | Python package, type marker, workflow modules, and binding loader. |
+| `python/bindings/` | Modular pybind11 registrations for the compiled `_core` extension. |
+| `python/tests/` | Python API, workflow, numerical, and contract tests. |
+| `examples/` | Runnable demonstrations and scoped verification workflows. |
+| `docs/notes/` | Detailed scientific contracts, limitations, and workflow guides. |
+| `docs/sphinx/` | Built user/API documentation. |
+| `results/` | Default example output location; generated output is not source evidence. |
+| `pyproject.toml` and `setup.py` | Python packaging and CMake-backed extension build. |
+| `run_examples.py` | Headless example runner; example success is not blanket solver validation. |
 
 ## C++ library
 
-### Directory map
+### Core model and geometry
 
-- cpp/include/biotransport/: Public headers.
-  - core/: Core primitives.
-    - mesh/: Structured mesh types.
-    - numerics/: Numerical utilities (stability helpers, etc.).
-    - utils.hpp: Small CSV and vector comparison utilities.
-  - physics/mass_transport/: Primary home for PDE/physics implementations.
-  - solvers/: ExplicitFD façade API.
-- cpp/src/: Implementations for headers in cpp/include/biotransport/.
-- cpp/tests/: Standalone C++ test executables (simple assert-based).
+Public headers live under `cpp/include/biotransport/`; implementations live
+under `cpp/src/`.
 
-### Public headers and API surface
+| Header area | Main responsibility |
+|---|---|
+| `core/problems/transport_problem.hpp` | Canonical scalar equation, coefficient fields, reactions, initial data, and boundaries. |
+| `solvers/transport_solver.hpp` | Canonical conservative 1D/2D explicit solve, stability policy, exact final time, and diagnostics. |
+| `core/mesh/structured_mesh.hpp` | Uniform Cartesian 1D/2D node mesh. |
+| `core/mesh/structured_mesh_3d.hpp` | Uniform Cartesian 3D mesh used by specialized solvers. |
+| `core/mesh/cylindrical_mesh.hpp` | Uniform radial/axisymmetric/full cylindrical coordinate operators. |
+| `core/mesh/nonuniform_mesh_1d.hpp` | Validated strictly increasing fitted 1D nodes and node-centred control volumes. |
+| `solvers/nonuniform_diffusion_1d.hpp` | Conservative nonuniform 1D diffusion with harmonic face coefficients and a local Forward-Euler limit. |
+| `core/boundary.hpp` | Shared scalar boundary identifiers and data structures. Individual solver contracts still define whether a value is a derivative or physical flux. |
+| `core/numerics/` | Stability helpers, time kernels, sparse/tridiagonal algebra, and iterative primitives. |
+| `core/balance.hpp` | Unit-aware amount/energy/volume ledger arithmetic and transfer reconciliation. It does not couple solvers. |
+| `core/build_info.hpp` | Native compiler/feature metadata exposed to reproducibility manifests. |
+| `core/analytical.hpp` and `core/dimensionless.hpp` | Closed-form utilities and named dimensionless numbers. Applicability remains caller-owned. |
 
-#### cpp/include/biotransport/core/mesh/structured_mesh.hpp
+The nonuniform geometry is a deliberately narrow first slice. There is no
+general nonuniform 2D/3D mesh, unstructured connectivity, moving mesh, finite
+element framework, or adaptive mesh refinement.
 
-- class StructuredMesh
-  - StructuredMesh(int nx, double xmin, double xmax)
-  - StructuredMesh(int nx, int ny, double xmin, double xmax, double ymin, double ymax)
-  - int numNodes() const
-  - int numCells() const
-  - double dx() const
-  - double dy() const
-  - bool is1D() const
-  - double x(int i) const
-  - double y(int i, int j) const
-  - int index(int i, int j = 0) const
-  - int nx() const
-  - int ny() const
+### Native solver families
 
-Implementation: cpp/src/core/mesh/structured_mesh.cpp
+Solver headers under `cpp/include/biotransport/solvers/` and physics headers
+under `cpp/include/biotransport/physics/` include:
 
-#### cpp/include/biotransport/core/mesh/mesh.hpp
+- canonical conservative scalar transport and its compatibility facade;
+- legacy and 3D explicit diffusion;
+- Crank--Nicolson, ADI, and sparse backward-Euler diffusion;
+- fitted nonuniform 1D diffusion;
+- generic and specialized reaction--diffusion, multispecies systems, and
+  Gray--Scott patterns;
+- legacy scalar advection--diffusion;
+- Nernst--Planck and prescribed-potential multi-ion transport;
+- Darcy, Stokes, and bounded Navier--Stokes flow;
+- steady single- and multilayer membrane transport;
+- generalized-Newtonian constitutive laws;
+- tumor drug-delivery and bioheat/cryotherapy application models; and
+- high-order finite-difference/time-integration kernels.
 
-- using Mesh = StructuredMesh (backward compatibility alias)
+The authoritative native public-solver inventory is not this prose list. It is
+`python/biotransport/contracts.py`, where each entry records equation, units,
+unknown placement, supported dimensions/terms/boundaries, method, stability,
+evidence, exclusions, and warnings. `python/tests/test_solver_contracts.py`
+mechanically compares that registry with the compiled runtime and checks every
+evidence path/selector.
 
-#### cpp/include/biotransport/core/numerics/stability.hpp
+Important distinctions include:
 
-Namespace: `biotransport::stability`
+- Stokes stores velocity components and pressure **collocated at structured
+  mesh nodes** and uses centred gradients with a SIMPLE-like correction. It is
+  not a staggered MAC discretization and has no Rhie--Chow-style checkerboard
+  stabilization.
+- Navier--Stokes has its own staggered/projection contract; its evidence does
+  not transfer to Stokes.
+- Electrochemical Neumann data are prescribed outward total molar fluxes,
+  while canonical scalar and multispecies Neumann data are outward-normal
+  concentration derivatives.
+- Darcy's coefficient is hydraulic mobility/conductivity with unit
+  `m^2/(Pa*s)`, not intrinsic permeability `m^2`, and its pressure needs a
+  gauge/Dirichlet constraint.
+- Application models are reduced mechanistic models. Their outputs are not
+  patient-specific predictions.
 
-Time step helpers:
-- `double suggest_diffusion_dt_1d(dx, D, safety=0.9)`
-- `double suggest_diffusion_dt_2d(dx, dy, D, safety=0.9)`
-- `double suggest_advection_dt_1d(dx, v, safety=0.9)`
-- `double suggest_advection_dt_2d(dx, dy, vx, vy, safety=0.9)`
-- `double suggest_advection_diffusion_dt_1d(dx, D, v, safety=0.9)`
-- `double suggest_advection_diffusion_dt_2d(dx, dy, D, vx, vy, safety=0.9)`
-- `double suggest_reaction_diffusion_dt_1d(dx, D, k, safety=0.9)`
-- `double suggest_reaction_diffusion_dt_2d(dx, dy, D, k, safety=0.9)`
-- `double suggest_michaelis_menten_dt_1d(dx, D, Vmax, Km, safety=0.9)`
+See `docs/notes/SOLVER_CONTRACTS.md` and
+`docs/notes/MODEL_SCOPE_AND_REFERENCES.md` for the evidence and model boundaries.
 
-Dimensionless number helpers:
-- `double peclet_number(dx, v, D)` — cell Péclet number
-- `double courant_number(dt, dx, v)` — CFL number
-- `double fourier_number(dt, dx, D)` — diffusion number
+### Tests and benchmarks
 
-#### cpp/include/biotransport/physics/mass_transport/diffusion.hpp
+`cpp/tests/` contains always-on native test programs for scoped API, balance,
+analytical/manufactured, conservation, convergence, and failure claims. A test
+supports only the claim and configuration it actually evaluates.
 
-- enum class Boundary { Left, Right, Bottom, Top }
-- enum class BoundaryType { DIRICHLET, NEUMANN }
-- struct BoundaryCondition
-  - BoundaryType type
-  - double value
-  - static BoundaryCondition Dirichlet(double value)
-  - static BoundaryCondition Neumann(double flux)
-- class DiffusionSolver
-  - DiffusionSolver(const StructuredMesh& mesh, double diffusivity)
-  - virtual void setInitialCondition(const std::vector<double>& values)
-  - void setDirichletBoundary(int boundary_id, double value)
-  - void setDirichletBoundary(Boundary boundary, double value)
-  - void setNeumannBoundary(int boundary_id, double flux)
-  - void setNeumannBoundary(Boundary boundary, double flux)
-  - void setBoundaryCondition(int boundary_id, const BoundaryCondition& bc)
-  - void setBoundaryCondition(Boundary boundary, const BoundaryCondition& bc)
-  - virtual void solve(double dt, int num_steps)
-  - const std::vector<double>& solution() const
-
-Implementation: cpp/src/physics/mass_transport/diffusion.cpp
-
-#### cpp/include/biotransport/physics/mass_transport/reaction_diffusion.hpp
-
-- class ReactionDiffusionSolver : public DiffusionSolver
-  - using ReactionFunction = std::function<double(double u, double x, double y, double t)>
-  - ReactionDiffusionSolver(const StructuredMesh& mesh, double diffusivity, ReactionFunction reaction)
-  - void solve(double dt, int num_steps) override
-
-Implementation: cpp/src/physics/mass_transport/reaction_diffusion.cpp
-
-#### Native reaction-diffusion solvers (no per-node callbacks)
-
-These exist to avoid Python callback overhead and keep inner loops allocation-free.
-
-- cpp/include/biotransport/physics/mass_transport/linear_reaction_diffusion.hpp
-  - class LinearReactionDiffusionSolver : public DiffusionSolver
-    - LinearReactionDiffusionSolver(const StructuredMesh& mesh, double diffusivity, double decay_rate)
-    - void solve(double dt, int num_steps) override
-
-- cpp/include/biotransport/physics/mass_transport/logistic_reaction_diffusion.hpp
-  - class LogisticReactionDiffusionSolver : public DiffusionSolver
-    - LogisticReactionDiffusionSolver(const StructuredMesh& mesh, double diffusivity, double growth_rate, double carrying_capacity)
-    - void solve(double dt, int num_steps) override
-    - double time() const
-    - double growthRate() const
-    - double carryingCapacity() const
-
-- cpp/include/biotransport/physics/mass_transport/michaelis_menten_reaction_diffusion.hpp
-  - class MichaelisMentenReactionDiffusionSolver : public DiffusionSolver
-    - MichaelisMentenReactionDiffusionSolver(const StructuredMesh& mesh, double diffusivity, double vmax, double km)
-    - void solve(double dt, int num_steps) override
-    - double time() const
-    - double vmax() const
-    - double km() const
-
-- cpp/include/biotransport/physics/mass_transport/constant_source_reaction_diffusion.hpp
-  - class ConstantSourceReactionDiffusionSolver : public DiffusionSolver
-    - ConstantSourceReactionDiffusionSolver(const StructuredMesh& mesh, double diffusivity, double source_rate)
-    - void solve(double dt, int num_steps) override
-    - double time() const
-    - double sourceRate() const
-
-Implementations:
-- cpp/src/physics/mass_transport/linear_reaction_diffusion.cpp
-- cpp/src/physics/mass_transport/logistic_reaction_diffusion.cpp
-- cpp/src/physics/mass_transport/michaelis_menten_reaction_diffusion.cpp
-- cpp/src/physics/mass_transport/constant_source_reaction_diffusion.cpp
-
-#### Spatially varying diffusion
-
-- cpp/include/biotransport/physics/mass_transport/variable_diffusion.hpp
-  - class VariableDiffusionSolver
-    - VariableDiffusionSolver(const StructuredMesh& mesh, std::vector<double> diffusivity)
-    - void setInitialCondition(const std::vector<double>& values)
-    - boundary setters: setDirichletBoundary / setNeumannBoundary / setBoundaryCondition (int or Boundary)
-    - void solve(double dt, int num_steps)
-    - const std::vector<double>& solution() const
-    - double maxDiffusivity() const
-
-Implementation: cpp/src/physics/mass_transport/variable_diffusion.cpp
-
-#### Masked Michaelis–Menten reaction-diffusion
-
-- cpp/include/biotransport/physics/mass_transport/masked_michaelis_menten_reaction_diffusion.hpp
-  - class MaskedMichaelisMentenReactionDiffusionSolver : public DiffusionSolver
-    - constructor takes mesh, diffusivity, vmax, km, mask (uint8), pinned_value
-    - void solve(double dt, int num_steps) override
-
-Implementation: cpp/src/physics/mass_transport/masked_michaelis_menten_reaction_diffusion.cpp
-
-#### Gray–Scott (two-species, periodic)
-
-- cpp/include/biotransport/physics/mass_transport/gray_scott.hpp
-  - struct GrayScottRunResult
-    - nx, ny, frames, steps_run
-    - std::vector<int> frame_steps
-    - std::vector<float> u_frames, v_frames packed as [frame][j][i]
-  - class GrayScottSolver
-    - GrayScottSolver(const StructuredMesh& mesh, double Du, double Dv, double f, double k)
-    - GrayScottRunResult simulate(
-        const std::vector<float>& u0,
-        const std::vector<float>& v0,
-        int total_steps,
-        double dt,
-        int steps_between_frames,
-        int check_interval,
-        double stable_tol,
-        int min_frames_before_early_stop)
-
-Implementation: cpp/src/physics/mass_transport/gray_scott.cpp
-
-#### Tumor drug delivery
-
-- cpp/include/biotransport/physics/mass_transport/tumor_drug_delivery.hpp
-  - struct TumorDrugDeliverySaved
-    - nx, ny, frames
-    - std::vector<double> times_s
-    - std::vector<double> free, bound, cellular, total packed as [frame][j][i]
-  - class TumorDrugDeliverySolver
-    - TumorDrugDeliverySolver(mesh, tumor_mask, hydraulic_conductivity, p_boundary, p_tumor)
-    - std::vector<double> solvePressureSOR(int max_iter, double tol, double omega) const
-    - TumorDrugDeliverySaved simulate(
-        pressure,
-        diffusivity,
-        permeability,
-        vessel_density,
-        k_binding,
-        k_uptake,
-        c_plasma,
-        dt,
-        num_steps,
-        times_to_save_s) const
-
-Implementation: cpp/src/physics/mass_transport/tumor_drug_delivery.cpp
-
-#### Bioheat cryotherapy
-
-- cpp/include/biotransport/physics/mass_transport/bioheat_cryotherapy.hpp
-  - struct BioheatSaved
-    - nx, ny, frames
-    - std::vector<double> times_s
-    - std::vector<double> temperature_K, damage packed as [frame][j][i]
-  - class BioheatCryotherapySolver
-    - BioheatCryotherapySolver(mesh, probe_mask, perfusion_map, q_met_map, and many scalar physical parameters)
-    - BioheatSaved simulate(double dt, int num_steps, const std::vector<double>& times_to_save_s) const
-
-Implementation: cpp/src/physics/mass_transport/bioheat_cryotherapy.cpp
-
-#### Facade API: problem objects + conservative run
-
-- cpp/include/biotransport/solvers/explicit_fd.hpp
-  - class DiffusionProblem
-  - class LinearReactionDiffusionProblem
-  - class ConstantSourceReactionDiffusionProblem
-  - class MichaelisMentenReactionDiffusionProblem
-  - class LogisticReactionDiffusionProblem
-  - struct SolverStats
-  - struct RunResult
-  - class ExplicitFD
-    - ExplicitFD& safetyFactor(double factor)
-    - RunResult run(problem, double t_end) const  (overloads for each problem type)
-
-Note: these problems are small configuration holders with a fluent API.
-
-#### Compatibility bridge headers
-
-The following headers exist mainly to preserve older include paths and forward to physics/mass_transport:
-
-- cpp/include/biotransport/solvers/diffusion.hpp
-- cpp/include/biotransport/solvers/reaction_diffusion.hpp
-- cpp/include/biotransport/solvers/variable_diffusion.hpp
-- cpp/include/biotransport/solvers/gray_scott.hpp
-- cpp/include/biotransport/solvers/tumor_drug_delivery.hpp
-- cpp/include/biotransport/solvers/bioheat_cryotherapy.hpp
-- cpp/include/biotransport/solvers/linear_reaction_diffusion.hpp
-- cpp/include/biotransport/solvers/logistic_reaction_diffusion.hpp
-- cpp/include/biotransport/solvers/michaelis_menten_reaction_diffusion.hpp
-- cpp/include/biotransport/solvers/constant_source_reaction_diffusion.hpp
-- cpp/include/biotransport/solvers/masked_michaelis_menten_reaction_diffusion.hpp
-
-### C++ utility header
-
-- cpp/include/biotransport/core/utils.hpp
-  - namespace biotransport::utils
-    - bool writeCsv1D(filename, x, solution)
-    - bool writeCsv2D(filename, x, y, solution, nx, ny)
-    - double l2Norm(a, b)
-    - double maxDifference(a, b)
-
-Implementation: cpp/src/core/utils.cpp
-
-### Dimensionless numbers (header-only)
-
-- cpp/include/biotransport/core/dimensionless.hpp
-  - namespace biotransport::dimensionless
-    - double reynolds(velocity, length, kinematic_viscosity)
-    - double peclet(velocity, length, diffusivity)
-    - double schmidt(kinematic_viscosity, diffusivity)
-    - double prandtl(kinematic_viscosity, thermal_diffusivity)
-    - double lewis(thermal_diffusivity, mass_diffusivity)
-    - double biot(h, L, k)
-    - double fourier(alpha, t, L)
-    - double nusselt(h, L, k)
-    - double sherwood(k_c, L, D)
-    - double damkohler_first(k, L, D)
-    - double damkohler_second(k, C0, D, L)
-    - double thiele(R, k, D)
-    - double stanton(h, rho, Cp, U)
-
-### Analytical solutions (header-only)
-
-- cpp/include/biotransport/core/analytical.hpp
-  - namespace biotransport::analytical
-    - Diffusion:
-      - double diffusion_1d_semi_infinite(x, t, D, C_surface, C_initial)
-      - double diffusion_penetration_depth(D, t)
-      - double lumped_exponential(C_0, C_inf, t, tau)
-    - Poiseuille flow:
-      - double poiseuille_velocity(r, R, dp_dz, viscosity)
-      - double poiseuille_max_velocity(R, dp_dz, viscosity)
-      - double poiseuille_flow_rate(R, dp_dz, viscosity)
-      - double poiseuille_wall_shear(R, dp_dz)
-    - Couette flow:
-      - double couette_velocity(y, h, U_top)
-      - double couette_max_velocity(U_top)
-    - Bernoulli:
-      - double bernoulli_velocity(p1, p2, rho, v1)
-    - Taylor-Couette flow:
-      - double taylor_couette_velocity(r, a, b, omega_a, omega_b)
-      - double taylor_couette_torque(a, b, omega_a, omega_b, viscosity)
-    - Viscoelastic models:
-      - double maxwell_relaxation(E, eta, epsilon_0, t)
-      - double maxwell_relaxation_time(E, eta)
-      - double kelvin_voigt_creep(E, eta, sigma_0, t)
-      - double sls_relaxation(E1, E2, eta, epsilon_0, t)
-      - double sls_creep(E1, E2, eta, sigma_0, t)
-      - double burgers_creep(E1, mu1, E2, mu2, sigma_0, t)
-      - double burgers_compliance(E1, mu1, E2, mu2, t)
-    - Complex modulus:
-      - double complex_modulus_magnitude(G1, G2)
-      - double loss_tangent(G1, G2)
-      - double phase_angle(G1, G2)
-    - Kinetics:
-      - double first_order_decay(C_0, k, t)
-      - double logistic_growth(C_0, carrying_capacity, growth_rate, t)
-
-### Fluid Dynamics - Stokes Solver (header-only)
-
-- cpp/include/biotransport/physics/fluid_dynamics/stokes.hpp
-  - enum class VelocityBCType { DIRICHLET, NEUMANN, NOSLIP, INFLOW, OUTFLOW }
-  - struct VelocityBC
-    - VelocityBCType type
-    - double u_value, v_value
-    - static VelocityBC NoSlip()
-    - static VelocityBC Inflow(u, v)
-    - static VelocityBC Outflow()
-    - static VelocityBC Dirichlet(u, v)
-    - static VelocityBC StressFree()
-  - struct StokesResult
-    - bool converged
-    - int iterations
-    - double residual
-    - std::vector<double> velocity_x, velocity_y, pressure
-  - class StokesSolver
-    - StokesSolver(mesh, viscosity)
-    - void setVelocityBC(boundary, bc)
-    - void setBodyForce(forces)
-    - StokesResult solve(max_iter=10000, tol=1e-6, omega=1.5)
-
-### Fluid Dynamics - Navier-Stokes Solver (header-only)
-
-- cpp/include/biotransport/physics/fluid_dynamics/navier_stokes.hpp
-  - enum class ConvectionScheme { UPWIND, CENTRAL, HYBRID, QUICK }
-  - struct NavierStokesResult
-    - bool converged
-    - int iterations
-    - double time
-    - std::vector<double> velocity_x, velocity_y, pressure
-  - class NavierStokesSolver
-    - NavierStokesSolver(mesh, density, viscosity)
-    - void setVelocityBC(boundary, bc)
-    - void setConvectionScheme(scheme)
-    - void setBodyForce(forces)
-    - NavierStokesResult step(dt)
-    - NavierStokesResult solveSteady(t_final, dt, tol, max_iter)
-
-### Cylindrical Mesh (header-only)
-
-- cpp/include/biotransport/core/mesh/cylindrical_mesh.hpp
-  - enum class CylindricalMeshType { RADIAL_R, AXISYMMETRIC_RZ, FULL_3D }
-  - class CylindricalMesh
-    - CylindricalMesh(nr, r_min, r_max) // 1D radial
-    - CylindricalMesh(nr, nz, r_max, z_max) // 2D axisymmetric
-    - CylindricalMesh(nr, ntheta, nz, r_max, z_max) // 3D
-    - CylindricalMeshType type() const
-    - std::vector<double> r_coordinates() const
-    - std::vector<double> z_coordinates() const
-    - double dr() const, dz() const, dtheta() const
-    - Differential operators: gradientR, gradientZ, laplacian, divergence
-
-### Non-Newtonian Fluid Models (header-only)
-
-- cpp/include/biotransport/physics/fluid_dynamics/non_newtonian.hpp
-  - enum class FluidModel { NEWTONIAN, POWER_LAW, CARREAU, ... }
-  - class ViscosityModel (abstract base)
-    - virtual double viscosity(shear_rate) const = 0
-    - virtual FluidModel type() const = 0
-  - class NewtonianModel : public ViscosityModel
-    - NewtonianModel(mu)
-  - class PowerLawModel : public ViscosityModel
-    - PowerLawModel(K, n)
-  - class CarreauModel : public ViscosityModel
-    - CarreauModel(mu_0, mu_inf, lambda, n)
-  - class CarreauYasudaModel : public ViscosityModel
-    - CarreauYasudaModel(mu_0, mu_inf, lambda, a, n)
-  - class CrossModel : public ViscosityModel
-    - CrossModel(mu_0, mu_inf, K, n)
-  - class BinghamModel : public ViscosityModel
-    - BinghamModel(tau_y, mu_p, epsilon=1e-6)
-  - class HerschelBulkleyModel : public ViscosityModel
-    - HerschelBulkleyModel(tau_y, K, n, epsilon=1e-6)
-  - class CassonModel : public ViscosityModel
-    - CassonModel(tau_y, mu_p, epsilon=1e-6)
-    - double yield_stress() const
-    - double plastic_viscosity() const
-  - Blood rheology utilities:
-    - CassonModel bloodCassonModel(hematocrit)
-    - CarreauModel bloodCarreauModel(hematocrit)
-    - double pipeWallShearRate(U_avg, R)
+`cpp/benchmarks/` contains three bounded timing programs for selected kernels.
+Their shared runner records workload parameters, correctness
+invariants/checksums, compiler/build/CPU/OpenMP metadata, repeated timings, and
+JSON output. They remain engineering tools until reviewed results are archived,
+paired serial/OpenMP baselines and CI regression thresholds are established,
+and broader representative workloads are covered. No generic or “massive”
+speedup is claimed.
 
 ## Python package
 
-### Directory map
+### Native binding surface
 
-- python/biotransport/: User-facing Python package.
-  - __init__.py: Public re-exports for a minimal-import UX.
-  - _core/: Internal wrapper around the compiled extension module.
-  - config.py: Configuration dataclasses for multi-physics solvers.
-  - mesh_utils.py: Coordinate helpers and reshape helpers.
-  - run.py: Convenience run wrapper around the C++ ExplicitFD facade.
-  - utils.py: Results directory helpers.
-  - visualization.py: Plotting helpers and a single plot_field entry point.
-- python/bindings/: pybind11 extension module build + binding definitions.
-- python/tests/: Python unit tests.
+`python/bindings/biotransport_bindings_new.cpp` assembles registrations split
+across mesh, diffusion, transport, sparse, fluid, high-order, balance,
+nonuniform, metadata, utility, and I/O binding files. The compiled module is
+loaded by `python/biotransport/_core/__init__.py`; `_core.pyi` supplies static
+typing information. Public convenience re-exports live in
+`python/biotransport/__init__.py`.
 
-Submodules exposed via bindings:
-- biotransport.dimensionless: Dimensionless number calculations.
-- biotransport.analytical: Analytical solution functions.
+The discoverable `biotransport.diffusion`, `biotransport.electrochem`,
+`biotransport.flow`, and `biotransport.applications` modules organize native
+objects. They do not create alternative solver kernels.
 
-### Python public API
+### Scientific workflow modules
 
-The intended beginner import surface is the top-level package.
+| Module | Responsibility | Explicit non-claim |
+|---|---|---|
+| `biotransport.units` | Immutable semantic quantities, explicit conversion, affine temperatures, distinct permeability meanings, and perfusion-basis checks. | Raw C++ values remain untyped; unit correctness is not parameter validity. |
+| `biotransport.provenance` | Immutable parameter records/sets with source, context, validity, uncertainty, status, JSON, and fingerprints. | Structural completeness cannot judge source quality or confer biological validity. |
+| `biotransport.analysis` | Parameter sweeps, central local sensitivity, seeded independent-marginal Latin hypercubes, uncertainty propagation, and standardized-regression screening. | No correlated distributions, calibration, causality, Sobol/Morris indices, or model discrepancy. |
+| `biotransport.contracts` | Immutable machine-readable native solver/evidence registry with lookup/filter/JSON helpers. | Evidence levels are scoped numerical claims, not experimental validation. |
+| `biotransport.reproducibility` | Canonical JSON, frozen configs, SHA-256 fingerprints, method/seed/build metadata, convergence/balance records, and atomic manifest I/O. | A manifest is not authentication, durable archival, FAIR compliance, or validation. |
+| `biotransport.config` | Validated application configuration dataclasses and parameter-provenance attachment. | Current bundled values remain illustrative/unprovenanced. |
 
-From python/biotransport/__init__.py:
+Native `BalanceLedger` objects are top-level Python bindings because the same
+accounting implementation is shared with C++. Callers must still integrate
+fields, sources, and boundary fluxes over compatible domains before entering
+amounts. Full automatic solver-result ledger coupling is not implemented.
 
-Core types (bound from C++):
-- StructuredMesh
-- Boundary, BoundaryType, BoundaryCondition
-- DiffusionSolver
-- ReactionDiffusionSolver
-- LinearReactionDiffusionSolver
-- LogisticReactionDiffusionSolver
-- MichaelisMentenReactionDiffusionSolver
-- MaskedMichaelisMentenReactionDiffusionSolver
-- ConstantSourceReactionDiffusionSolver
-- VariableDiffusionSolver
-- GrayScottSolver, GrayScottRunResult
-- TumorDrugDeliverySolver, TumorDrugDeliverySaved
-- BioheatCryotherapySolver, BioheatSaved
+### Convenience and legacy numerical modules
 
-Facade types (Problem + run):
-- DiffusionProblem
-- LinearReactionDiffusionProblem
-- LogisticReactionDiffusionProblem
-- MichaelisMentenReactionDiffusionProblem
-- ConstantSourceReactionDiffusionProblem
-- ExplicitFD
-- SolverStats
-- RunResult
+Mesh/reshape helpers, initial-condition builders, field builders, plotting,
+VTK export, result paths, and the canonical `run`/`solve` wrappers are Python
+convenience layers.
 
-Beginner helpers (pure Python):
-- get_results_dir, get_result_path
-- x_nodes, y_nodes, xy_grid
-- as_1d, as_2d
-- run
-- plot_1d_solution, plot_2d_solution, plot_2d_surface
-- plot_field
-
-### Bindings map (pybind11)
-
-Bindings live in python/bindings/biotransport_bindings.cpp and build via python/bindings/CMakeLists.txt.
-
-Key naming conventions in Python bindings:
-- C++ camelCase -> Python snake_case (examples)
-  - StructuredMesh::numNodes -> mesh.num_nodes()
-  - DiffusionSolver::setInitialCondition -> solver.set_initial_condition(...)
-  - ExplicitFD::safetyFactor -> ExplicitFD().safety_factor(...)
-
-NumPy interop conventions:
-- solver.solution() returns a NumPy array view tied to the owning C++ object lifetime.
-- For saved frame bundles (GrayScottRunResult, TumorDrugDeliverySaved, BioheatSaved), frame getters return shaped NumPy views:
-  - u_frames(): (frames, ny, nx)
-  - free()/bound()/cellular()/total(): (frames, ny, nx)
-  - temperature_K()/damage(): (frames, ny, nx)
+`adaptive.py`, `time_integrators.py`, `high_order.py`, `pulsatile.py`,
+`convergence.py`, and `newton_raphson.py` contain orchestration or numerical
+logic beyond a pure re-export. Some call native kernels; some are independent
+Python implementations. Their existence does not make the package universally
+thin and does not let them borrow another solver's evidence.
 
 ## Examples
 
-- examples/basic/1d_diffusion.py: 1D diffusion demo with plotting.
-- examples/basic/heat_conduction.py: Heat equation style diffusion demo.
-- examples/intermediate/drug_diffusion_2d.py: 2D diffusion example.
-- examples/intermediate/membrane_diffusion.py: Variable diffusion / membrane region demo.
-- examples/intermediate/oxygen_diffusion.py: Masked Michaelis–Menten sink demo.
-- examples/advanced/turing_patterns.py: Gray-Scott pattern formation demo.
-- examples/advanced/tumor_drug_delivery.py: Pressure + convection-diffusion + binding/uptake demo.
-- examples/advanced/bioheat_cryotherapy.py: Bioheat + freezing + Arrhenius damage demo.
-- examples/intermediate/advection_diffusion.py: 1D/2D advection-diffusion demos.
-- examples/intermediate/darcy_flow.py: Porous media flow demos.
-- examples/intermediate/steady_membrane_diffusion.py: Steady-state membrane diffusion analysis.
-- examples/verification/verify_poiseuille.py: Poiseuille flow analytical verification.
-- examples/verification/verify_taylor_couette.py: Taylor-Couette flow analytical verification.
-- examples/verification/verify_viscoelastic.py: Viscoelastic model (Maxwell, KV, SLS, Burgers) verification.
-- examples/verification/verify_diffusion.py: Semi-infinite diffusion numerical vs analytical.
+Examples are grouped as:
 
-## Tests
+- `examples/basic/`: introductory scalar problems and explicit unit conversion;
+- `examples/intermediate/`: specialized methods and model components;
+- `examples/advanced/`: multispecies/application demonstrations; and
+- `examples/verification/`: scoped checks and auditable workflows, including
+  grid convergence, sensitivity/uncertainty screening, and a reproducible
+  manifest.
 
-### C++ tests (cpp/tests)
+Examples document APIs and assumptions. A plotting example is not validation.
+Where a script states acceptance criteria, it should exit nonzero when they
+fail, and a research artifact should archive the exact configuration and
+result rather than citing an unrecorded interactive run.
 
-Each file builds a standalone executable with a main().
+## Documentation map
 
-- cpp/tests/core/test_mesh.cpp
-  - testStructuredMesh1D()
-  - testStructuredMesh2D()
-  - main()
+| Note | Subject |
+|---|---|
+| `SCIENCE_FIRST_ARCHITECTURE.md` | Layer responsibilities and verification/performance policy. |
+| `SOLVER_CONTRACTS.md` | Native contract schema, registry queries, evidence levels, and catalog. |
+| `UNITS.md` | Python unit semantics and conversion boundaries. |
+| `PARAMETER_PROVENANCE.md` | Traceability records and honest status of bundled parameters. |
+| `SENSITIVITY_AND_UNCERTAINTY.md` | Scope and reporting of screening/propagation workflows. |
+| `BALANCE_ACCOUNTING.md` | Ledger signs, units, transfer reconciliation, and non-coupling boundary. |
+| `REPRODUCIBILITY.md` | Canonical manifests, fingerprints, build metadata, and publication checklist. |
+| `NONUNIFORM_GEOMETRY.md` | Fitted 1D finite-volume equation, flux, stability, diagnostics, and exclusions. |
+| `MODEL_SCOPE_AND_REFERENCES.md` | Application-model equations, references, and biological limits. |
+| `PARAMETERS.md` | Parameter names, units, and current configuration conventions. |
+| `GAP_ANALYSIS.md` | Closed/partial/open scientific-readiness matrix. |
 
-- cpp/tests/core/test_analytical.cpp
-  - Tests for analytical solutions: diffusion, Poiseuille, Couette, Taylor-Couette,
-    Maxwell, Kelvin-Voigt, SLS, Burgers, complex modulus utilities.
-  - main()
+## Build and packaging
 
-- cpp/tests/physics/test_boundary_corners.cpp
-  - testNeumannSideDoesNotOverrideDirichletCorners()
-  - main()
+- The top-level and `cpp/` CMake files build the native library, tests, and
+  optional benchmarks.
+- `python/bindings/CMakeLists.txt` builds the pybind11 `_core` extension.
+- `pyproject.toml` declares Python dependencies and optional test/dev/docs
+  environments.
+- `setup.py` integrates the native CMake build with editable/wheel packaging.
+- Sphinx sources live in `docs/sphinx/` and use autodoc, MyST, and the Furo
+  theme.
 
-- cpp/tests/physics/test_diffusion.cpp
-  - testDiffusion1D()
-  - testReactionDiffusion1D()
-  - main()
-
-- cpp/tests/physics/test_diffusion_2d.cpp
-  - computeMass2D()
-  - testDiffusion2DNeumannMassConservation()
-  - testDiffusion2DDirichletBoundaryPinned()
-  - main()
-
-- cpp/tests/physics/test_diffusion_1d_neumann.cpp
-  - computeMass1D()
-  - testDiffusion1DNeumannMassConservation()
-  - main()
-
-- cpp/tests/physics/test_linear_reaction_diffusion.cpp
-  - testLinearReactionDiffusionMatchesExponentialDecayWhenNoDiffusion()
-  - main()
-
-- cpp/tests/physics/test_logistic_reaction_diffusion.cpp
-  - logisticExact()
-  - testLogisticReaction1DMatchesODEForUniformField()
-  - main()
-
-- cpp/tests/physics/test_michaelis_menten_reaction_diffusion.cpp
-  - michaelisMentenExactU()
-  - testMichaelisMentenSink1DMatchesODEForUniformField()
-  - main()
-
-- cpp/tests/physics/test_constant_source_reaction_diffusion.cpp
-  - testConstantSource1DMatchesODEForUniformField()
-  - main()
-
-- cpp/tests/physics/test_explicit_fd_run.cpp
-  - testExplicitFDRunUsesStableDtAndPinsDirichlet()
-  - main()
-
-- cpp/tests/physics/test_explicit_fd_run_constant_source.cpp
-  - testExplicitFDConstantSource1DUniformGrowth()
-  - main()
-
-- cpp/tests/physics/test_explicit_fd_run_michaelis_menten.cpp
-  - solveMichaelisMentenODE()
-  - testExplicitFDMichaelisMenten1DUniformDecay()
-  - main()
-
-- cpp/tests/physics/test_explicit_fd_run_logistic.cpp
-  - logisticSolution()
-  - testExplicitFDLogistic1DUniformGrowth()
-  - main()
-
-### Python tests (python/tests)
-
-- python/tests/test_diffusion.py
-  - class TestDiffusion(unittest.TestCase)
-    - test_1d_mesh
-    - test_2d_mesh
-    - test_diffusion_solver
-    - test_reaction_diffusion_solver
-
-- python/tests/test_explicit_fd_facade.py
-  - class TestExplicitFDFacade(unittest.TestCase)
-    - test_diffusion_problem_run_1d_dirichlet
-    - test_diffusion_problem_run_2d_neumann_preserves_constant
-
-## Build & packaging
-
-### CMake
-
-- CMakeLists.txt: Builds the library and optionally the Python extension.
-- cpp/CMakeLists.txt: Defines the biotransport library and sources.
-- python/bindings/CMakeLists.txt: Defines the pybind11 module named _core.
-
-### Python packaging
-
-- setup.py: setuptools build that delegates native compilation to CMake.
-- pyproject.toml: declares build-system dependencies for PEP 517 builds.
-
-### Tooling / CI-ish scripts
-
-- run_examples.py: headless example runner used as a lightweight regression check.
-- dev.sh: build/install/test/run convenience for Unix-like shells.
+Generated build directories and caches are disposable. Scientific outputs are
+not: publication workflows should preserve frozen inputs, exact software/build
+metadata, numerical evidence, selected field artifacts, and the scripts needed
+to regenerate reported figures and tables.

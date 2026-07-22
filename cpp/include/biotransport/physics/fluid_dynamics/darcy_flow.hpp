@@ -10,7 +10,7 @@
  *
  * Where:
  *   - v is the Darcy velocity [m/s]
- *   - K is permeability [m²] or κ = K/μ is hydraulic conductivity [m²/(Pa·s)]
+ *   - K is permeability [m²] or κ = K/μ is hydraulic mobility [m²/(Pa·s)]
  *   - μ is dynamic viscosity [Pa·s]
  *   - p is pressure [Pa]
  *
@@ -39,8 +39,8 @@ struct DarcyFlowResult {
     std::vector<double> vx;        ///< x-velocity field [m/s]
     std::vector<double> vy;        ///< y-velocity field [m/s]
     int iterations;                ///< Number of SOR iterations used
-    double residual;               ///< Final residual
-    bool converged;                ///< Whether solver converged
+    double residual;               ///< Maximum pressure fixed-point defect [Pa]
+    bool converged;                ///< True for every returned result; failures throw
 };
 
 /**
@@ -67,9 +67,13 @@ public:
     DarcyFlowSolver& setDirichlet(Boundary side, double pressure);
 
     /**
-     * @brief Set Neumann (fixed flux) boundary condition.
+     * @brief Set the outward-normal pressure gradient.
+     *
+     * The value is dp/dn [Pa/m], where n points out of the domain. It is not
+     * Darcy flux. The corresponding outward Darcy velocity is
+     * v.n = -kappa*dp/dn and can vary along a heterogeneous boundary.
      */
-    DarcyFlowSolver& setNeumann(Boundary side, double flux);
+    DarcyFlowSolver& setNeumann(Boundary side, double outward_pressure_gradient);
 
     /**
      * @brief Set internal pressure sources (e.g., tumor pressure).
@@ -98,6 +102,10 @@ public:
 
     /**
      * @brief Solve the Darcy flow problem.
+     *
+     * At least one fixed-pressure boundary or active internal-pressure node
+     * is required to provide a pressure gauge. Invalid, non-finite, or
+     * unconverged systems throw instead of returning an unusable field.
      */
     [[nodiscard]] DarcyFlowResult solve() const;
 
@@ -122,6 +130,8 @@ private:
     void applyBoundaryPressure(std::vector<double>& p) const;
     void computeVelocity(const std::vector<double>& pressure, std::vector<double>& vx,
                          std::vector<double>& vy) const;
+    bool hasPressureGauge() const;
+    double computePressureResidual(const std::vector<double>& pressure) const;
 };
 
 }  // namespace biotransport

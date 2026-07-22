@@ -1,134 +1,144 @@
-/**
- * @file bench_variable_diffusion.cpp
- * @brief Benchmark for variable diffusion solver performance
- *
- * Tests VariableDiffusionSolver (spatially varying D) on grids of increasing size.
- */
+/** Benchmark canonical conservative variable-coefficient diffusion. */
 
 #include "bench_utils.hpp"
+#include <biotransport/core/boundary.hpp>
 #include <biotransport/core/mesh/structured_mesh.hpp>
-#include <biotransport/physics/mass_transport/variable_diffusion.hpp>
+#include <biotransport/core/problems/transport_problem.hpp>
+#include <biotransport/solvers/transport_solver.hpp>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <string>
 #include <vector>
 
-using namespace biotransport;
-using namespace biotransport::bench;
+namespace {
 
-// Generate initial condition: Gaussian pulse centered in domain
-std::vector<double> gaussianIC(const StructuredMesh& mesh, double L) {
-    std::vector<double> ic(mesh.numNodes(), 0.0);
+using biotransport::Boundary;
+using biotransport::SolveOptions;
+using biotransport::StructuredMesh;
+using biotransport::TransportProblem;
+using biotransport::TransportResult;
+using biotransport::bench::BenchmarkCase;
+using biotransport::bench::BenchmarkOptions;
+using biotransport::bench::BenchmarkResult;
+using biotransport::bench::RunOutcome;
 
-    const double cx = L / 2.0;
-    const double cy = L / 2.0;
-    const double sigma = L / 8.0;
-    const double sigma2 = sigma * sigma;
-
-    const int stride = mesh.nx() + 1;
+std::vector<double> gaussianInitialCondition(const StructuredMesh& mesh) {
+    constexpr double centre = 0.5;
+    constexpr double sigma = 0.125;
+    std::vector<double> values(static_cast<std::size_t>(mesh.numNodes()), 0.0);
     for (int j = 0; j <= mesh.ny(); ++j) {
         for (int i = 0; i <= mesh.nx(); ++i) {
-            const double x = i * mesh.dx();
-            const double y = j * mesh.dy();
-            const double r2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-            ic[j * stride + i] = std::exp(-r2 / (2.0 * sigma2));
+            const double delta_x = mesh.x(i) - centre;
+            const double delta_y = mesh.y(i, j) - centre;
+            values[static_cast<std::size_t>(mesh.index(i, j))] =
+                std::exp(-(delta_x * delta_x + delta_y * delta_y) / (2.0 * sigma * sigma));
         }
     }
-
-    return ic;
+    return values;
 }
 
-// Generate diffusivity field: varies smoothly across domain
-std::vector<double> variableD(const StructuredMesh& mesh, double D_min, double D_max) {
-    std::vector<double> D(mesh.numNodes());
-
-    const int stride = mesh.nx() + 1;
+std::vector<double> diffusivityField(const StructuredMesh& mesh, double minimum, double maximum) {
+    std::vector<double> values(static_cast<std::size_t>(mesh.numNodes()), 0.0);
     for (int j = 0; j <= mesh.ny(); ++j) {
         for (int i = 0; i <= mesh.nx(); ++i) {
-            // Linear variation in x direction
-            const double t = static_cast<double>(i) / mesh.nx();
-            D[j * stride + i] = D_min + t * (D_max - D_min);
+            const double fraction = static_cast<double>(i) / mesh.nx();
+            values[static_cast<std::size_t>(mesh.index(i, j))] =
+                minimum + fraction * (maximum - minimum);
         }
     }
-
-    return D;
+    return values;
 }
 
-BenchmarkResult benchmarkSize(int n, int num_warmup, int num_runs) {
-    // Square grid n x n
-    const double L = 1.0;
-    const double D_min = 0.005;
-    const double D_max = 0.02;
+BenchmarkResult benchmarkSize(int cells_per_axis, const BenchmarkOptions& options) {
+    constexpr double minimum_diffusivity = 0.005;
+    constexpr double maximum_diffusivity = 0.020;
+    constexpr double cfl_fraction = 0.2;
+    constexpr double final_step_fraction = 0.5;
+    constexpr double mass_tolerance = 5.0e-12;
 
-    StructuredMesh mesh(n, n, 0.0, L, 0.0, L);
+    const StructuredMesh mesh(cells_per_axis, cells_per_axis, 0.0, 1.0, 0.0, 1.0);
+    const std::vector<double> initial = gaussianInitialCondition(mesh);
+    const std::vector<double> diffusivity =
+        diffusivityField(mesh, minimum_diffusivity, maximum_diffusivity);
+    const double time_step = cfl_fraction * mesh.dx() * mesh.dx() / (4.0 * maximum_diffusivity);
+    const double final_time =
+        time_step * (static_cast<double>(options.steps - 1) + final_step_fraction);
 
-    // Stability condition based on max D: dt <= dx^2 / (4 * D_max)
-    const double dx = mesh.dx();
-    const double dt = 0.2 * dx * dx / (4.0 * D_max);  // 20% safety factor
+    BenchmarkCase workload;
+    workload.name = "variable_diffusion_" + std::to_string(cells_per_axis) + "x" +
+                    std::to_string(cells_per_axis);
+    workload.description =
+        "Closed 2D Gaussian diffusion with linearly varying D; mass conservation is checked";
+    workload.implementation = "canonical TransportProblem conservative harmonic-face diffusion";
+    workload.parallel_kernel = "none (canonical scalar transport is serial)";
+    workload.openmp_effective_for_workload = false;
+    workload.cells_x = cells_per_axis;
+    workload.cells_y = cells_per_axis;
+    workload.cell_count =
+        static_cast<std::uint64_t>(cells_per_axis) * static_cast<std::uint64_t>(cells_per_axis);
+    workload.node_count = static_cast<std::uint64_t>(mesh.numNodes());
+    workload.species_count = 1;
+    workload.step_count = options.steps;
+    workload.maximum_time_step = time_step;
+    workload.final_time = final_time;
+    workload.parameters = {{"minimum_diffusivity", minimum_diffusivity},
+                           {"maximum_diffusivity", maximum_diffusivity},
+                           {"cfl_fraction", cfl_fraction},
+                           {"final_step_fraction", final_step_fraction}};
 
-    // Fixed number of steps for consistent comparison
-    const int num_steps = 100;
-
-    auto ic = gaussianIC(mesh, L);
-    auto D = variableD(mesh, D_min, D_max);
-
-    auto benchFunc = [&]() {
-        VariableDiffusionSolver solver(mesh, D);
-        solver.setInitialCondition(ic);
-        solver.setDirichletBoundary(Boundary::Left, 0.0);
-        solver.setDirichletBoundary(Boundary::Right, 0.0);
-        solver.setDirichletBoundary(Boundary::Bottom, 0.0);
-        solver.setDirichletBoundary(Boundary::Top, 0.0);
-        solver.solve(dt, num_steps);
+    auto run = [&]() -> RunOutcome {
+        TransportProblem problem(mesh);
+        problem.diffusivityField(diffusivity)
+            .initialCondition(initial)
+            .neumann(Boundary::Left, 0.0)
+            .neumann(Boundary::Right, 0.0)
+            .neumann(Boundary::Bottom, 0.0)
+            .neumann(Boundary::Top, 0.0);
+        SolveOptions solve_options;
+        solve_options.final_time = final_time;
+        solve_options.time_step = time_step;
+        solve_options.max_steps = static_cast<std::size_t>(options.steps);
+        const TransportResult result = biotransport::solve(problem, solve_options);
+        if (result.diagnostics.steps != static_cast<std::size_t>(options.steps)) {
+            throw std::runtime_error("canonical solver did not execute the declared step count");
+        }
+        const double initial_mass = result.diagnostics.initial_mass;
+        const double final_mass = result.diagnostics.final_mass;
+        const double absolute_error = std::abs(final_mass - initial_mass);
+        return {biotransport::bench::makeCorrectnessEvidence(
+            "closed_boundary_trapezoidal_mass_conservation", initial_mass, final_mass,
+            absolute_error, biotransport::bench::relativeError(initial_mass, final_mass),
+            mass_tolerance, biotransport::bench::solutionChecksum(result.concentration))};
     };
 
-    std::string name = "variable_diff_" + std::to_string(n) + "x" + std::to_string(n);
-    std::string desc = "Variable diffusion on " + std::to_string(n) + "x" + std::to_string(n) +
-                       " grid, D=[" + std::to_string(D_min) + ", " + std::to_string(D_max) + "]";
-
-    return runBenchmark(name, desc, n, n, num_steps, dt, num_warmup, num_runs, benchFunc);
+    return biotransport::bench::runBenchmark(workload, options.warmup_runs, options.timed_runs,
+                                             run);
 }
 
+}  // namespace
+
 int main(int argc, char* argv[]) {
-    std::cout << "==========================================\n";
-    std::cout << " BioTransport Variable Diffusion Benchmark\n";
-    std::cout << "==========================================\n";
+    try {
+        const BenchmarkOptions options =
+            biotransport::bench::parseOptions(argc, argv, "bench_variable_diffusion_results.json");
+        if (options.show_help) {
+            biotransport::bench::printUsage(
+                argv[0], "Canonical variable-coefficient diffusion performance evidence");
+            return 0;
+        }
 
-#ifdef BIOTRANSPORT_HAS_OPENMP
-    std::cout << "OpenMP: ENABLED\n";
-#else
-    std::cout << "OpenMP: DISABLED\n";
-#endif
-
-    const int num_warmup = 2;
-    const int num_runs = 5;
-
-    // Test various grid sizes
-    std::vector<int> grid_sizes = {32, 64, 128, 256, 512};
-
-    std::vector<BenchmarkResult> results;
-    results.reserve(grid_sizes.size());
-
-    for (int n : grid_sizes) {
-        std::cout << "\nBenchmarking " << n << "x" << n << " grid...\n";
-        auto result = benchmarkSize(n, num_warmup, num_runs);
-        printResult(result);
-        results.push_back(result);
+        std::vector<BenchmarkResult> results;
+        results.reserve(options.sizes.size());
+        for (int size : options.sizes) {
+            results.push_back(benchmarkSize(size, options));
+            biotransport::bench::printResult(results.back());
+        }
+        biotransport::bench::writeJson(results, options, "bench_variable_diffusion");
+        std::cout << "JSON evidence written to " << options.output_path << '\n';
+        return biotransport::bench::allCorrect(results) ? 0 : 2;
+    } catch (const std::exception& error) {
+        std::cerr << "benchmark error: " << error.what() << '\n';
+        return 1;
     }
-
-    // Write results to JSON
-    writeJSON(results, "bench_variable_diffusion_results.json");
-
-    // Summary table
-    std::cout << "\n=== Summary (median times) ===\n";
-    std::cout << std::setw(12) << "Grid" << std::setw(15) << "Time (ms)" << std::setw(18)
-              << "Cells/s" << "\n";
-    std::cout << std::string(45, '-') << "\n";
-
-    for (const auto& r : results) {
-        std::cout << std::setw(6) << r.nx << "x" << std::setw(4) << r.ny << std::fixed
-                  << std::setprecision(2) << std::setw(15) << r.stats.median_ms << std::scientific
-                  << std::setprecision(2) << std::setw(18) << r.cells_per_second << "\n";
-    }
-
-    return 0;
 }

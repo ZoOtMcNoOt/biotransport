@@ -3,434 +3,417 @@
 
 /**
  * @file crank_nicolson.hpp
- * @brief Crank-Nicolson implicit time integration for diffusion.
+ * @brief Conservative Crank--Nicolson integration for 1D/2D diffusion.
  *
- * The Crank-Nicolson method is second-order accurate in time and
- * unconditionally stable for diffusion problems. It uses a 50/50 blend
- * of explicit and implicit terms:
+ * The spatial operator is a vertex-centred finite-volume discretization of
  *
- *   u^{n+1} - (D*dt/2)*∇²u^{n+1} = u^n + (D*dt/2)*∇²u^n
+ *     du/dt = div(D grad(u)).
  *
- * The implicit system is solved using the Jacobi iterative method,
- * which is parallelizable with OpenMP.
+ * Boundary nodes therefore own half control volumes.  Homogeneous Neumann
+ * boundaries conserve the trapezoidal-volume integral to linear-solver
+ * tolerance.  Neumann values are outward-normal derivatives du/dn; they are
+ * not physical fluxes.  The symmetric positive-definite free-node system is
+ * solved with diagonally preconditioned conjugate gradients.
  *
- * @see ExplicitSolverBase for the explicit FTCS method
+ * Crank--Nicolson is A-stable and second order in time, but it is not L-stable:
+ * very large steps can produce bounded temporal oscillations for poorly
+ * resolved high-frequency initial data.
+ *
+ * Dirichlet traces that meet at a node must agree to within
+ * 64*epsilon*max(1, |a|, |b|).  Larger discrepancies are contradictory data
+ * and raise std::invalid_argument before the public solution is advanced.
  */
 
+#include <algorithm>
 #include <array>
 #include <biotransport/core/boundary.hpp>
-#include <biotransport/core/mesh/mesh_iterators.hpp>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <cmath>
+#include <limits>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
-
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
-#include <omp.h>
-#endif
 
 namespace biotransport {
 
-/**
- * @brief Result of a Crank-Nicolson solve step.
- */
 struct CNSolveResult {
-    int iterations = 0;      ///< Number of iterations used
-    double residual = 0.0;   ///< Final residual norm
-    bool converged = false;  ///< Whether tolerance was achieved
+    int iterations = 0;      ///< PCG iterations used.
+    double residual = 0.0;   ///< Relative infinity norm of the algebraic residual.
+    bool converged = false;  ///< True only when residual <= configured tolerance.
 };
 
-/**
- * @brief Crank-Nicolson solver for the diffusion equation.
- *
- * Solves: ∂u/∂t = D∇²u
- *
- * Uses the Jacobi iterative method for the implicit solve. This is
- * slower per step than explicit methods but allows much larger time steps.
- *
- * @code
- *   CrankNicolsonDiffusion solver(mesh, 1e-9);
- *   solver.setInitialCondition(u0);
- *   solver.setDirichletBoundary(Boundary::Left, 1.0);
- *   solver.setDirichletBoundary(Boundary::Right, 0.0);
- *
- *   double dt = 1.0;  // Much larger than explicit CFL limit
- *   for (int step = 0; step < num_steps; ++step) {
- *       solver.step(dt);
- *   }
- * @endcode
- */
 class CrankNicolsonDiffusion {
 public:
-    /**
-     * @brief Construct a Crank-Nicolson diffusion solver.
-     *
-     * @param mesh 1D or 2D structured mesh
-     * @param diffusivity Diffusion coefficient D [m²/s]
-     */
     CrankNicolsonDiffusion(const StructuredMesh& mesh, double diffusivity)
-        : mesh_(mesh), diffusivity_(diffusivity), iterator_(mesh) {
-        if (diffusivity <= 0.0) {
-            throw std::invalid_argument("Diffusivity must be positive");
-        }
-        solution_.resize(mesh.numNodes(), 0.0);
-        rhs_.resize(solution_.size(), 0.0);
-        scratch_.resize(solution_.size(), 0.0);
-
-        // Default boundary conditions
-        for (int i = 0; i < 4; ++i) {
-            boundary_conditions_[i] = BoundaryCondition::Dirichlet(0.0);
-        }
-
-        // Precompute coefficients
-        dx2_inv_ = 1.0 / (mesh.dx() * mesh.dx());
-        if (!mesh.is1D()) {
-            dy2_inv_ = 1.0 / (mesh.dy() * mesh.dy());
-        } else {
-            dy2_inv_ = 0.0;
-        }
+        : mesh_(mesh), diffusivity_(diffusivity), solution_(mesh.numNodes(), 0.0) {
+        requirePositiveFinite(diffusivity, "Diffusivity");
+        boundary_conditions_.fill(BoundaryCondition::Dirichlet(0.0));
     }
 
-    /**
-     * @brief Set the initial condition.
-     */
     void setInitialCondition(const std::vector<double>& values) {
         if (values.size() != solution_.size()) {
-            throw std::invalid_argument("Initial condition size doesn't match mesh");
+            throw std::invalid_argument("Initial condition size does not match mesh");
         }
+        requireFiniteInput(values, "Initial condition");
         solution_ = values;
     }
 
-    /**
-     * @brief Set a Dirichlet boundary condition.
-     */
     void setDirichletBoundary(Boundary boundary, double value) {
-        boundary_conditions_[to_index(boundary)] = BoundaryCondition::Dirichlet(value);
+        validateBoundaryForMesh(boundary);
+        requireFinite(value, "Dirichlet value");
+        boundary_conditions_[checkedIndex(boundary)] = BoundaryCondition::Dirichlet(value);
     }
 
-    /**
-     * @brief Set a Neumann boundary condition.
-     */
-    void setNeumannBoundary(Boundary boundary, double flux) {
-        boundary_conditions_[to_index(boundary)] = BoundaryCondition::Neumann(flux);
+    void setNeumannBoundary(Boundary boundary, double normal_derivative) {
+        validateBoundaryForMesh(boundary);
+        requireFinite(normal_derivative, "Neumann outward-normal derivative");
+        boundary_conditions_[checkedIndex(boundary)] =
+            BoundaryCondition::Neumann(normal_derivative);
     }
 
-    /**
-     * @brief Set iteration tolerance for implicit solve.
-     */
-    CrankNicolsonDiffusion& setTolerance(double tol) {
-        tolerance_ = tol;
+    CrankNicolsonDiffusion& setTolerance(double tolerance) {
+        requirePositiveFinite(tolerance, "Linear-solver tolerance");
+        tolerance_ = tolerance;
         return *this;
     }
 
-    /**
-     * @brief Set maximum iterations for implicit solve.
-     */
-    CrankNicolsonDiffusion& setMaxIterations(int max_iter) {
-        max_iterations_ = max_iter;
+    CrankNicolsonDiffusion& setMaxIterations(int max_iterations) {
+        if (max_iterations <= 0) {
+            throw std::invalid_argument("Maximum iterations must be positive");
+        }
+        max_iterations_ = max_iterations;
         return *this;
     }
 
-    /**
-     * @brief Advance the solution by one time step.
-     *
-     * @param dt Time step size [s]
-     * @return Result including iteration count and convergence status
-     */
     CNSolveResult step(double dt) {
-        if (dt <= 0.0) {
-            throw std::invalid_argument("Time step must be positive");
+        requirePositiveFinite(dt, "Time step");
+        const double half_dt = 0.5 * dt;
+        const std::size_t count = solution_.size();
+
+        std::vector<double> old = solution_;
+        imposeDirichlet(old);
+
+        std::vector<unsigned char> free_node(count, 1);
+        std::vector<double> fixed(count, 0.0);
+        std::vector<double> diagonal(count, 1.0);
+        std::vector<double> rhs(count, 0.0);
+
+        forEachNode([&](int i, int j, std::size_t index) {
+            if (const auto value = dirichletValue(i, j)) {
+                free_node[index] = 0;
+                fixed[index] = *value;
+                rhs[index] = *value;
+                return;
+            }
+
+            const double volume = controlVolume(i, j);
+            const double sum_g = conductanceSum(i, j);
+            diagonal[index] = volume + half_dt * sum_g;
+            rhs[index] =
+                volume * old[index] + half_dt * internalFlux(old, i, j) + dt * boundaryFlux(i, j);
+
+            forEachNeighbor(i, j, [&](int ni, int nj, double conductance) {
+                if (const auto value = dirichletValue(ni, nj)) {
+                    rhs[index] += half_dt * conductance * *value;
+                }
+            });
+        });
+
+        auto apply_operator = [&](const std::vector<double>& input, std::vector<double>& output) {
+            std::fill(output.begin(), output.end(), 0.0);
+            forEachNode([&](int i, int j, std::size_t index) {
+                if (!free_node[index])
+                    return;
+                double value = diagonal[index] * input[index];
+                forEachNeighbor(i, j, [&](int ni, int nj, double conductance) {
+                    const std::size_t neighbor = nodeIndex(ni, nj);
+                    if (free_node[neighbor])
+                        value -= half_dt * conductance * input[neighbor];
+                });
+                output[index] = value;
+            });
+        };
+
+        std::vector<double> x(old);
+        std::vector<double> residual(count, 0.0);
+        std::vector<double> preconditioned(count, 0.0);
+        std::vector<double> direction(count, 0.0);
+        std::vector<double> product(count, 0.0);
+        apply_operator(x, product);
+
+        double rhs_scale = 1.0;
+        for (std::size_t index = 0; index < count; ++index) {
+            if (!free_node[index]) {
+                x[index] = fixed[index];
+                continue;
+            }
+            residual[index] = rhs[index] - product[index];
+            preconditioned[index] = residual[index] / diagonal[index];
+            direction[index] = preconditioned[index];
+            rhs_scale = std::max(rhs_scale, std::abs(rhs[index]));
         }
 
-        // Coefficients for the Crank-Nicolson scheme
-        // LHS: (I - (D*dt/2)*∇²) u^{n+1} = RHS
-        // RHS: u^n + (D*dt/2)*∇² u^n
-        double alpha_half = diffusivity_ * dt * 0.5;
+        CNSolveResult result;
+        result.residual = residualInfinityNorm(residual, free_node) / rhs_scale;
+        if (result.residual <= tolerance_) {
+            result.converged = true;
+        }
 
-        // Build RHS: u^n + alpha_half * ∇² u^n (explicit part)
-        buildRHS(alpha_half);
-
-        // Solve implicit system using Jacobi iteration
-        return solveImplicit(alpha_half);
-    }
-
-    /**
-     * @brief Run the solver for specified number of steps.
-     *
-     * @param dt Time step size
-     * @param num_steps Number of time steps
-     */
-    void solve(double dt, int num_steps) {
-        for (int step = 0; step < num_steps; ++step) {
-            CNSolveResult result = this->step(dt);
-            if (!result.converged) {
-                throw std::runtime_error("Crank-Nicolson iteration did not converge at step " +
-                                         std::to_string(step));
+        double rz = dotFree(residual, preconditioned, free_node);
+        for (int iteration = 0; !result.converged && iteration < max_iterations_; ++iteration) {
+            apply_operator(direction, product);
+            const double denominator = dotFree(direction, product, free_node);
+            if (!std::isfinite(denominator) || denominator <= 0.0 || !std::isfinite(rz)) {
+                throw std::runtime_error(
+                    "Crank-Nicolson PCG lost positive definiteness or produced non-finite data");
             }
+
+            const double alpha = rz / denominator;
+            for (std::size_t index = 0; index < count; ++index) {
+                if (!free_node[index])
+                    continue;
+                x[index] += alpha * direction[index];
+                residual[index] -= alpha * product[index];
+            }
+
+            result.iterations = iteration + 1;
+            result.residual = residualInfinityNorm(residual, free_node) / rhs_scale;
+            if (!std::isfinite(result.residual)) {
+                throw std::runtime_error("Crank-Nicolson PCG produced a non-finite residual");
+            }
+            if (result.residual <= tolerance_) {
+                result.converged = true;
+                break;
+            }
+
+            for (std::size_t index = 0; index < count; ++index) {
+                if (free_node[index])
+                    preconditioned[index] = residual[index] / diagonal[index];
+            }
+            const double rz_new = dotFree(residual, preconditioned, free_node);
+            const double beta = rz_new / rz;
+            for (std::size_t index = 0; index < count; ++index) {
+                if (free_node[index])
+                    direction[index] = preconditioned[index] + beta * direction[index];
+            }
+            rz = rz_new;
+        }
+
+        if (result.converged) {
+            for (std::size_t index = 0; index < count; ++index) {
+                if (!free_node[index])
+                    x[index] = fixed[index];
+            }
+            requireFiniteResult(x, "Crank-Nicolson solution");
+            solution_.swap(x);
             time_ += dt;
         }
+        return result;
     }
 
-    /**
-     * @brief Get the current solution.
-     */
+    void solve(double dt, int num_steps) {
+        requirePositiveFinite(dt, "Time step");
+        if (num_steps < 0) {
+            throw std::invalid_argument("Number of steps must be non-negative");
+        }
+        for (int step_index = 0; step_index < num_steps; ++step_index) {
+            const CNSolveResult result = step(dt);
+            if (!result.converged) {
+                throw std::runtime_error("Crank-Nicolson linear solve did not converge at step " +
+                                         std::to_string(step_index) +
+                                         "; relative residual=" + std::to_string(result.residual));
+            }
+        }
+    }
+
     const std::vector<double>& solution() const { return solution_; }
-
-    /**
-     * @brief Get the mesh.
-     */
     const StructuredMesh& mesh() const { return mesh_; }
-
-    /**
-     * @brief Get diffusivity.
-     */
     double diffusivity() const { return diffusivity_; }
-
-    /**
-     * @brief Get current simulation time.
-     */
     double time() const { return time_; }
 
 private:
     const StructuredMesh& mesh_;
     double diffusivity_;
     std::vector<double> solution_;
-    std::vector<double> rhs_;
-    std::vector<double> scratch_;
     std::array<BoundaryCondition, 4> boundary_conditions_;
-    MeshIterator iterator_;
-
-    double dx2_inv_ = 0.0;
-    double dy2_inv_ = 0.0;
     double time_ = 0.0;
-    double tolerance_ = 1e-8;
-    int max_iterations_ = 1000;
+    double tolerance_ = 1e-10;
+    int max_iterations_ = 10000;
 
-    /**
-     * @brief Build the RHS vector: u^n + alpha * ∇² u^n
-     */
-    void buildRHS(double alpha) {
-        const int nx = mesh_.nx();
-        const int ny = mesh_.ny();
-        const int stride = nx + 1;
-
-        if (mesh_.is1D()) {
-            // Interior nodes
-            for (int i = 1; i < nx; ++i) {
-                double laplacian =
-                    dx2_inv_ * (solution_[i - 1] - 2.0 * solution_[i] + solution_[i + 1]);
-                rhs_[i] = solution_[i] + alpha * laplacian;
-            }
-        } else {
-            // 2D case
-#ifdef BIOTRANSPORT_ENABLE_OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-            for (int j = 1; j < ny; ++j) {
-                for (int i = 1; i < nx; ++i) {
-                    int idx = j * stride + i;
-                    double laplacian = dx2_inv_ * (solution_[idx - 1] - 2.0 * solution_[idx] +
-                                                   solution_[idx + 1]) +
-                                       dy2_inv_ * (solution_[idx - stride] - 2.0 * solution_[idx] +
-                                                   solution_[idx + stride]);
-                    rhs_[idx] = solution_[idx] + alpha * laplacian;
-                }
-            }
+    static void requirePositiveFinite(double value, const char* name) {
+        if (!std::isfinite(value) || value <= 0.0) {
+            throw std::invalid_argument(std::string(name) + " must be finite and positive");
         }
     }
 
-    /**
-     * @brief Solve the implicit system using Jacobi iteration.
-     *
-     * Solves: (I - alpha*∇²) u^{n+1} = rhs
-     *
-     * The Jacobi method updates each point independently using only
-     * values from the previous iteration, making it parallelizable.
-     */
-    CNSolveResult solveImplicit(double alpha) {
-        CNSolveResult result;
-        const int nx = mesh_.nx();
-        const int ny = mesh_.ny();
-        const int stride = nx + 1;
+    static void requireFinite(double value, const char* name) {
+        if (!std::isfinite(value))
+            throw std::invalid_argument(std::string(name) + " must be finite");
+    }
 
-        // Precompute diagonal coefficient
-        // For 1D: a_ii = 1 + 2*alpha/dx²
-        // For 2D: a_ii = 1 + 2*alpha/dx² + 2*alpha/dy²
-        double diag_coeff;
-        if (mesh_.is1D()) {
-            diag_coeff = 1.0 + 2.0 * alpha * dx2_inv_;
-        } else {
-            diag_coeff = 1.0 + 2.0 * alpha * (dx2_inv_ + dy2_inv_);
+    static void requireFiniteInput(const std::vector<double>& values, const char* name) {
+        for (double value : values)
+            requireFinite(value, name);
+    }
+
+    static void requireFiniteResult(const std::vector<double>& values, const char* name) {
+        for (double value : values) {
+            if (!std::isfinite(value))
+                throw std::runtime_error(std::string(name) + " contains a non-finite value");
         }
-        double diag_inv = 1.0 / diag_coeff;
-        double off_diag_x = alpha * dx2_inv_;
-        double off_diag_y = alpha * dy2_inv_;
+    }
 
-        // Start from current solution as initial guess
-        scratch_ = solution_;
+    static std::size_t checkedIndex(Boundary boundary) {
+        const int index = to_index(boundary);
+        if (index < 0 || index >= 4)
+            throw std::invalid_argument("Boundary identifier is outside [0, 3]");
+        return static_cast<std::size_t>(index);
+    }
 
-        for (int iter = 0; iter < max_iterations_; ++iter) {
-            double max_diff = 0.0;
+    void validateBoundaryForMesh(Boundary boundary) const {
+        (void)checkedIndex(boundary);
+        if (mesh_.is1D() && (boundary == Boundary::Bottom || boundary == Boundary::Top)) {
+            throw std::invalid_argument("Bottom/Top boundaries do not exist on a 1D mesh");
+        }
+    }
 
-            if (mesh_.is1D()) {
-                for (int i = 1; i < nx; ++i) {
-                    // Jacobi update: u_new[i] = (rhs[i] + alpha*dx2_inv*(u_old[i-1] + u_old[i+1]))
-                    // / diag
-                    double u_new =
-                        (rhs_[i] + off_diag_x * (scratch_[i - 1] + scratch_[i + 1])) * diag_inv;
-                    max_diff = std::max(max_diff, std::abs(u_new - solution_[i]));
-                    solution_[i] = u_new;
-                }
-            } else {
-                // 2D case - Jacobi is fully parallelizable
-#if !defined(_MSC_VER) && defined(BIOTRANSPORT_ENABLE_OPENMP)
-#pragma omp parallel for schedule(static) reduction(max : max_diff)
-                for (int j = 1; j < ny; ++j) {
-                    for (int i = 1; i < nx; ++i) {
-                        int idx = j * stride + i;
-                        double u_new =
-                            (rhs_[idx] + off_diag_x * (scratch_[idx - 1] + scratch_[idx + 1]) +
-                             off_diag_y * (scratch_[idx - stride] + scratch_[idx + stride])) *
-                            diag_inv;
-                        double diff = std::abs(u_new - solution_[idx]);
-                        max_diff = std::max(max_diff, diff);
-                        solution_[idx] = u_new;
+    std::size_t nodeIndex(int i, int j) const {
+        return static_cast<std::size_t>(mesh_.index(i, mesh_.is1D() ? 0 : j));
+    }
+
+    template <typename Function>
+    void forEachNode(Function&& function) const {
+        const int last_j = mesh_.is1D() ? 0 : mesh_.ny();
+        for (int j = 0; j <= last_j; ++j) {
+            for (int i = 0; i <= mesh_.nx(); ++i)
+                function(i, j, nodeIndex(i, j));
+        }
+    }
+
+    std::optional<double> dirichletValue(int i, int j) const {
+        double sum = 0.0;
+        int count = 0;
+        double reference = 0.0;
+        const auto add = [&](Boundary face) {
+            const auto& bc = boundary_conditions_[checkedIndex(face)];
+            if (bc.type == BoundaryType::DIRICHLET) {
+                if (count == 0) {
+                    reference = bc.value;
+                } else {
+                    const double scale = std::max({1.0, std::abs(reference), std::abs(bc.value)});
+                    if (std::abs(reference - bc.value) >
+                        64.0 * std::numeric_limits<double>::epsilon() * scale) {
+                        throw std::invalid_argument(
+                            "Conflicting Dirichlet values meet at a two-dimensional corner");
                     }
                 }
-#elif defined(_MSC_VER) && defined(BIOTRANSPORT_ENABLE_OPENMP)
-                // MSVC doesn't support max reduction, use local max + critical
-#pragma omp parallel for schedule(static)
-                for (int j = 1; j < ny; ++j) {
-                    double local_max = 0.0;
-                    for (int i = 1; i < nx; ++i) {
-                        int idx = j * stride + i;
-                        double u_new =
-                            (rhs_[idx] + off_diag_x * (scratch_[idx - 1] + scratch_[idx + 1]) +
-                             off_diag_y * (scratch_[idx - stride] + scratch_[idx + stride])) *
-                            diag_inv;
-                        double diff = std::abs(u_new - solution_[idx]);
-                        local_max = std::max(local_max, diff);
-                        solution_[idx] = u_new;
-                    }
-#pragma omp critical
-                    max_diff = std::max(max_diff, local_max);
-                }
-#else
-                // No OpenMP - serial version
-                for (int j = 1; j < ny; ++j) {
-                    for (int i = 1; i < nx; ++i) {
-                        int idx = j * stride + i;
-                        double u_new =
-                            (rhs_[idx] + off_diag_x * (scratch_[idx - 1] + scratch_[idx + 1]) +
-                             off_diag_y * (scratch_[idx - stride] + scratch_[idx + stride])) *
-                            diag_inv;
-                        double diff = std::abs(u_new - solution_[idx]);
-                        max_diff = std::max(max_diff, diff);
-                        solution_[idx] = u_new;
-                    }
-                }
-#endif
+                sum += bc.value;
+                ++count;
             }
-
-            // Apply boundary conditions
-            applyBoundaryConditions(solution_);
-
-            // Check convergence
-            result.residual = max_diff;
-            result.iterations = iter + 1;
-
-            if (max_diff < tolerance_) {
-                result.converged = true;
-                break;
-            }
-
-            // Update scratch for next iteration
-            scratch_ = solution_;
+        };
+        if (i == 0)
+            add(Boundary::Left);
+        if (i == mesh_.nx())
+            add(Boundary::Right);
+        if (!mesh_.is1D()) {
+            if (j == 0)
+                add(Boundary::Bottom);
+            if (j == mesh_.ny())
+                add(Boundary::Top);
         }
-
-        if (!result.converged) {
-            result.converged = (result.residual < tolerance_ * 100);  // Looser check
-        }
-
-        return result;
+        if (count == 0)
+            return std::nullopt;
+        return sum / static_cast<double>(count);
     }
 
-    /**
-     * @brief Apply boundary conditions to the solution vector.
-     */
-    void applyBoundaryConditions(std::vector<double>& u) {
-        if (mesh_.is1D()) {
-            applyBoundaryConditions1D(u);
-        } else {
-            applyBoundaryConditions2D(u);
+    void imposeDirichlet(std::vector<double>& values) const {
+        forEachNode([&](int i, int j, std::size_t index) {
+            if (const auto fixed = dirichletValue(i, j))
+                values[index] = *fixed;
+        });
+    }
+
+    double xWidth(int i) const { return mesh_.dx() * ((i == 0 || i == mesh_.nx()) ? 0.5 : 1.0); }
+
+    double yWidth(int j) const {
+        if (mesh_.is1D())
+            return 1.0;
+        return mesh_.dy() * ((j == 0 || j == mesh_.ny()) ? 0.5 : 1.0);
+    }
+
+    double controlVolume(int i, int j) const { return xWidth(i) * yWidth(j); }
+
+    template <typename Function>
+    void forEachNeighbor(int i, int j, Function&& function) const {
+        const double x_conductance = diffusivity_ * yWidth(j) / mesh_.dx();
+        if (i > 0)
+            function(i - 1, j, x_conductance);
+        if (i < mesh_.nx())
+            function(i + 1, j, x_conductance);
+
+        if (!mesh_.is1D()) {
+            const double y_conductance = diffusivity_ * xWidth(i) / mesh_.dy();
+            if (j > 0)
+                function(i, j - 1, y_conductance);
+            if (j < mesh_.ny())
+                function(i, j + 1, y_conductance);
         }
     }
 
-    void applyBoundaryConditions1D(std::vector<double>& u) {
-        const int nx = mesh_.nx();
-        const double dx = mesh_.dx();
-
-        const auto& left_bc = boundary_conditions_[to_index(Boundary::Left)];
-        const auto& right_bc = boundary_conditions_[to_index(Boundary::Right)];
-
-        if (left_bc.type == BoundaryType::DIRICHLET) {
-            u[0] = left_bc.value;
-        } else {
-            u[0] = u[1] - left_bc.value * dx;
-        }
-
-        if (right_bc.type == BoundaryType::DIRICHLET) {
-            u[nx] = right_bc.value;
-        } else {
-            u[nx] = u[nx - 1] + right_bc.value * dx;
-        }
+    double conductanceSum(int i, int j) const {
+        double sum = 0.0;
+        forEachNeighbor(i, j, [&](int, int, double conductance) { sum += conductance; });
+        return sum;
     }
 
-    void applyBoundaryConditions2D(std::vector<double>& u) {
-        const int nx = mesh_.nx();
-        const int ny = mesh_.ny();
-        const int stride = nx + 1;
-        const double dx = mesh_.dx();
-        const double dy = mesh_.dy();
+    double internalFlux(const std::vector<double>& values, int i, int j) const {
+        const std::size_t index = nodeIndex(i, j);
+        double flux = 0.0;
+        forEachNeighbor(i, j, [&](int ni, int nj, double conductance) {
+            flux += conductance * (values[nodeIndex(ni, nj)] - values[index]);
+        });
+        return flux;
+    }
 
-        const auto& left_bc = boundary_conditions_[to_index(Boundary::Left)];
-        const auto& right_bc = boundary_conditions_[to_index(Boundary::Right)];
-        const auto& bottom_bc = boundary_conditions_[to_index(Boundary::Bottom)];
-        const auto& top_bc = boundary_conditions_[to_index(Boundary::Top)];
-
-        // Left/Right boundaries
-        for (int j = 0; j <= ny; ++j) {
-            int left_idx = j * stride;
-            int right_idx = j * stride + nx;
-
-            if (left_bc.type == BoundaryType::DIRICHLET) {
-                u[left_idx] = left_bc.value;
-            } else {
-                u[left_idx] = u[left_idx + 1] - left_bc.value * dx;
-            }
-
-            if (right_bc.type == BoundaryType::DIRICHLET) {
-                u[right_idx] = right_bc.value;
-            } else {
-                u[right_idx] = u[right_idx - 1] + right_bc.value * dx;
-            }
+    double boundaryFlux(int i, int j) const {
+        double flux = 0.0;
+        const auto add = [&](Boundary face, double area) {
+            const auto& bc = boundary_conditions_[checkedIndex(face)];
+            if (bc.type == BoundaryType::NEUMANN)
+                flux += diffusivity_ * bc.value * area;
+        };
+        if (i == 0)
+            add(Boundary::Left, yWidth(j));
+        if (i == mesh_.nx())
+            add(Boundary::Right, yWidth(j));
+        if (!mesh_.is1D()) {
+            if (j == 0)
+                add(Boundary::Bottom, xWidth(i));
+            if (j == mesh_.ny())
+                add(Boundary::Top, xWidth(i));
         }
+        return flux;
+    }
 
-        // Bottom/Top boundaries
-        for (int i = 0; i <= nx; ++i) {
-            if (bottom_bc.type == BoundaryType::DIRICHLET) {
-                u[i] = bottom_bc.value;
-            } else {
-                u[i] = u[i + stride] - bottom_bc.value * dy;
-            }
-
-            int top_idx = ny * stride + i;
-            if (top_bc.type == BoundaryType::DIRICHLET) {
-                u[top_idx] = top_bc.value;
-            } else {
-                u[top_idx] = u[top_idx - stride] + top_bc.value * dy;
-            }
+    static double residualInfinityNorm(const std::vector<double>& residual,
+                                       const std::vector<unsigned char>& free_node) {
+        double norm = 0.0;
+        for (std::size_t index = 0; index < residual.size(); ++index) {
+            if (free_node[index])
+                norm = std::max(norm, std::abs(residual[index]));
         }
+        return norm;
+    }
+
+    static double dotFree(const std::vector<double>& lhs, const std::vector<double>& rhs,
+                          const std::vector<unsigned char>& free_node) {
+        double value = 0.0;
+        for (std::size_t index = 0; index < lhs.size(); ++index) {
+            if (free_node[index])
+                value += lhs[index] * rhs[index];
+        }
+        return value;
     }
 };
 

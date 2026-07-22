@@ -6,14 +6,57 @@ This file provides type hints for IDE autocompletion and static type checking.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Callable, overload
+from typing import Any, Callable, Optional, Sequence, TypeAlias, Union, overload
 
 import numpy as np
 import numpy.typing as npt
 
 # Type aliases
-ArrayLike = npt.NDArray[np.float64]
-FloatArray = npt.NDArray[np.float64]
+ArrayLike: TypeAlias = npt.NDArray[np.float64]
+FloatArray: TypeAlias = npt.NDArray[np.float64]
+Float32Array: TypeAlias = npt.NDArray[np.float32]
+
+def native_build_info() -> dict[str, Any]: ...
+def _high_order_laplacian_1d(field: ArrayLike, dx: float, order: int) -> FloatArray: ...
+def _high_order_laplacian_2d(
+    field: ArrayLike, nx: int, ny: int, dx: float, dy: float, order: int
+) -> FloatArray: ...
+def _high_order_gradient_1d(field: ArrayLike, dx: float, order: int) -> FloatArray: ...
+def _high_order_stable_dt(
+    diffusivity: float,
+    dx: float,
+    dy: float,
+    order: int,
+    safety_factor: float,
+    is_2d: bool,
+) -> float: ...
+def _solve_high_order_diffusion(
+    initial: ArrayLike,
+    nx: int,
+    ny: int,
+    dx: float,
+    dy: float,
+    diffusivity: float,
+    order: int,
+    safety_factor: float,
+    end_time: float,
+    dt: Optional[float] = None,
+    left: float = 0.0,
+    right: float = 0.0,
+    bottom: float = 0.0,
+    top: float = 0.0,
+    callback: Optional[Callable[[float, FloatArray], None]] = None,
+) -> dict[str, Any]: ...
+def _integrate_explicit_runge_kutta(
+    initial: ArrayLike,
+    rhs: Callable[..., ArrayLike],
+    initial_time: float,
+    end_time: float,
+    dt: float,
+    method: str = "rk4",
+    autonomous: bool = False,
+    maximum_steps: int = 10_000_000,
+) -> dict[str, Any]: ...
 
 # =============================================================================
 # Enumerations
@@ -24,8 +67,8 @@ class Boundary(Enum):
 
     Left = 0
     Right = 1
-    Top = 2
-    Bottom = 3
+    Bottom = 2
+    Top = 3
 
 # Convenience aliases
 Left: Boundary
@@ -33,15 +76,164 @@ Right: Boundary
 Top: Boundary
 Bottom: Boundary
 
+class BalanceDimension(Enum):
+    AMOUNT = 0
+    ENERGY = 1
+    VOLUME = 2
+
+class BalanceUnit(Enum):
+    MOLE = 0
+    MILLIMOLE = 1
+    MICROMOLE = 2
+    JOULE = 3
+    KILOJOULE = 4
+    CUBIC_METER = 5
+    LITER = 6
+    MILLILITER = 7
+
+class BalanceTransferDirection(Enum):
+    INCOMING = 0
+    OUTGOING = 1
+
+class BalanceTerm:
+    name: str
+    magnitude: float
+    unit: BalanceUnit
+
+class BalanceTransfer:
+    id: str
+    counterparty: str
+    magnitude: float
+    unit: BalanceUnit
+    direction: BalanceTransferDirection
+
+class BalanceAudit:
+    ledger_name: str
+    dimension: BalanceDimension
+    unit: BalanceUnit
+    initial_inventory: float
+    final_inventory: float
+    observed_change: float
+    boundary_in: float
+    boundary_out: float
+    generated: float
+    consumed: float
+    transfer_in: float
+    transfer_out: float
+    expected_change: float
+    closure_residual: float
+    def is_closed(self, absolute_tolerance: float) -> bool: ...
+
+class BalanceLedger:
+    def __init__(self, name: str, unit: BalanceUnit) -> None: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def unit(self) -> BalanceUnit: ...
+    @property
+    def dimension(self) -> BalanceDimension: ...
+    @property
+    def has_initial_inventory(self) -> bool: ...
+    @property
+    def has_final_inventory(self) -> bool: ...
+    @property
+    def initial_inventory(self) -> float: ...
+    @property
+    def final_inventory(self) -> float: ...
+    @property
+    def boundary_in_terms(self) -> list[BalanceTerm]: ...
+    @property
+    def boundary_out_terms(self) -> list[BalanceTerm]: ...
+    @property
+    def generated_terms(self) -> list[BalanceTerm]: ...
+    @property
+    def consumed_terms(self) -> list[BalanceTerm]: ...
+    @property
+    def transfers(self) -> list[BalanceTransfer]: ...
+    def set_initial_inventory(self, magnitude: float) -> BalanceLedger: ...
+    def set_final_inventory(self, magnitude: float) -> BalanceLedger: ...
+    def add_boundary_in(self, name: str, magnitude: float) -> BalanceLedger: ...
+    def add_boundary_out(self, name: str, magnitude: float) -> BalanceLedger: ...
+    def add_generated(self, name: str, magnitude: float) -> BalanceLedger: ...
+    def add_consumed(self, name: str, magnitude: float) -> BalanceLedger: ...
+    def add_transfer_in(
+        self, id: str, sender: str, magnitude: float, unit: Optional[BalanceUnit] = None
+    ) -> BalanceLedger: ...
+    def add_transfer_out(
+        self,
+        id: str,
+        receiver: str,
+        magnitude: float,
+        unit: Optional[BalanceUnit] = None,
+    ) -> BalanceLedger: ...
+    def audit(self) -> BalanceAudit: ...
+
+class MatchedBalanceTransfer:
+    id: str
+    sender: str
+    receiver: str
+    dimension: BalanceDimension
+    base_unit: BalanceUnit
+    magnitude_base: float
+
+class DimensionBalanceAudit:
+    dimension: BalanceDimension
+    base_unit: BalanceUnit
+    observed_change: float
+    external_expected_change: float
+    internal_transfer_net: float
+    closure_residual: float
+
+class BalanceReconciliation:
+    ledgers: list[BalanceAudit]
+    matched_transfers: list[MatchedBalanceTransfer]
+    dimensions: list[DimensionBalanceAudit]
+    def is_closed(
+        self,
+        amount_absolute_tolerance: float = 0.0,
+        energy_absolute_tolerance: float = 0.0,
+        volume_absolute_tolerance: float = 0.0,
+    ) -> bool: ...
+
+def balance_dimension_name(dimension: BalanceDimension) -> str: ...
+def balance_unit_symbol(unit: BalanceUnit) -> str: ...
+def balance_unit_dimension(unit: BalanceUnit) -> BalanceDimension: ...
+def balance_base_unit(dimension: BalanceDimension) -> BalanceUnit: ...
+def convert_balance_value(
+    value: float, from_unit: BalanceUnit, to_unit: BalanceUnit
+) -> float: ...
+def reconcile_balances(
+    ledgers: Sequence[BalanceLedger],
+    relative_transfer_tolerance: float = 1.0e-12,
+    absolute_transfer_tolerance_base: float = 0.0,
+) -> BalanceReconciliation: ...
+
+class Boundary3D(Enum):
+    """Boundary-face identifiers for Cartesian 3D domains."""
+
+    XMin = 0
+    XMax = 1
+    YMin = 2
+    YMax = 3
+    ZMin = 4
+    ZMax = 5
+
+# Convenience aliases exported by pybind11
+XMin: Boundary3D
+XMax: Boundary3D
+YMin: Boundary3D
+YMax: Boundary3D
+ZMin: Boundary3D
+ZMax: Boundary3D
+
 class BoundaryType(Enum):
     """Types of boundary conditions."""
 
     DIRICHLET = 0
     NEUMANN = 1
+    ROBIN = 2
 
-# Convenience aliases
-DIRICHLET: BoundaryType
-NEUMANN: BoundaryType
+ROBIN: BoundaryType
 
 class VelocityBCType(Enum):
     """Types of velocity boundary conditions for fluid flow."""
@@ -53,6 +245,8 @@ class VelocityBCType(Enum):
     OUTFLOW = 4
 
 # Convenience aliases
+DIRICHLET: VelocityBCType
+NEUMANN: VelocityBCType
 NOSLIP: VelocityBCType
 INFLOW: VelocityBCType
 OUTFLOW: VelocityBCType
@@ -62,14 +256,8 @@ class AdvectionScheme(Enum):
 
     UPWIND = 0
     CENTRAL = 1
-    QUICK = 2
-    HYBRID = 3
-
-# Convenience aliases
-UPWIND: AdvectionScheme
-CENTRAL: AdvectionScheme
-QUICK: AdvectionScheme
-HYBRID: AdvectionScheme
+    HYBRID = 2
+    QUICK = 3
 
 class ConvectionScheme(Enum):
     """Convection discretization schemes for Navier-Stokes."""
@@ -79,11 +267,17 @@ class ConvectionScheme(Enum):
     QUICK = 2
     HYBRID = 3
 
+# ``ConvectionScheme`` is registered later and owns the unqualified aliases.
+UPWIND: ConvectionScheme
+CENTRAL: ConvectionScheme
+QUICK: ConvectionScheme
+HYBRID: ConvectionScheme
+
 class CylindricalMeshType(Enum):
     """Types of cylindrical coordinate meshes."""
 
-    RADIAL_R = 0
-    AXISYMMETRIC_RZ = 1
+    AXISYMMETRIC_RZ = 0
+    RADIAL_R = 1
     FULL_3D = 2
 
 # Convenience aliases
@@ -91,27 +285,27 @@ RADIAL_R: CylindricalMeshType
 AXISYMMETRIC_RZ: CylindricalMeshType
 FULL_3D: CylindricalMeshType
 
-class ViscosityModel(Enum):
-    """Base class for rheological viscosity models."""
+class FluidModel(Enum):
+    """Rheological model identifiers returned by ``ViscosityModel.type()``."""
 
     NEWTONIAN = 0
     POWER_LAW = 1
     CARREAU = 2
     CARREAU_YASUDA = 3
     CROSS = 4
-    CASSON = 5
-    BINGHAM = 6
-    HERSCHEL_BULKLEY = 7
+    BINGHAM = 5
+    HERSCHEL_BULKLEY = 6
+    CASSON = 7
 
 # Convenience aliases
-NEWTONIAN: ViscosityModel
-POWER_LAW: ViscosityModel
-CARREAU: ViscosityModel
-CARREAU_YASUDA: ViscosityModel
-CROSS: ViscosityModel
-CASSON: ViscosityModel
-BINGHAM: ViscosityModel
-HERSCHEL_BULKLEY: ViscosityModel
+NEWTONIAN: FluidModel
+POWER_LAW: FluidModel
+CARREAU: FluidModel
+CARREAU_YASUDA: FluidModel
+CROSS: FluidModel
+CASSON: FluidModel
+BINGHAM: FluidModel
+HERSCHEL_BULKLEY: FluidModel
 
 # =============================================================================
 # Data Classes / Structs
@@ -121,10 +315,11 @@ class BoundaryCondition:
     """Represents a boundary condition for transport problems.
 
     Boundary conditions specify how the solution behaves at domain boundaries.
-    Two types are supported:
+    Three types are represented:
 
     - **Dirichlet**: Fixed value at the boundary (e.g., constant concentration)
-    - **Neumann**: Fixed flux at the boundary (e.g., insulated wall with zero flux)
+    - **Neumann**: Fixed outward-normal derivative ``du/dn``
+    - **Robin**: Mixed condition ``a*u + b*du/dn = c``
 
     Examples:
         >>> # Fixed concentration at left boundary
@@ -134,11 +329,22 @@ class BoundaryCondition:
 
     Attributes:
         type: The type of boundary condition (DIRICHLET or NEUMANN).
-        value: The boundary value (concentration for Dirichlet, flux for Neumann).
+        value: The boundary value (concentration for Dirichlet, derivative for Neumann).
     """
 
     type: BoundaryType
     value: float
+    a: float
+    b: float
+    c: float
+
+    def __init__(self, type: BoundaryType, value: float) -> None:
+        """Create scalar boundary metadata.
+
+        ``value`` is the fixed value for Dirichlet data or the
+        outward-normal derivative for Neumann data.
+        """
+        ...
 
     @staticmethod
     def dirichlet(value: float) -> BoundaryCondition:
@@ -146,8 +352,13 @@ class BoundaryCondition:
         ...
 
     @staticmethod
-    def neumann(flux: float) -> BoundaryCondition:
-        """Create a Neumann (fixed flux) boundary condition."""
+    def neumann(normal_derivative: float) -> BoundaryCondition:
+        """Create a Neumann condition for the outward-normal derivative."""
+        ...
+
+    @staticmethod
+    def robin(a: float, b: float, c: float) -> BoundaryCondition:
+        """Create ``a*u + b*du/dn = c``."""
         ...
 
 class VelocityBC:
@@ -158,7 +369,7 @@ class VelocityBC:
 
     - **NoSlip**: Zero velocity at solid walls (u=v=0)
     - **Inflow**: Prescribed velocity at inlet
-    - **Outflow**: Stress-free condition at outlet
+    - **Outflow**: Zero outward-normal velocity gradient
     - **Dirichlet**: Arbitrary fixed velocity
 
     Examples:
@@ -166,7 +377,7 @@ class VelocityBC:
         >>> bc_wall = VelocityBC.no_slip()
         >>> # Inlet with horizontal velocity
         >>> bc_inlet = VelocityBC.inflow(u=0.1, v=0.0)
-        >>> # Stress-free outlet
+        >>> # Zero-normal-gradient outlet
         >>> bc_outlet = VelocityBC.outflow()
 
     Attributes:
@@ -191,12 +402,16 @@ class VelocityBC:
 
     @staticmethod
     def outflow() -> VelocityBC:
-        """Create an outflow (stress-free) boundary condition."""
+        """Create a zero-outward-normal-velocity-gradient condition."""
         ...
 
     @staticmethod
     def stress_free() -> VelocityBC:
-        """Create a stress-free boundary condition."""
+        """Create traction-free metadata.
+
+        Current Stokes/Navier-Stokes boundary applicators reject this
+        unsupported traction condition instead of treating it as outflow.
+        """
         ...
 
     @staticmethod
@@ -225,18 +440,31 @@ class SolverStats:
         u_max_final: Maximum solution value at t=t_end.
     """
 
-    dt: float
-    steps: int
-    t_end: float
-    wall_time_s: float
-    mass_initial: float
-    mass_final: float
-    mass_abs_drift: float
-    mass_rel_drift: float
-    u_min_initial: float
-    u_max_initial: float
-    u_min_final: float
-    u_max_final: float
+    def __init__(self) -> None: ...
+    @property
+    def dt(self) -> float: ...
+    @property
+    def steps(self) -> int: ...
+    @property
+    def t_end(self) -> float: ...
+    @property
+    def wall_time_s(self) -> float: ...
+    @property
+    def mass_initial(self) -> float: ...
+    @property
+    def mass_final(self) -> float: ...
+    @property
+    def mass_abs_drift(self) -> float: ...
+    @property
+    def mass_rel_drift(self) -> float: ...
+    @property
+    def u_min_initial(self) -> float: ...
+    @property
+    def u_max_initial(self) -> float: ...
+    @property
+    def u_min_final(self) -> float: ...
+    @property
+    def u_max_final(self) -> float: ...
 
 class RunResult:
     """Result from a reaction-diffusion solver run.
@@ -248,14 +476,16 @@ class RunResult:
         >>> print(f"Completed in {result.stats.steps} steps")
         >>> print(f"Solution range: [{result.solution.min():.3f}, {result.solution.max():.3f}]")
 
-    Attributes:
-        solution: Final concentration/temperature field as a 1D NumPy array.
-            For 2D problems, reshape to (ny+1, nx+1) for visualization.
-        stats: Solver statistics including timing and mass conservation.
+    ``stats`` is read-only. ``solution()`` returns an owned flat NumPy copy;
+    for 2D problems reshape it to ``(ny+1, nx+1)``.
     """
 
-    solution: FloatArray
-    stats: SolverStats
+    def __init__(self) -> None: ...
+    @property
+    def stats(self) -> SolverStats: ...
+    def solution(self) -> FloatArray:
+        """Return an owned copy of the final flat field."""
+        ...
 
 class StokesResult:
     """Result from Stokes flow solver.
@@ -267,23 +497,28 @@ class StokesResult:
     effects are negligible (Re << 1), common in microfluidics and
     biological flows at the cellular scale.
 
+    The ``u()``, ``v()``, and ``pressure()`` methods each return an owned array
+    copy. Scalar diagnostics are read-only.
+
     Attributes:
-        u: x-component of velocity field.
-        v: y-component of velocity field.
-        pressure: Pressure field.
         divergence: Velocity divergence (should be ~0 for incompressible flow).
         converged: True if solver converged within tolerance.
         iterations: Number of iterations to convergence.
         residual: Final residual norm.
     """
 
-    u: FloatArray
-    v: FloatArray
-    pressure: FloatArray
-    divergence: FloatArray
-    converged: bool
-    iterations: int
-    residual: float
+    def __init__(self) -> None: ...
+    def u(self) -> FloatArray: ...
+    def v(self) -> FloatArray: ...
+    def pressure(self) -> FloatArray: ...
+    @property
+    def divergence(self) -> float: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def iterations(self) -> int: ...
+    @property
+    def residual(self) -> float: ...
 
 class NavierStokesResult:
     """Result from Navier-Stokes solver.
@@ -291,29 +526,44 @@ class NavierStokesResult:
     Contains the velocity and pressure fields at the final time step,
     along with flow characteristics and stability information.
 
-    The Navier-Stokes equations describe incompressible viscous flow
-    including both inertial and viscous effects, applicable to a wide
-    range of Reynolds numbers.
+    This result comes from the library's laminar bounded MAC-grid projection
+    solver. It is not a turbulence model and should not be interpreted as
+    validated across arbitrary Reynolds numbers.
+
+    The ``u()``, ``v()``, and ``pressure()`` methods each return an owned array
+    copy. Scalar diagnostics are read-only.
 
     Attributes:
-        u: x-component of velocity field.
-        v: y-component of velocity field.
-        pressure: Pressure field.
         time: Final simulation time.
         time_steps: Total number of time steps taken.
         reynolds: Reynolds number of the flow.
         max_velocity: Maximum velocity magnitude in the domain.
-        stable: True if simulation remained numerically stable.
+        pressure_iterations: Iterations in the final pressure projection.
+        pressure_residual: Relative final pressure-Poisson residual.
+        divergence: Maximum final cell ``|div(u)|`` in inverse seconds.
+        stable: True only for finite fields with a converged, divergence-controlled projection.
     """
 
-    u: FloatArray
-    v: FloatArray
-    pressure: FloatArray
-    time: float
-    time_steps: int
-    reynolds: float
-    max_velocity: float
-    stable: bool
+    def __init__(self) -> None: ...
+    def u(self) -> FloatArray: ...
+    def v(self) -> FloatArray: ...
+    def pressure(self) -> FloatArray: ...
+    @property
+    def time(self) -> float: ...
+    @property
+    def time_steps(self) -> int: ...
+    @property
+    def reynolds(self) -> float: ...
+    @property
+    def max_velocity(self) -> float: ...
+    @property
+    def pressure_iterations(self) -> int: ...
+    @property
+    def pressure_residual(self) -> float: ...
+    @property
+    def divergence(self) -> float: ...
+    @property
+    def stable(self) -> bool: ...
 
 class DarcyFlowResult:
     """Result from Darcy flow solver.
@@ -325,20 +575,24 @@ class DarcyFlowResult:
     and other porous media transport problems.
 
     Attributes:
-        pressure: Pressure field.
-        vx: x-component of Darcy velocity (superficial velocity).
-        vy: y-component of Darcy velocity.
+        pressure: Method returning an owned pressure-field copy.
+        vx: Method returning an owned x-velocity copy.
+        vy: Method returning an owned y-velocity copy.
         converged: True if solver converged within tolerance.
         iterations: Number of iterations to convergence.
         residual: Final residual norm.
     """
 
-    pressure: FloatArray
-    vx: FloatArray
-    vy: FloatArray
-    converged: bool
-    iterations: int
-    residual: float
+    def __init__(self) -> None: ...
+    @property
+    def converged(self) -> bool: ...
+    @property
+    def iterations(self) -> int: ...
+    @property
+    def residual(self) -> float: ...
+    def pressure(self) -> FloatArray: ...
+    def vx(self) -> FloatArray: ...
+    def vy(self) -> FloatArray: ...
 
 class MembraneDiffusionResult:
     """Result from membrane diffusion solver.
@@ -351,19 +605,26 @@ class MembraneDiffusionResult:
     diffusivity D, partition coefficient K, and thickness L.
 
     Attributes:
-        x: Position coordinates across the membrane.
-        concentration: Steady-state concentration profile.
-        flux: Mass flux through the membrane (mol/m²/s).
+        x: Method returning an owned position-coordinate copy.
+        concentration: Method returning an owned concentration-profile copy.
+        flux: Amount flux through the membrane in the caller's concentration
+            unit times m/s (for mol/m³ input, mol/(m² s)).
         permeability: Membrane permeability (m/s).
-        effective_diffusivity: Effective diffusion coefficient accounting
-            for hindered diffusion if applicable.
+        effective_diffusivity: Equivalent coefficient relative to the external
+            concentration gradient, ``permeability * thickness``. It includes
+            partition and hindrance effects and is not necessarily the membrane's
+            intrinsic diffusion coefficient.
     """
 
-    x: FloatArray
-    concentration: FloatArray
-    flux: float
-    permeability: float
-    effective_diffusivity: float
+    def __init__(self) -> None: ...
+    @property
+    def flux(self) -> float: ...
+    @property
+    def permeability(self) -> float: ...
+    @property
+    def effective_diffusivity(self) -> float: ...
+    def x(self) -> FloatArray: ...
+    def concentration(self) -> FloatArray: ...
 
 class GrayScottRunResult:
     """Result from Gray-Scott reaction-diffusion simulation.
@@ -379,22 +640,30 @@ class GrayScottRunResult:
     where f is the feed rate and k is the kill rate.
 
     Attributes:
-        nx: Number of grid points in x-direction.
-        ny: Number of grid points in y-direction.
+        nx: Number of periodic cell-centred samples in x (``mesh.nx()``).
+        ny: Number of periodic cell-centred samples in y (``mesh.ny()``).
         steps_run: Total simulation steps completed.
         frames: Number of saved frames.
         frame_steps: Steps between saved frames.
-        u_frames: List of u-field snapshots.
-        v_frames: List of v-field snapshots.
+        u_frames: Method returning an owned ``(frames, ny, nx)`` float32 array.
+        v_frames: Method returning an owned ``(frames, ny, nx)`` float32 array.
     """
 
-    nx: int
-    ny: int
-    steps_run: int
-    frames: int
-    frame_steps: int
-    u_frames: list[FloatArray]
-    v_frames: list[FloatArray]
+    def __init__(self) -> None: ...
+    @property
+    def nx(self) -> int: ...
+    @property
+    def ny(self) -> int: ...
+    @property
+    def steps_run(self) -> int: ...
+    @property
+    def final_time(self) -> float: ...
+    @property
+    def frames(self) -> int: ...
+    @property
+    def frame_steps(self) -> list[int]: ...
+    def u_frames(self) -> Float32Array: ...
+    def v_frames(self) -> Float32Array: ...
 
 class TumorDrugDeliverySaved:
     """Saved frames from tumor drug delivery simulation.
@@ -405,7 +674,7 @@ class TumorDrugDeliverySaved:
 
     The model tracks three drug compartments:
     - Free drug in interstitial space
-    - Bound drug (reversibly bound to tissue)
+    - Bound drug (irreversibly sequestered by tissue in this reduced model)
     - Internalized drug (taken up by cells)
 
     Attributes:
@@ -413,20 +682,43 @@ class TumorDrugDeliverySaved:
         ny: Number of grid points in y-direction.
         frames: Number of saved time frames.
         times_s: List of save times in seconds.
-        free: Free drug concentration at each frame.
-        bound: Bound drug concentration at each frame.
-        cellular: Internalized drug concentration at each frame.
-        total: Total drug concentration at each frame.
+        free: Method returning an owned 3D free-drug array.
+        bound: Method returning an owned 3D bound-drug array.
+        cellular: Method returning an owned 3D internalized-drug array.
+        total: Method returning an owned 3D total-drug array.
     """
 
-    nx: int
-    ny: int
-    frames: int
-    times_s: list[float]
-    free: list[FloatArray]
-    bound: list[FloatArray]
-    cellular: list[FloatArray]
-    total: list[FloatArray]
+    def __init__(self) -> None: ...
+    @property
+    def nx(self) -> int: ...
+    @property
+    def ny(self) -> int: ...
+    @property
+    def frames(self) -> int: ...
+    @property
+    def times_s(self) -> list[float]: ...
+    @property
+    def final_time_s(self) -> float: ...
+    @property
+    def stability_limit_s(self) -> float: ...
+    @property
+    def free_amount_per_depth(self) -> list[float]: ...
+    @property
+    def bound_amount_per_depth(self) -> list[float]: ...
+    @property
+    def cellular_amount_per_depth(self) -> list[float]: ...
+    @property
+    def total_amount_per_depth(self) -> list[float]: ...
+    @property
+    def cumulative_net_vascular_exchange_per_depth(self) -> list[float]: ...
+    @property
+    def cumulative_boundary_outflow_per_depth(self) -> list[float]: ...
+    @property
+    def mass_balance_error_per_depth(self) -> list[float]: ...
+    def free(self) -> FloatArray: ...
+    def bound(self) -> FloatArray: ...
+    def cellular(self) -> FloatArray: ...
+    def total(self) -> FloatArray: ...
 
 class BioheatSaved:
     """Saved frames from bioheat cryotherapy simulation.
@@ -438,28 +730,112 @@ class BioheatSaved:
     - Phase change (freezing/thawing) with latent heat
     - Arrhenius tissue damage accumulation
 
-    Used for planning cryotherapy procedures in cancer treatment.
+    The Arrhenius field is a heat-injury diagnostic. It is not a validated
+    cryogenic cell-death model.
 
     Attributes:
         nx: Number of grid points in x-direction.
         ny: Number of grid points in y-direction.
         frames: Number of saved time frames.
         times_s: List of save times in seconds.
-        temperature_K: Temperature field in Kelvin at each frame.
-        damage: Cumulative damage parameter Ω at each frame.
-            Ω > 1 indicates irreversible tissue damage.
+        temperature_K: Method returning an owned Kelvin field array.
+        damage: Method returning an owned Arrhenius-integral array.
+        frozen_fraction: Method returning an owned apparent-frozen-fraction array.
     """
 
-    nx: int
-    ny: int
-    frames: int
-    times_s: list[float]
-    temperature_K: list[FloatArray]
-    damage: list[FloatArray]
+    def __init__(self) -> None: ...
+    @property
+    def nx(self) -> int: ...
+    @property
+    def ny(self) -> int: ...
+    @property
+    def frames(self) -> int: ...
+    @property
+    def times_s(self) -> list[float]: ...
+    @property
+    def minimum_temperature_K(self) -> list[float]: ...
+    @property
+    def maximum_temperature_K(self) -> list[float]: ...
+    @property
+    def maximum_stable_dt_s(self) -> float: ...
+    def temperature_K(self) -> FloatArray: ...
+    def damage(self) -> FloatArray: ...
+    def frozen_fraction(self) -> FloatArray: ...
 
 # =============================================================================
 # Meshes
 # =============================================================================
+
+class NonuniformMesh1D:
+    """Validated fitted 1D node mesh with node-centred control volumes."""
+
+    def __init__(self, nodes: Sequence[float]) -> None: ...
+    def num_nodes(self) -> int: ...
+    def num_cells(self) -> int: ...
+    def x(self, node: int) -> float: ...
+    def nodes(self) -> FloatArray: ...
+    def spacing(self, face: int) -> float: ...
+    def face_coordinate(self, face: int) -> float: ...
+    def control_volume(self, node: int) -> float: ...
+    def control_volumes(self) -> FloatArray: ...
+    def xmin(self) -> float: ...
+    def xmax(self) -> float: ...
+    def length(self) -> float: ...
+    def minimum_spacing(self) -> float: ...
+
+class NonuniformDiffusionDiagnostics:
+    steps: int
+    reference_time: float
+    time: float
+    stability_limit: float
+    reference_mass: float
+    total_mass: float
+    cumulative_boundary_input: float
+    mass_balance_error: float
+    minimum_concentration: float
+    maximum_concentration: float
+    left_outward_flux: float
+    right_outward_flux: float
+
+class NonuniformDiffusion1D:
+    @overload
+    def __init__(self, mesh: NonuniformMesh1D, diffusivity: float) -> None: ...
+    @overload
+    def __init__(
+        self, mesh: NonuniformMesh1D, nodal_diffusivity: Sequence[float]
+    ) -> None: ...
+    def set_initial_condition(
+        self, concentration: Sequence[float]
+    ) -> NonuniformDiffusion1D: ...
+    def set_uniform_initial_condition(
+        self, concentration: float
+    ) -> NonuniformDiffusion1D: ...
+    def set_boundary_condition(
+        self, boundary: Boundary, condition: BoundaryCondition
+    ) -> NonuniformDiffusion1D: ...
+    def set_dirichlet_boundary(
+        self, boundary: Boundary, concentration: float
+    ) -> NonuniformDiffusion1D: ...
+    def set_neumann_boundary(
+        self, boundary: Boundary, outward_normal_derivative: float
+    ) -> NonuniformDiffusion1D: ...
+    def boundary_condition(self, boundary: Boundary) -> BoundaryCondition: ...
+    def check_stability(self, dt: float) -> bool: ...
+    def max_stable_time_step(self) -> float: ...
+    def step(self, dt: float) -> None: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def solve_until(self, final_time: float, maximum_dt: float) -> None: ...
+    def solution(self) -> FloatArray: ...
+    def diffusivity(self) -> FloatArray: ...
+    def face_diffusivities(self) -> FloatArray: ...
+    def face_fluxes(self) -> FloatArray: ...
+    def mesh(self) -> NonuniformMesh1D: ...
+    def time(self) -> float: ...
+    def steps(self) -> int: ...
+    def total_mass(self) -> float: ...
+    def boundary_outward_flux(self, boundary: Boundary) -> float: ...
+    def reset_balance_reference(self) -> None: ...
+    def diagnostics(self) -> NonuniformDiffusionDiagnostics: ...
 
 class StructuredMesh:
     """Uniform structured mesh for 1D or 2D rectangular domains.
@@ -518,7 +894,6 @@ class StructuredMesh:
         """
         ...
 
-    def __init__(self, *args: Any) -> None: ...
     def nx(self) -> int:
         """Number of cells in x-direction."""
         ...
@@ -544,19 +919,62 @@ class StructuredMesh:
         ...
 
     def is_1d(self) -> bool:
-        """True if mesh is 1D (ny == 1)."""
+        """True for the 1D constructor (reported ``ny() == 0``)."""
         ...
 
-    def x(self) -> FloatArray:
-        """Array of x-coordinates at cell centers."""
+    def x(self, i: int) -> float:
+        """x-coordinate of node index ``i``."""
         ...
 
-    def y(self) -> FloatArray:
-        """Array of y-coordinates at cell centers."""
+    def y(self, i: int, j: int = 0) -> float:
+        """y-coordinate of node ``(i, j)`` (zero for a 1D mesh)."""
         ...
 
-    def index(self, i: int, j: int) -> int:
+    def index(self, i: int, j: int = 0) -> int:
         """Convert (i, j) indices to linear index."""
+        ...
+
+class StructuredMesh3D:
+    """Uniform Cartesian mesh with ``(nx+1)*(ny+1)*(nz+1)`` nodes."""
+
+    @overload
+    def __init__(
+        self,
+        nx: int,
+        ny: int,
+        nz: int,
+        xmin: float,
+        xmax: float,
+        ymin: float,
+        ymax: float,
+        zmin: float,
+        zmax: float,
+    ) -> None: ...
+    @overload
+    def __init__(self, n: int, length: float) -> None:
+        """Create an ``n`` by ``n`` by ``n`` cube on ``[0, length]^3``."""
+        ...
+
+    def num_nodes(self) -> int: ...
+    def num_cells(self) -> int: ...
+    def dx(self) -> float: ...
+    def dy(self) -> float: ...
+    def dz(self) -> float: ...
+    def nx(self) -> int: ...
+    def ny(self) -> int: ...
+    def nz(self) -> int: ...
+    def xmin(self) -> float: ...
+    def xmax(self) -> float: ...
+    def ymin(self) -> float: ...
+    def ymax(self) -> float: ...
+    def zmin(self) -> float: ...
+    def zmax(self) -> float: ...
+    def x(self, i: int) -> float: ...
+    def y(self, j: int) -> float: ...
+    def z(self, k: int) -> float: ...
+    def index(self, i: int, j: int, k: int) -> int: ...
+    def ijk(self, idx: int) -> list[int]:
+        """Return the fixed-size ``[i, j, k]`` index list."""
         ...
 
 class CylindricalMesh:
@@ -618,7 +1036,6 @@ class CylindricalMesh:
         """Create a full 3D cylindrical mesh."""
         ...
 
-    def __init__(self, *args: Any) -> None: ...
     def type(self) -> CylindricalMeshType:
         """Mesh coordinate type."""
         ...
@@ -655,6 +1072,14 @@ class CylindricalMesh:
         """Maximum radial coordinate."""
         ...
 
+    def thetamin(self) -> float:
+        """Minimum azimuthal coordinate."""
+        ...
+
+    def thetamax(self) -> float:
+        """Maximum azimuthal coordinate."""
+        ...
+
     def zmin(self) -> float:
         """Minimum axial coordinate."""
         ...
@@ -687,27 +1112,35 @@ class CylindricalMesh:
         """True if mesh includes r=0 axis."""
         ...
 
-    def r(self) -> FloatArray:
-        """Radial coordinates."""
+    def theta_node_count(self) -> int:
+        """Number of stored unique azimuthal nodes (one outside full 3D)."""
         ...
 
-    def theta(self) -> FloatArray:
-        """Angular coordinates."""
+    def theta_periodic(self) -> bool:
+        """Whether the azimuthal direction is periodic."""
         ...
 
-    def z(self) -> FloatArray:
-        """Axial coordinates."""
+    def r(self, i: int) -> float:
+        """Radial coordinate at index ``i``."""
         ...
 
-    def x(self) -> FloatArray:
-        """Cartesian x coordinates."""
+    def theta(self, j: int) -> float:
+        """Angular coordinate at index ``j``."""
         ...
 
-    def y(self) -> FloatArray:
-        """Cartesian y coordinates."""
+    def z(self, k: int) -> float:
+        """Axial coordinate at index ``k``."""
         ...
 
-    def index(self, i: int, j: int, k: int = 0) -> int:
+    def x(self, i: int, j: int = 0) -> float:
+        """Cartesian x coordinate for cylindrical indices ``(i, j)``."""
+        ...
+
+    def y(self, i: int, j: int = 0) -> float:
+        """Cartesian y coordinate for cylindrical indices ``(i, j)``."""
+        ...
+
+    def index(self, i: int, j: int = 0, k: int = 0) -> int:
         """Convert indices to linear index."""
         ...
 
@@ -715,29 +1148,223 @@ class CylindricalMesh:
         """Area of cell at radial index i."""
         ...
 
-    def cell_volume(self, i: int, j: int = 0) -> float:
-        """Volume of cell at indices (i, j)."""
+    def cell_volume(self, i: int, j: int = 0, k: int = 0) -> float:
+        """Nodal control volume at indices ``(i, j, k)``."""
         ...
 
-    def cross_section_area(self, i: int) -> float:
-        """Cross-section area at radial index i."""
+    def cross_section_area(self) -> float:
+        """Exact annular cross-section area represented by the mesh."""
         ...
 
-    def gradient_r(self, field: FloatArray) -> FloatArray:
+    def gradient_r(self, phi: ArrayLike) -> FloatArray:
         """Compute radial gradient of field."""
         ...
 
-    def gradient_z(self, field: FloatArray) -> FloatArray:
+    def gradient_theta(self, phi: ArrayLike) -> FloatArray:
+        """Compute physical azimuthal gradient ``(1/r) d(field)/d(theta)``."""
+        ...
+
+    def gradient_z(self, phi: ArrayLike) -> FloatArray:
         """Compute axial gradient of field."""
         ...
 
-    def laplacian(self, field: FloatArray) -> FloatArray:
+    def laplacian(self, phi: ArrayLike) -> FloatArray:
         """Compute Laplacian of field."""
         ...
 
+    @overload
     def divergence(self, vr: FloatArray, vz: FloatArray) -> FloatArray:
-        """Compute divergence of velocity field."""
+        """Compute axisymmetric divergence from radial and axial components."""
         ...
+
+    @overload
+    def divergence(
+        self, vr: FloatArray, vtheta: FloatArray, vz: FloatArray
+    ) -> FloatArray:
+        """Compute full cylindrical divergence from all three components."""
+        ...
+
+class StencilOps:
+    """Finite-difference stencil operations tied to a ``StructuredMesh``."""
+
+    def __init__(self, mesh: StructuredMesh) -> None: ...
+    def laplacian(self, u: ArrayLike, idx: int) -> float: ...
+    def laplacian_4th_order(self, u: ArrayLike, idx: int) -> float: ...
+    def laplacian_6th_order(self, u: ArrayLike, idx: int) -> float: ...
+    def grad_x(self, u: ArrayLike, idx: int) -> float: ...
+    def grad_y(self, u: ArrayLike, idx: int) -> float: ...
+    def grad_x_4th_order(self, u: ArrayLike, idx: int) -> float: ...
+    def grad_y_4th_order(self, u: ArrayLike, idx: int) -> float: ...
+    def laplacian_4th_order_bulk_1d(self, u: ArrayLike) -> FloatArray: ...
+    def laplacian_6th_order_bulk_1d(self, u: ArrayLike) -> FloatArray: ...
+    def laplacian_4th_order_bulk_2d(self, u: ArrayLike) -> FloatArray: ...
+    def gradient_4th_order_bulk_1d(self, u: ArrayLike) -> FloatArray: ...
+    def inv_dx2(self) -> float: ...
+    def inv_dy2(self) -> float: ...
+    def inv_12_dx2(self) -> float: ...
+    def inv_12_dy2(self) -> float: ...
+    def stride(self) -> int: ...
+
+# =============================================================================
+# Optional Eigen-backed sparse and implicit solvers
+# =============================================================================
+
+def sparse_matrix_available() -> bool:
+    """Whether this extension was built with Eigen sparse-solver support."""
+    ...
+
+class SparseSolverType(Enum):
+    SparseLU = 0
+    SimplicialLLT = 1
+    SimplicialLDLT = 2
+    ConjugateGradient = 3
+    BiCGSTAB = 4
+
+SparseLU: SparseSolverType
+SimplicialLLT: SparseSolverType
+SimplicialLDLT: SparseSolverType
+ConjugateGradient: SparseSolverType
+BiCGSTAB: SparseSolverType
+
+class SparseSolveResult:
+    """Sparse-solve diagnostics type retained by the native API."""
+
+    def __init__(self) -> None: ...
+    @property
+    def success(self) -> bool: ...
+    @property
+    def iterations(self) -> int: ...
+    @property
+    def residual(self) -> float: ...
+    @property
+    def error_message(self) -> str: ...
+
+class Triplet:
+    def __init__(self, row: int, col: int, value: float) -> None: ...
+    @property
+    def row(self) -> int: ...
+    @property
+    def col(self) -> int: ...
+    @property
+    def value(self) -> float: ...
+
+class SparseMatrix:
+    """Mutable triplet-assembly wrapper for an Eigen sparse matrix."""
+
+    @overload
+    def __init__(self) -> None: ...
+    @overload
+    def __init__(self, rows: int, cols: int) -> None: ...
+    @property
+    def rows(self) -> int: ...
+    @property
+    def cols(self) -> int: ...
+    @property
+    def nnz(self) -> int: ...
+    def reserve(self, nnz_estimate: int) -> None: ...
+    def add_entry(self, row: int, col: int, value: float) -> None: ...
+    def finalize(self) -> None: ...
+    def is_finalized(self) -> bool: ...
+    def solve(
+        self,
+        b: list[float],
+        solver_type: SparseSolverType = SparseSolverType.SparseLU,
+        tolerance: float = 1e-10,
+        max_iterations: int = 1000,
+    ) -> list[float]: ...
+    def multiply(self, x: list[float]) -> list[float]: ...
+    def clear(self) -> None: ...
+    def resize(self, rows: int, cols: int) -> None: ...
+
+def build_2d_laplacian(nx: int, ny: int, dx: float, dy: float) -> SparseMatrix: ...
+def build_implicit_diffusion_2d(
+    nx: int,
+    ny: int,
+    dx: float,
+    dy: float,
+    alpha: float,
+    dt: float,
+) -> SparseMatrix: ...
+def build_implicit_diffusion_3d(
+    nx: int,
+    ny: int,
+    nz: int,
+    dx: float,
+    dy: float,
+    dz: float,
+    alpha: float,
+    dt: float,
+) -> SparseMatrix: ...
+
+class ImplicitSolveResult:
+    """Diagnostics from a completed Backward Euler diffusion solve."""
+
+    def __init__(self) -> None: ...
+    @property
+    def steps(self) -> int: ...
+    @property
+    def total_time(self) -> float: ...
+    @property
+    def residual(self) -> float: ...
+    @property
+    def success(self) -> bool: ...
+
+class ImplicitDiffusion2D:
+    """Conservative 2D Backward Euler ``div(D grad(u))`` solver.
+
+    Diffusivity is scalar or nodal and harmonic face averaging preserves
+    interface flux. Neumann values are outward derivatives, not Fickian fluxes.
+    Returned solution and diffusivity arrays own their data.
+    """
+
+    @overload
+    def __init__(self, mesh: StructuredMesh, diffusivity: float) -> None: ...
+    @overload
+    def __init__(self, mesh: StructuredMesh, diffusivity: ArrayLike) -> None: ...
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    def set_dirichlet_boundary(self, boundary: Boundary, value: float) -> None: ...
+    def set_neumann_boundary(
+        self, boundary: Boundary, normal_derivative: float
+    ) -> None: ...
+    def set_source_term(
+        self, source: Callable[[float, float, float], float]
+    ) -> None: ...
+    def clear_source_term(self) -> None: ...
+    def set_solver_type(self, solver_type: SparseSolverType) -> None: ...
+    def set_tolerance(self, tolerance: float) -> None: ...
+    def set_max_iterations(self, max_iterations: int) -> None: ...
+    def step(self, dt: float) -> ImplicitSolveResult: ...
+    def solve(self, dt: float, num_steps: int) -> ImplicitSolveResult: ...
+    def solution(self) -> FloatArray: ...
+    def diffusivity(self) -> FloatArray: ...
+    def time(self) -> float: ...
+    def mesh(self) -> StructuredMesh: ...
+
+class ImplicitDiffusion3D:
+    """Conservative 3D Backward Euler ``div(D grad(u))`` solver."""
+
+    @overload
+    def __init__(self, mesh: StructuredMesh3D, diffusivity: float) -> None: ...
+    @overload
+    def __init__(self, mesh: StructuredMesh3D, diffusivity: ArrayLike) -> None: ...
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    def set_dirichlet_boundary(self, boundary: Boundary3D, value: float) -> None: ...
+    def set_neumann_boundary(
+        self, boundary: Boundary3D, normal_derivative: float
+    ) -> None: ...
+    def set_source_term(
+        self, source: Callable[[float, float, float, float], float]
+    ) -> None: ...
+    def clear_source_term(self) -> None: ...
+    def set_solver_type(self, solver_type: SparseSolverType) -> None: ...
+    def set_tolerance(self, tolerance: float) -> None: ...
+    def set_max_iterations(self, max_iterations: int) -> None: ...
+    def step(self, dt: float) -> ImplicitSolveResult: ...
+    def solve(self, dt: float, num_steps: int) -> ImplicitSolveResult: ...
+    def solution(self) -> FloatArray: ...
+    def diffusivity(self) -> FloatArray: ...
+    def time(self) -> float: ...
+    def mesh(self) -> StructuredMesh3D: ...
 
 # =============================================================================
 # Transport Problem Builder
@@ -772,19 +1399,61 @@ class TransportProblem:
         >>> result = ExplicitFD().run(problem, t_end=10.0)
     """
 
-    def diffusivity(self, D: float) -> TransportProblem:
-        """Set uniform diffusivity."""
+    def __init__(self, mesh: StructuredMesh) -> None:
+        """Create a problem that owns a copy of ``mesh``."""
         ...
 
-    def diffusivity_field(self, D: FloatArray) -> TransportProblem:
+    @overload
+    def diffusivity(self, diffusivity: float) -> TransportProblem:
+        """Set uniform diffusivity and return this problem."""
+        ...
+
+    @overload
+    def diffusivity(self) -> float:
+        """Return the configured uniform diffusivity value."""
+        ...
+
+    def diffusivity_field(self, D_field: ArrayLike) -> TransportProblem:
         """Set spatially-varying diffusivity field."""
         ...
 
-    def velocity(self, vx: float, vy: float) -> TransportProblem:
+    @overload
+    def reaction(
+        self, function: Callable[[float, float, float, float], float]
+    ) -> TransportProblem:
+        """Replace the reaction; automatic reaction stability is then uncertified."""
+        ...
+
+    @overload
+    def reaction(
+        self,
+        function: Callable[[float, float, float, float], float],
+        max_abs_dc: float,
+    ) -> TransportProblem:
+        """Replace the reaction and declare a global ``|dR/dc|`` bound."""
+        ...
+
+    @overload
+    def add_reaction(
+        self, function: Callable[[float, float, float, float], float]
+    ) -> TransportProblem:
+        """Compose an additional reaction; automatic reaction stability is uncertified."""
+        ...
+
+    @overload
+    def add_reaction(
+        self,
+        function: Callable[[float, float, float, float], float],
+        max_abs_dc: float,
+    ) -> TransportProblem:
+        """Compose an additional reaction and its ``|dR/dc|`` bound."""
+        ...
+
+    def velocity(self, vx: float, vy: float = 0.0) -> TransportProblem:
         """Set uniform velocity field."""
         ...
 
-    def velocity_field(self, vx: FloatArray, vy: FloatArray) -> TransportProblem:
+    def velocity_field(self, vx: ArrayLike, vy: ArrayLike) -> TransportProblem:
         """Set spatially-varying velocity field."""
         ...
 
@@ -792,47 +1461,277 @@ class TransportProblem:
         """Set advection discretization scheme."""
         ...
 
-    def initial_condition(
-        self, u0: float | FloatArray | Callable[[float, float], float]
-    ) -> TransportProblem:
-        """Set initial condition."""
+    @overload
+    def initial_condition(self, values: ArrayLike) -> TransportProblem:
+        """Copy one initial value per node and return this problem."""
         ...
 
-    def dirichlet(self, boundary: Boundary, value: float) -> TransportProblem:
+    @overload
+    def initial_condition(self, value: float) -> TransportProblem:
+        """Set a uniform initial value and return this problem."""
+        ...
+
+    def dirichlet(self, side: Boundary, value: float) -> TransportProblem:
         """Set Dirichlet boundary condition."""
         ...
 
-    def neumann(self, boundary: Boundary, flux: float) -> TransportProblem:
-        """Set Neumann boundary condition."""
+    def neumann(self, side: Boundary, flux: float) -> TransportProblem:
+        """Set the outward-normal derivative ``du/dn``.
+
+        The runtime keyword remains ``flux`` for compatibility; it is not a
+        Fickian flux.
+        """
         ...
 
-    def robin(self, boundary: Boundary, alpha: float, beta: float) -> TransportProblem:
-        """Set Robin (mixed) boundary condition: alpha*u + beta*du/dn = 0."""
+    def robin(self, side: Boundary, a: float, b: float, c: float) -> TransportProblem:
+        """Set ``a*u + b*du/dn = c``."""
         ...
 
-    def boundary(self, boundary: Boundary, bc: BoundaryCondition) -> TransportProblem:
+    def boundary(self, side: Boundary, bc: BoundaryCondition) -> TransportProblem:
         """Set boundary condition using BoundaryCondition object."""
         ...
 
     def constant_source(self, S: float) -> TransportProblem:
-        """Add constant source term."""
+        """Replace the reaction with the constant source ``R=S``."""
+        ...
+
+    def add_constant_source(self, S: float) -> TransportProblem:
+        """Compose the constant source ``R=S`` with existing reactions."""
         ...
 
     def linear_decay(self, k: float) -> TransportProblem:
-        """Add linear decay: R = -k*u."""
+        """Replace the reaction with linear decay ``R=-k*u``."""
+        ...
+
+    def add_linear_decay(self, k: float) -> TransportProblem:
+        """Compose linear decay ``R=-k*u`` with existing reactions."""
         ...
 
     def logistic_growth(self, r: float, K: float) -> TransportProblem:
-        """Add logistic growth: R = r*u*(1 - u/K)."""
+        """Replace the reaction with logistic growth ``R=r*u*(1-u/K)``."""
         ...
 
-    def michaelis_menten(self, V_max: float, K_m: float) -> TransportProblem:
-        """Add Michaelis-Menten consumption: R = -V_max*u/(K_m + u)."""
+    def add_logistic_growth(self, r: float, K: float) -> TransportProblem:
+        """Compose logistic growth with existing reactions."""
         ...
+
+    def michaelis_menten(self, Vmax: float, Km: float) -> TransportProblem:
+        """Replace the reaction with Michaelis-Menten consumption."""
+        ...
+
+    def add_michaelis_menten(self, Vmax: float, Km: float) -> TransportProblem:
+        """Compose Michaelis-Menten consumption with existing reactions."""
+        ...
+
+    def clear_reaction(self) -> TransportProblem:
+        """Remove every configured reaction term."""
+        ...
+
+    def has_uniform_diffusivity(self) -> bool: ...
+    def has_advection(self) -> bool: ...
+    def has_reaction(self) -> bool: ...
+    def reaction_stability_bound_known(self) -> bool: ...
+    def reaction_stability_rate_bound(self) -> float: ...
+    def mesh(self) -> StructuredMesh:
+        """Return the internally retained mesh object."""
+        ...
+
+    def initial(self) -> FloatArray:
+        """Return an owned copy of the flat initial field."""
+        ...
+
+    def boundaries(self) -> list[BoundaryCondition]:
+        """Return a copy of boundary metadata ordered left, right, bottom, top."""
+        ...
+
+class SolveOptions:
+    """Controls the verified conservative explicit C++ transport solve."""
+
+    final_time: float
+    time_step: float
+    safety_factor: float
+    reaction_step_fraction: float
+    max_steps: int
+    check_finite: bool
+
+    def __init__(self) -> None: ...
+    @staticmethod
+    def until(final_time: float) -> SolveOptions: ...
+
+class SolveDiagnostics:
+    """Numerical and physical diagnostics from a transport solve."""
+
+    @property
+    def steps(self) -> int: ...
+    @property
+    def requested_final_time(self) -> float: ...
+    @property
+    def final_time(self) -> float: ...
+    @property
+    def requested_time_step(self) -> float: ...
+    @property
+    def minimum_time_step(self) -> float: ...
+    @property
+    def maximum_time_step(self) -> float: ...
+    @property
+    def transport_stable_time_step(self) -> float: ...
+    @property
+    def certified_stable_time_step(self) -> float: ...
+    @property
+    def maximum_transport_loss_rate(self) -> float: ...
+    @property
+    def reaction_rate_bound(self) -> float: ...
+    @property
+    def automatic_time_step(self) -> bool: ...
+    @property
+    def reaction_stability_bound_known(self) -> bool: ...
+    @property
+    def initial_mass(self) -> float: ...
+    @property
+    def final_mass(self) -> float: ...
+    @property
+    def mass_change(self) -> float: ...
+    @property
+    def initial_minimum(self) -> float: ...
+    @property
+    def initial_maximum(self) -> float: ...
+    @property
+    def final_minimum(self) -> float: ...
+    @property
+    def final_maximum(self) -> float: ...
+
+class TransportResult:
+    """Final scalar field, exact physical time, and solve diagnostics."""
+
+    @property
+    def concentration(self) -> FloatArray:
+        """Return an owned copy of the final concentration field."""
+        ...
+    @property
+    def solution(self) -> FloatArray:
+        """Alias returning another owned copy of ``concentration``."""
+        ...
+    @property
+    def time(self) -> float: ...
+    @property
+    def diagnostics(self) -> SolveDiagnostics: ...
+
+def solve_transport(
+    problem: TransportProblem, options: SolveOptions
+) -> TransportResult:
+    """Solve every configured scalar-transport term in the C++ core."""
+    ...
+
+class ExplicitFD:
+    """Legacy explicit facade over the unified ``TransportProblem`` surface."""
+
+    def __init__(self) -> None: ...
+    def safety_factor(self, factor: float) -> ExplicitFD: ...
+    def run(self, problem: TransportProblem, t_end: float) -> RunResult: ...
 
 # =============================================================================
 # Diffusion and Advection-Diffusion Solvers
 # =============================================================================
+
+class CNSolveResult:
+    """Algebraic diagnostics from one Crank-Nicolson step."""
+
+    def __init__(self) -> None: ...
+    @property
+    def iterations(self) -> int: ...
+    @property
+    def residual(self) -> float: ...
+    @property
+    def converged(self) -> bool: ...
+
+class CrankNicolsonDiffusion:
+    """Constant-diffusivity Crank-Nicolson solver on a 1D/2D mesh.
+
+    The linear diffusion method is A-stable and second-order in time, but is
+    not L-stable; excessively large steps can remain bounded while oscillatory
+    or inaccurate. Neumann data are outward-normal derivatives, not fluxes.
+    """
+
+    def __init__(self, mesh: StructuredMesh, diffusivity: float) -> None: ...
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    def set_dirichlet_boundary(self, boundary: Boundary, value: float) -> None: ...
+    def set_neumann_boundary(
+        self, boundary: Boundary, normal_derivative: float
+    ) -> None: ...
+    def set_tolerance(self, tol: float) -> CrankNicolsonDiffusion: ...
+    def set_max_iterations(self, max_iter: int) -> CrankNicolsonDiffusion: ...
+    def step(self, dt: float) -> CNSolveResult: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def solution(self) -> FloatArray:
+        """Return an owned copy of the current flat field."""
+        ...
+    def time(self) -> float: ...
+    @property
+    def diffusivity(self) -> float: ...
+
+class ADISolveResult:
+    """Time-step counts and time reached by a symmetric ADI solve."""
+
+    def __init__(self) -> None: ...
+    @property
+    def steps(self) -> int: ...
+    @property
+    def substeps(self) -> int: ...
+    @property
+    def time(self) -> float: ...
+    @property
+    def total_time(self) -> float: ...
+    @property
+    def success(self) -> bool: ...
+
+class ADIDiffusion2D:
+    """Symmetric x/2-y-x/2 split solver for constant-D 2D diffusion.
+
+    Directional linear subproblems are unconditionally stable. The advertised
+    second-order convergence assumes smooth solutions and time-independent
+    boundary data. Neumann values are outward derivatives, not physical fluxes.
+    """
+
+    def __init__(self, mesh: StructuredMesh, diffusivity: float) -> None: ...
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    def set_dirichlet_boundary(self, boundary: Boundary, value: float) -> None: ...
+    def set_neumann_boundary(
+        self, boundary: Boundary, normal_derivative: float
+    ) -> None: ...
+    def step(self, dt: float) -> ADISolveResult: ...
+    def solve(self, dt: float, num_steps: int) -> ADISolveResult: ...
+    def solution(self) -> FloatArray:
+        """Return an owned copy of the current flat field."""
+        ...
+    def time(self) -> float: ...
+    @property
+    def diffusivity(self) -> float: ...
+
+class ADIDiffusion3D:
+    """Symmetric x/2-y/2-z-y/2-x/2 constant-D 3D diffusion solver."""
+
+    def __init__(self, mesh: StructuredMesh3D, diffusivity: float) -> None: ...
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    @overload
+    def set_dirichlet_boundary(self, boundary: Boundary3D, value: float) -> None: ...
+    @overload
+    def set_dirichlet_boundary(self, boundary_id: int, value: float) -> None: ...
+    @overload
+    def set_neumann_boundary(
+        self, boundary: Boundary3D, normal_derivative: float
+    ) -> None: ...
+    @overload
+    def set_neumann_boundary(
+        self, boundary_id: int, normal_derivative: float
+    ) -> None: ...
+    def step(self, dt: float) -> ADISolveResult: ...
+    def solve(self, dt: float, num_steps: int) -> ADISolveResult: ...
+    def solution(self) -> FloatArray:
+        """Return an owned copy of the current flat field."""
+        ...
+    def time(self) -> float: ...
+    @property
+    def diffusivity(self) -> float: ...
 
 class DiffusionSolver:
     """Solver for the diffusion equation.
@@ -840,7 +1739,8 @@ class DiffusionSolver:
     Solves the transient diffusion (heat) equation:
         ∂u/∂t = D ∇²u
 
-    using explicit finite differences with automatic stable time stepping.
+    using explicit finite differences. The caller supplies ``dt``; this legacy
+    surface does not choose a stable step automatically.
 
     Diffusion governs passive molecular transport, heat conduction,
     and many other spreading phenomena in biological systems.
@@ -864,20 +1764,35 @@ class DiffusionSolver:
         """
         ...
 
-    def set_initial_condition(self, u0: FloatArray) -> None:
+    def set_initial_condition(self, values: ArrayLike) -> None:
         """Set initial concentration field."""
         ...
 
+    @overload
+    def set_boundary_condition(self, boundary_id: int, bc: BoundaryCondition) -> None:
+        """Set boundary metadata by integer ID."""
+        ...
+
+    @overload
     def set_boundary_condition(self, boundary: Boundary, bc: BoundaryCondition) -> None:
         """Set boundary condition."""
         ...
 
+    @overload
+    def set_dirichlet_boundary(self, boundary_id: int, value: float) -> None: ...
+    @overload
     def set_dirichlet_boundary(self, boundary: Boundary, value: float) -> None:
         """Set Dirichlet boundary condition."""
         ...
 
+    @overload
+    def set_neumann_boundary(self, boundary_id: int, flux: float) -> None: ...
+    @overload
     def set_neumann_boundary(self, boundary: Boundary, flux: float) -> None:
-        """Set Neumann boundary condition."""
+        """Set the outward derivative ``du/dn``.
+
+        The legacy keyword ``flux`` does not denote Fickian flux.
+        """
         ...
 
     def solve(self, dt: float, num_steps: int) -> None:
@@ -885,8 +1800,67 @@ class DiffusionSolver:
         ...
 
     def solution(self) -> FloatArray:
-        """Current solution field."""
+        """Return an owned copy of the current flat field."""
         ...
+
+class DiffusionSolver3D:
+    """Conservative Forward Euler solver for constant-D Cartesian 3D diffusion."""
+
+    def __init__(self, mesh: StructuredMesh3D, diffusivity: float) -> None: ...
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    @overload
+    def set_dirichlet_boundary(self, boundary_id: int, value: float) -> None: ...
+    @overload
+    def set_dirichlet_boundary(self, boundary: Boundary3D, value: float) -> None: ...
+    @overload
+    def set_neumann_boundary(
+        self, boundary_id: int, normal_derivative: float
+    ) -> None: ...
+    @overload
+    def set_neumann_boundary(
+        self, boundary: Boundary3D, normal_derivative: float
+    ) -> None: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def check_stability(self, dt: float) -> bool: ...
+    def max_stable_time_step(self) -> float: ...
+    def time(self) -> float: ...
+    def solution(self) -> FloatArray:
+        """Return an owned copy of the current flat field."""
+        ...
+    def mesh(self) -> StructuredMesh3D: ...
+
+class LinearReactionDiffusionSolver3D:
+    """3D Forward-Euler diffusion with Backward-Euler linear decay.
+
+    The IMEX update is first order in time and remains restricted by the
+    explicit diffusion CFL ceiling.
+    """
+
+    def __init__(
+        self, mesh: StructuredMesh3D, diffusivity: float, decay_rate: float
+    ) -> None: ...
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    @overload
+    def set_dirichlet_boundary(self, boundary_id: int, value: float) -> None: ...
+    @overload
+    def set_dirichlet_boundary(self, boundary: Boundary3D, value: float) -> None: ...
+    @overload
+    def set_neumann_boundary(
+        self, boundary_id: int, normal_derivative: float
+    ) -> None: ...
+    @overload
+    def set_neumann_boundary(
+        self, boundary: Boundary3D, normal_derivative: float
+    ) -> None: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def check_stability(self, dt: float) -> bool: ...
+    def max_stable_time_step(self) -> float: ...
+    def decay_rate(self) -> float: ...
+    def time(self) -> float: ...
+    def solution(self) -> FloatArray:
+        """Return an owned copy of the current flat field."""
+        ...
+    def mesh(self) -> StructuredMesh3D: ...
 
 class AdvectionDiffusionSolver:
     """Solver for the advection-diffusion equation.
@@ -928,14 +1902,13 @@ class AdvectionDiffusionSolver:
         self,
         mesh: StructuredMesh,
         diffusivity: float,
-        vx_field: list[float],
-        vy_field: list[float],
+        vx_field: ArrayLike,
+        vy_field: ArrayLike,
         scheme: AdvectionScheme = ...,
     ) -> None:
         """Create advection-diffusion solver with velocity field."""
         ...
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None: ...
     def scheme(self) -> AdvectionScheme:
         """Current advection scheme."""
         ...
@@ -944,22 +1917,28 @@ class AdvectionDiffusionSolver:
         """Cell Peclet number."""
         ...
 
-    def max_time_step(self) -> float:
+    def max_time_step(self, safety: float = 0.4) -> float:
         """Maximum stable time step."""
         ...
 
-    def is_scheme_stable(self, dt: float) -> bool:
-        """Check if scheme is stable for given time step."""
+    def is_scheme_stable(self) -> bool:
+        """Whether the selected spatial scheme meets its cell-Peclet criterion."""
         ...
 
     def set_scheme(self, scheme: AdvectionScheme) -> None:
         """Set advection discretization scheme."""
         ...
 
-    def set_initial_condition(self, u0: FloatArray) -> None:
+    def set_initial_condition(self, values: ArrayLike) -> None:
         """Set initial concentration field."""
         ...
 
+    @overload
+    def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None:
+        """Set boundary metadata by integer ID."""
+        ...
+
+    @overload
     def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None:
         """Set boundary condition."""
         ...
@@ -969,7 +1948,7 @@ class AdvectionDiffusionSolver:
         ...
 
     def solution(self) -> FloatArray:
-        """Current solution field."""
+        """Return an owned copy of the current flat field."""
         ...
 
 # =============================================================================
@@ -994,7 +1973,13 @@ class ReactionDiffusionSolver:
     cell proliferation, and enzyme kinetics.
     """
 
-    def set_initial_condition(self, u0: FloatArray) -> None:
+    def __init__(
+        self,
+        mesh: StructuredMesh,
+        diffusivity: float,
+        reaction: Callable[[float, float, float, float], float],
+    ) -> None: ...
+    def set_initial_condition(self, values: ArrayLike) -> None:
         """Set initial concentration field."""
         ...
 
@@ -1010,16 +1995,19 @@ class ReactionDiffusionSolver:
 
     @overload
     def set_neumann_boundary(self, boundary_id: int, flux: float) -> None:
-        """Set Neumann BC using boundary index."""
+        """Set outward ``du/dn`` by ID; ``flux`` is a legacy keyword."""
         ...
 
     @overload
     def set_neumann_boundary(self, boundary: Boundary, flux: float) -> None:
-        """Set Neumann BC using Boundary enum."""
+        """Set outward ``du/dn``; ``flux`` is a legacy keyword, not Fickian flux."""
         ...
 
-    def set_boundary(self, boundary: Boundary | int, bc: BoundaryCondition) -> None:
-        """Set boundary condition."""
+    @overload
+    def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
+    @overload
+    def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None:
+        """Set boundary condition metadata."""
         ...
 
     def solve(self, dt: float, num_steps: int) -> None:
@@ -1027,10 +2015,10 @@ class ReactionDiffusionSolver:
         ...
 
     def solution(self) -> FloatArray:
-        """Current solution field."""
+        """Return an owned copy of the current flat field."""
         ...
 
-class ConstantSourceReactionDiffusionSolver(ReactionDiffusionSolver):
+class ConstantSourceReactionDiffusionSolver:
     """Reaction-diffusion with constant source term."""
 
     def __init__(
@@ -1039,7 +2027,15 @@ class ConstantSourceReactionDiffusionSolver(ReactionDiffusionSolver):
         """Create solver with constant source."""
         ...
 
-class LinearReactionDiffusionSolver(ReactionDiffusionSolver):
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    @overload
+    def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
+    @overload
+    def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def solution(self) -> FloatArray: ...
+
+class LinearReactionDiffusionSolver:
     """Reaction-diffusion with linear decay: R = -k*u."""
 
     def __init__(
@@ -1048,7 +2044,15 @@ class LinearReactionDiffusionSolver(ReactionDiffusionSolver):
         """Create solver with decay constant k."""
         ...
 
-class LogisticReactionDiffusionSolver(ReactionDiffusionSolver):
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    @overload
+    def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
+    @overload
+    def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def solution(self) -> FloatArray: ...
+
+class LogisticReactionDiffusionSolver:
     """Reaction-diffusion with logistic growth: R = r*u*(1-u/K)."""
 
     def __init__(
@@ -1061,7 +2065,15 @@ class LogisticReactionDiffusionSolver(ReactionDiffusionSolver):
         """Create solver with growth rate r and carrying capacity K."""
         ...
 
-class MichaelisMentenReactionDiffusionSolver(ReactionDiffusionSolver):
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    @overload
+    def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
+    @overload
+    def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def solution(self) -> FloatArray: ...
+
+class MichaelisMentenReactionDiffusionSolver:
     """Reaction-diffusion with Michaelis-Menten kinetics: R = -V_max*u/(K_m+u)."""
 
     def __init__(
@@ -1074,7 +2086,15 @@ class MichaelisMentenReactionDiffusionSolver(ReactionDiffusionSolver):
         """Create solver with max rate vmax and half-saturation km."""
         ...
 
-class MaskedMichaelisMentenReactionDiffusionSolver(ReactionDiffusionSolver):
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    @overload
+    def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
+    @overload
+    def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def solution(self) -> FloatArray: ...
+
+class MaskedMichaelisMentenReactionDiffusionSolver:
     """Michaelis-Menten reaction-diffusion with spatial masking."""
 
     def __init__(
@@ -1089,11 +2109,212 @@ class MaskedMichaelisMentenReactionDiffusionSolver(ReactionDiffusionSolver):
         """Create solver with mask (1 = active, 0 = inactive)."""
         ...
 
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    @overload
+    def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
+    @overload
+    def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def solution(self) -> FloatArray: ...
+
+class MultiSpeciesSolver:
+    """Explicit conservative N-species reaction-diffusion solver.
+
+    ``max_stable_time_step`` and ``check_stability`` cover only the exact
+    Forward Euler diffusion CFL condition. Reaction kinetics can impose a
+    smaller admissible step. Neumann values are outward-normal concentration
+    derivatives, not Fickian fluxes.
+    """
+
+    def __init__(
+        self,
+        mesh: StructuredMesh,
+        diffusivities: list[float],
+        num_species: int = 0,
+    ) -> None: ...
+    def set_reaction_function(
+        self,
+        reaction: Callable[
+            [list[float], Sequence[float], float, float, float],
+            Optional[Union[Sequence[float], FloatArray]],
+        ],
+    ) -> None:
+        """Set ``reaction(rates, concentrations, x, y, t)``.
+
+        ``rates`` starts as one zero per species and has concentration-per-time
+        units. Mutate it and return ``None``, or return a one-dimensional
+        sequence/NumPy array of rates; a returned value takes precedence.
+        ``concentrations`` is read-only by contract. Both vectors use the
+        solver's species order, and every returned rate must be finite.
+        """
+        ...
+    @overload
+    def set_reaction_model(self, model: LotkaVolterraReaction) -> None: ...
+    @overload
+    def set_reaction_model(self, model: SIRReaction) -> None: ...
+    @overload
+    def set_reaction_model(self, model: SEIRReaction) -> None: ...
+    @overload
+    def set_reaction_model(self, model: BrusselatorReaction) -> None: ...
+    @overload
+    def set_reaction_model(self, model: CompetitiveInhibitionReaction) -> None: ...
+    @overload
+    def set_reaction_model(self, model: EnzymeCascadeReaction) -> None: ...
+    def set_initial_condition(self, species_idx: int, values: ArrayLike) -> None: ...
+    def set_uniform_initial_condition(self, species_idx: int, value: float) -> None: ...
+    @overload
+    def set_dirichlet_boundary(
+        self, species_idx: int, boundary: Boundary, value: float
+    ) -> None: ...
+    @overload
+    def set_dirichlet_boundary(
+        self, species_idx: int, boundary_id: int, value: float
+    ) -> None: ...
+    @overload
+    def set_neumann_boundary(
+        self,
+        species_idx: int,
+        boundary: Boundary,
+        normal_derivative: float,
+    ) -> None: ...
+    @overload
+    def set_neumann_boundary(
+        self,
+        species_idx: int,
+        boundary_id: int,
+        normal_derivative: float,
+    ) -> None: ...
+    def set_all_species_dirichlet(self, boundary: Boundary, value: float) -> None: ...
+    def set_all_species_neumann(
+        self, boundary: Boundary, normal_derivative: float
+    ) -> None: ...
+    def check_stability(self, dt: float) -> bool: ...
+    def max_stable_time_step(self) -> float: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def solve_until(self, final_time: float, maximum_dt: float) -> None:
+        """Advance exactly to an absolute model time using stable equal substeps."""
+        ...
+    def solution(self, species_idx: int) -> FloatArray:
+        """Return an owned flat solution copy for one species."""
+        ...
+    def all_solutions(self) -> list[FloatArray]:
+        """Return owned flat copies for all species."""
+        ...
+    def mesh(self) -> StructuredMesh: ...
+    def num_species(self) -> int: ...
+    def diffusivity(self, species_idx: int) -> float: ...
+    def time(self) -> float: ...
+    def reset_time(self) -> None: ...
+    def total_concentration(self, node_idx: int) -> float: ...
+    def concentration(self, species_idx: int, node_idx: int) -> float: ...
+    def solution_norm(self, species_idx: int) -> float: ...
+    def total_mass(self, species_idx: int) -> float: ...
+
+class LotkaVolterraReaction:
+    """Two-species predator-prey kinetics with logistic prey growth."""
+
+    def __init__(
+        self,
+        alpha: float,
+        beta: float,
+        gamma: float,
+        delta: float,
+        carrying_capacity: float = 100.0,
+    ) -> None: ...
+    @property
+    def alpha(self) -> float: ...
+    @property
+    def beta(self) -> float: ...
+    @property
+    def gamma(self) -> float: ...
+    @property
+    def delta(self) -> float: ...
+    @property
+    def carrying_capacity(self) -> float: ...
+
+class SIRReaction:
+    """SIR kinetics normalized by a local reference population ``N``.
+
+    For spatial density fields, ``N`` has the same local units as S/I/R and is
+    not the domain-integrated population. ``R0`` is ``beta/gamma`` and its usual
+    interpretation assumes the initial susceptible value is approximately N.
+    """
+
+    def __init__(self, beta: float, gamma: float, total_population: float) -> None: ...
+    @property
+    def beta(self) -> float: ...
+    @property
+    def gamma(self) -> float: ...
+    @property
+    def N(self) -> float: ...
+    @property
+    def R0(self) -> float: ...
+
+class SEIRReaction:
+    """SEIR kinetics normalized by a local reference population ``N``."""
+
+    def __init__(
+        self,
+        beta: float,
+        sigma: float,
+        gamma: float,
+        total_population: float,
+    ) -> None: ...
+    @property
+    def beta(self) -> float: ...
+    @property
+    def sigma(self) -> float: ...
+    @property
+    def gamma(self) -> float: ...
+    @property
+    def N(self) -> float: ...
+
+class BrusselatorReaction:
+    """Conventional nondimensional two-species Brusselator kinetics."""
+
+    def __init__(self, A: float, B: float) -> None: ...
+    @property
+    def A(self) -> float: ...
+    @property
+    def B(self) -> float: ...
+    @property
+    def is_oscillatory(self) -> bool: ...
+
+class CompetitiveInhibitionReaction:
+    """Three-species substrate/inhibitor/product kinetic model."""
+
+    def __init__(
+        self,
+        vmax: float,
+        km: float,
+        ki: float,
+        inhibitor_decay: float = 0.0,
+    ) -> None: ...
+    @property
+    def vmax(self) -> float: ...
+    @property
+    def km(self) -> float: ...
+    @property
+    def ki(self) -> float: ...
+
+class EnzymeCascadeReaction:
+    """Sequential Michaelis-Menten activation/degradation kinetics."""
+
+    def __init__(
+        self,
+        vmax_values: list[float],
+        km_values: list[float],
+        kdeg_values: list[float],
+    ) -> None: ...
+    @property
+    def num_enzymes(self) -> int: ...
+
 class GrayScottSolver:
     """Gray-Scott reaction-diffusion pattern formation solver.
 
-    Simulates the Gray-Scott model, a classic system for studying
-    pattern formation through reaction-diffusion instabilities.
+    Simulates the nondimensional Gray-Scott model on the periodic cell-centred
+    grid of a 2D ``StructuredMesh``. Input fields therefore have
+    ``mesh.nx()*mesh.ny()`` values, rather than one value per mesh node.
 
     Equations:
         ∂u/∂t = Du ∇²u - uv² + f(1-u)
@@ -1107,13 +2328,15 @@ class GrayScottSolver:
     Different (f, k) values produce different patterns:
     - Spots, stripes, labyrinths, solitons
     - Traveling waves and oscillations
-    - Turing patterns
+    - Diffusion-driven and excitable patterns
 
     Examples:
         >>> mesh = StructuredMesh(128, 128, 0.0, 2.5, 0.0, 2.5)
         >>> solver = GrayScottSolver(mesh, Du=0.16, Dv=0.08, f=0.035, k=0.065)
         >>> # Initialize with u=1, v=0 and seed perturbation
-        >>> result = solver.simulate(dt=1.0, steps=10000, save_every=100)
+        >>> result = solver.simulate(
+        ...     u0, v0, total_steps=10000, dt=1.0, steps_between_frames=100
+        ... )
     """
 
     def __init__(
@@ -1135,7 +2358,15 @@ class GrayScottSolver:
         ...
 
     def simulate(
-        self, dt: float, steps: int, save_every: int = 1
+        self,
+        u0: ArrayLike,
+        v0: ArrayLike,
+        total_steps: int,
+        dt: float,
+        steps_between_frames: int = 1000,
+        check_interval: int = 1000,
+        stable_tol: float = 1e-4,
+        min_frames_before_early_stop: int = 6,
     ) -> GrayScottRunResult:
         """Run simulation and save frames."""
         ...
@@ -1182,31 +2413,31 @@ class StokesSolver:
         """Dynamic viscosity."""
         ...
 
-    def reynolds(self) -> float:
-        """Reynolds number (always 0 for Stokes flow)."""
+    def reynolds(self, L: float, U: float, rho: float) -> float:
+        """Return the diagnostic ``rho*U*L/viscosity``."""
         ...
 
-    def set_velocity_bc(self, boundary: Boundary, bc: VelocityBC) -> None:
+    def set_velocity_bc(self, side: Boundary, bc: VelocityBC) -> StokesSolver:
         """Set velocity boundary condition."""
         ...
 
-    def set_body_force(self, fx: float, fy: float) -> None:
+    def set_body_force(self, fx: float, fy: float) -> StokesSolver:
         """Set body force (e.g., gravity)."""
         ...
 
-    def set_tolerance(self, tol: float) -> None:
+    def set_tolerance(self, tol: float) -> StokesSolver:
         """Set convergence tolerance."""
         ...
 
-    def set_max_iterations(self, max_iter: int) -> None:
+    def set_max_iterations(self, max_iter: int) -> StokesSolver:
         """Set maximum iterations."""
         ...
 
-    def set_velocity_relaxation(self, omega: float) -> None:
+    def set_velocity_relaxation(self, omega_v: float) -> StokesSolver:
         """Set velocity under-relaxation factor."""
         ...
 
-    def set_pressure_relaxation(self, omega: float) -> None:
+    def set_pressure_relaxation(self, omega_p: float) -> StokesSolver:
         """Set pressure under-relaxation factor."""
         ...
 
@@ -1223,22 +2454,19 @@ class NavierStokesSolver:
 
     using a projection method with explicit time stepping.
 
-    The Reynolds number Re = ρUL/μ characterizes the flow regime:
-    - Re << 1: Creeping flow (use StokesSolver instead)
-    - Re ~ 1-1000: Laminar flow
-    - Re >> 1000: Turbulent flow (this solver not recommended)
+    The Reynolds number ``Re = rho*U*L/mu`` helps characterize a flow, but
+    transition thresholds depend on geometry and disturbances. This solver has
+    no turbulence closure and is intended for resolved laminar flows.
 
-    Features:
-    - Automatic CFL-based time stepping
-    - Multiple convection schemes (UPWIND, CENTRAL, QUICK)
-    - Pressure Poisson equation solved iteratively
+    This bounded MAC-grid implementation supports no-slip and flux-compatible
+    Dirichlet velocity boundaries. Open/traction boundaries and the reserved
+    QUICK/HYBRID schemes raise until compatible implementations are available.
 
     Examples:
-        >>> mesh = StructuredMesh(100, 50, 0.0, 0.01, 0.0, 0.005)
+        >>> mesh = StructuredMesh(40, 40, 0.0, 1.0, 0.0, 1.0)
         >>> solver = NavierStokesSolver(mesh, density=1000.0, viscosity=0.001)
-        >>> solver.set_velocity_bc(Boundary.Left, VelocityBC.inflow(0.1, 0.0))
-        >>> solver.set_velocity_bc(Boundary.Right, VelocityBC.outflow())
-        >>> result = solver.solve(t_end=0.1)
+        >>> solver.set_velocity_bc(Boundary.Top, VelocityBC.dirichlet(0.1, 0.0))
+        >>> result = solver.solve(duration=0.1)
     """
 
     def __init__(self, mesh: StructuredMesh, density: float, viscosity: float) -> None:
@@ -1263,47 +2491,53 @@ class NavierStokesSolver:
         """Kinematic viscosity (nu = mu/rho)."""
         ...
 
-    def reynolds(self) -> float:
-        """Reynolds number."""
+    def reynolds(self, L: float, U: float) -> float:
+        """Return ``rho*U*L/mu``."""
         ...
 
-    def set_velocity_bc(self, boundary: Boundary, bc: VelocityBC) -> None:
+    def set_velocity_bc(self, side: Boundary, bc: VelocityBC) -> NavierStokesSolver:
         """Set velocity boundary condition."""
         ...
 
-    def set_body_force(self, fx: float, fy: float) -> None:
+    def set_body_force(self, fx: float, fy: float) -> NavierStokesSolver:
         """Set body force."""
         ...
 
-    def set_initial_velocity(self, u: FloatArray, v: FloatArray) -> None:
+    def set_initial_velocity(self, u0: ArrayLike, v0: ArrayLike) -> NavierStokesSolver:
         """Set initial velocity field."""
         ...
 
-    def set_time_step(self, dt: float) -> None:
+    def set_time_step(self, dt: float) -> NavierStokesSolver:
         """Set time step."""
         ...
 
-    def set_cfl(self, cfl: float) -> None:
+    def set_cfl(self, cfl: float) -> NavierStokesSolver:
         """Set CFL number for automatic time stepping."""
         ...
 
-    def set_convection_scheme(self, scheme: ConvectionScheme) -> None:
+    def set_convection_scheme(self, scheme: ConvectionScheme) -> NavierStokesSolver:
         """Set convection discretization scheme."""
         ...
 
-    def set_pressure_tolerance(self, tol: float) -> None:
+    def set_pressure_tolerance(self, tol: float) -> NavierStokesSolver:
         """Set pressure solver tolerance."""
         ...
 
-    def set_max_pressure_iterations(self, max_iter: int) -> None:
+    def set_max_pressure_iterations(self, max_iter: int) -> NavierStokesSolver:
         """Set maximum pressure solver iterations."""
         ...
 
-    def solve(self, t_end: float) -> NavierStokesResult:
+    def max_time_step(self, u: FloatArray, v: FloatArray) -> float:
+        """Return the explicit stability ceiling for packed MAC fields."""
+        ...
+
+    def solve(
+        self, duration: float, output_interval: float = 0.0
+    ) -> NavierStokesResult:
         """Solve to specified end time."""
         ...
 
-    def solve_steps(self, n_steps: int) -> NavierStokesResult:
+    def solve_steps(self, num_steps: int) -> NavierStokesResult:
         """Solve for specified number of time steps."""
         ...
 
@@ -1311,11 +2545,12 @@ class DarcyFlowSolver:
     """Solver for Darcy flow in porous media.
 
     Solves Darcy's law for flow through porous media:
-        v = -(K/μ) ∇p
+        v = -κ ∇p
         ∇·v = 0
 
-    where K is permeability, μ is viscosity, p is pressure, and v is
-    the superficial (Darcy) velocity.
+    where ``κ = K/μ`` is hydraulic conductivity [m²/(Pa s)], p is
+    pressure, and v is the superficial (Darcy) velocity. The solver takes
+    hydraulic conductivity directly; it does not take viscosity separately.
 
     Applications include:
     - Groundwater flow and contaminant transport
@@ -1323,7 +2558,7 @@ class DarcyFlowSolver:
     - Flow in biological scaffolds
     - Drug transport in tumors
 
-    The solver supports spatially-varying permeability for
+    The solver supports spatially-varying hydraulic conductivity for
     heterogeneous media.
 
     Examples:
@@ -1336,44 +2571,55 @@ class DarcyFlowSolver:
 
     @overload
     def __init__(self, mesh: StructuredMesh, kappa: float) -> None:
-        """Create Darcy flow solver with uniform permeability."""
+        """Create a solver with uniform hydraulic conductivity ``kappa``."""
         ...
 
     @overload
-    def __init__(self, mesh: StructuredMesh, kappa: list[float]) -> None:
-        """Create Darcy flow solver with permeability field."""
+    def __init__(self, mesh: StructuredMesh, kappa: ArrayLike) -> None:
+        """Create a solver with a nodal hydraulic-conductivity field."""
         ...
 
-    def __init__(self, *args: Any) -> None: ...
-    def kappa(self) -> float:
-        """Permeability."""
+    def kappa(self) -> FloatArray:
+        """Return an owned copy of nodal hydraulic conductivity."""
         ...
 
-    def set_dirichlet(self, boundary: Boundary, pressure: float) -> None:
+    def set_dirichlet(self, side: Boundary, pressure: float) -> DarcyFlowSolver:
         """Set pressure Dirichlet boundary condition."""
         ...
 
-    def set_neumann(self, boundary: Boundary, flux: float) -> None:
-        """Set flux Neumann boundary condition."""
+    def set_outward_pressure_gradient(
+        self, side: Boundary, outward_pressure_gradient_Pa_per_m: float
+    ) -> DarcyFlowSolver:
+        """Set outward ``dp/dn`` [Pa/m], not Darcy velocity or volumetric flux."""
         ...
 
-    def set_internal_pressure(self, i: int, j: int, pressure: float) -> None:
-        """Set internal pressure constraint."""
+    def set_neumann(self, side: Boundary, flux: float) -> DarcyFlowSolver:
+        """Set outward ``dp/dn``.
+
+        The runtime keyword ``flux`` is retained for compatibility but is a
+        pressure derivative, not Darcy velocity or volumetric flux.
+        """
         ...
 
-    def set_initial_guess(self, p0: FloatArray) -> None:
+    def set_internal_pressure(
+        self, mask: list[int], pressure: float
+    ) -> DarcyFlowSolver:
+        """Pin pressure where the byte-valued node mask is nonzero."""
+        ...
+
+    def set_initial_guess(self, pressure: ArrayLike) -> DarcyFlowSolver:
         """Set initial pressure guess."""
         ...
 
-    def set_tolerance(self, tol: float) -> None:
+    def set_tolerance(self, tol: float) -> DarcyFlowSolver:
         """Set convergence tolerance."""
         ...
 
-    def set_max_iterations(self, max_iter: int) -> None:
+    def set_max_iterations(self, max_iter: int) -> DarcyFlowSolver:
         """Set maximum iterations."""
         ...
 
-    def set_omega(self, omega: float) -> None:
+    def set_omega(self, omega: float) -> DarcyFlowSolver:
         """Set SOR relaxation factor."""
         ...
 
@@ -1409,7 +2655,7 @@ class MembraneDiffusion1DSolver:
         >>> solver.set_left_concentration(1.0)  # mol/m³
         >>> solver.set_right_concentration(0.0)
         >>> result = solver.solve()
-        >>> print(f"Flux: {result.flux:.2e} mol/m²/s")
+        >>> print(f"Flux: {result.flux:.2e}")
     """
 
     def __init__(self) -> None:
@@ -1444,35 +2690,37 @@ class MembraneDiffusion1DSolver:
         """True if hindered diffusion is enabled."""
         ...
 
-    def set_membrane_thickness(self, thickness: float) -> None:
+    def set_membrane_thickness(self, L: float) -> MembraneDiffusion1DSolver:
         """Set membrane thickness."""
         ...
 
-    def set_diffusivity(self, D: float) -> None:
+    def set_diffusivity(self, D: float) -> MembraneDiffusion1DSolver:
         """Set diffusion coefficient."""
         ...
 
-    def set_partition_coefficient(self, K: float) -> None:
+    def set_partition_coefficient(self, Phi: float) -> MembraneDiffusion1DSolver:
         """Set partition coefficient."""
         ...
 
-    def set_left_concentration(self, C: float) -> None:
+    def set_left_concentration(self, C: float) -> MembraneDiffusion1DSolver:
         """Set left boundary concentration."""
         ...
 
-    def set_right_concentration(self, C: float) -> None:
+    def set_right_concentration(self, C: float) -> MembraneDiffusion1DSolver:
         """Set right boundary concentration."""
         ...
 
-    def set_num_nodes(self, n: int) -> None:
+    def set_num_nodes(self, n: int) -> MembraneDiffusion1DSolver:
         """Set number of grid nodes."""
         ...
 
-    def set_hindered_diffusion(self, lambda_ratio: float) -> None:
-        """Enable hindered diffusion with given lambda ratio."""
+    def set_hindered_diffusion(
+        self, solute_radius: float, pore_radius: float
+    ) -> MembraneDiffusion1DSolver:
+        """Enable Renkin hindrance using the two radii in consistent units."""
         ...
 
-    def disable_hindered_diffusion(self) -> None:
+    def disable_hindered_diffusion(self) -> MembraneDiffusion1DSolver:
         """Disable hindered diffusion."""
         ...
 
@@ -1509,8 +2757,12 @@ class MultiLayerMembraneSolver:
 
     Examples:
         >>> solver = MultiLayerMembraneSolver()
-        >>> solver.add_layer(thickness=10e-6, diffusivity=1e-11, partition=0.5)
-        >>> solver.add_layer(thickness=50e-6, diffusivity=1e-10, partition=1.0)
+        >>> solver.add_layer(
+        ...     thickness=10e-6, diffusivity=1e-11, partition_coefficient=0.5
+        ... )
+        >>> solver.add_layer(
+        ...     thickness=50e-6, diffusivity=1e-10, partition_coefficient=1.0
+        ... )
         >>> solver.set_left_concentration(1.0)
         >>> solver.set_right_concentration(0.0)
         >>> result = solver.solve()
@@ -1529,20 +2781,23 @@ class MultiLayerMembraneSolver:
         ...
 
     def add_layer(
-        self, thickness: float, diffusivity: float, partition: float = 1.0
-    ) -> None:
+        self,
+        thickness: float,
+        diffusivity: float,
+        partition_coefficient: float = 1.0,
+    ) -> MultiLayerMembraneSolver:
         """Add a membrane layer."""
         ...
 
-    def clear_layers(self) -> None:
+    def clear_layers(self) -> MultiLayerMembraneSolver:
         """Remove all layers."""
         ...
 
-    def set_left_concentration(self, C: float) -> None:
+    def set_left_concentration(self, C: float) -> MultiLayerMembraneSolver:
         """Set left boundary concentration."""
         ...
 
-    def set_right_concentration(self, C: float) -> None:
+    def set_right_concentration(self, C: float) -> MultiLayerMembraneSolver:
         """Set right boundary concentration."""
         ...
 
@@ -1555,7 +2810,7 @@ class MultiLayerMembraneSolver:
 # =============================================================================
 
 class TumorDrugDeliverySolver:
-    """Coupled solver for tumor drug delivery.
+    """Reduced Darcy/vascular-exchange/drug-transport model.
 
     Models drug transport in tumor tissue including:
     - Interstitial fluid flow (pressure-driven convection)
@@ -1568,8 +2823,13 @@ class TumorDrugDeliverySolver:
     - Heterogeneous hydraulic conductivity
     - Tortuous diffusion paths
 
-    This model helps predict drug penetration and distribution
-    for optimizing cancer therapy.
+    Plasma concentration is prescribed and constant. Binding and uptake are
+    irreversible first-order compartments; saturation, pharmacokinetics, and
+    patient-specific calibration are not represented.
+
+    The pressure solve clamps tumor-mask nodes to ``p_tumor``; that represents
+    an unresolved solute-free fluid source. It is not a Starling filtration
+    model and there is no solvent-drag term in vascular solute exchange.
 
     Examples:
         >>> mesh = StructuredMesh(50, 50, 0.0, 0.01, 0.0, 0.01)
@@ -1578,14 +2838,20 @@ class TumorDrugDeliverySolver:
         ...     mesh, tumor_mask, hydraulic_conductivity,
         ...     p_boundary=0.0, p_tumor=2000.0  # Pa
         ... )
-        >>> result = solver.simulate(dt=1.0, t_end=3600.0)  # 1 hour
+        >>> pressure = solver.solve_pressure_sor()
+        >>> result = solver.simulate(
+        ...     pressure, diffusivity, vessel_wall_solute_permeability,
+        ...     vascular_surface_area_density, k_binding, k_uptake,
+        ...     c_plasma, dt=1.0, num_steps=3600,
+        ...     times_to_save_s=[0.0, 3600.0],
+        ... )
     """
 
     def __init__(
         self,
         mesh: StructuredMesh,
         tumor_mask: list[int],
-        hydraulic_conductivity: list[float],
+        hydraulic_conductivity: ArrayLike,
         p_boundary: float,
         p_tumor: float,
     ) -> None:
@@ -1602,25 +2868,31 @@ class TumorDrugDeliverySolver:
 
     def simulate(
         self,
+        pressure: ArrayLike,
+        diffusivity: ArrayLike,
+        vessel_wall_solute_permeability: ArrayLike,
+        vascular_surface_area_density: ArrayLike,
+        k_binding: float,
+        k_uptake: float,
+        c_plasma: float,
         dt: float,
-        t_end: float,
-        save_every: int = 1,
-        C_initial: float = 0.0,
+        num_steps: int,
+        times_to_save_s: list[float],
     ) -> TumorDrugDeliverySaved:
         """Run coupled simulation."""
         ...
 
     def solve_pressure_sor(
-        self, tol: float = 1e-6, max_iter: int = 10000
-    ) -> tuple[FloatArray, int]:
+        self, max_iter: int = 20000, tol: float = 1e-10, omega: float = 1.8
+    ) -> list[float]:
         """Solve pressure field with SOR."""
         ...
 
 class BioheatCryotherapySolver:
-    """Coupled bioheat-cryotherapy solver with tissue damage.
+    """Pennes bioheat phase-change solver with a heat-injury diagnostic.
 
-    Simulates cryoablation therapy using the Pennes bioheat equation
-    with phase change and Arrhenius tissue damage kinetics.
+    Solves the Pennes bioheat equation with an apparent-heat-capacity
+    phase-change model. All temperature inputs are absolute kelvin.
 
     The model includes:
     - Heat conduction with temperature-dependent properties
@@ -1629,12 +2901,11 @@ class BioheatCryotherapySolver:
     - Phase change (freezing/thawing) with latent heat
     - Arrhenius damage integral: Ω = ∫A·exp(-Ea/RT)dt
 
-    Tissue is considered destroyed when Ω > 1 (63% cell death).
+    The Arrhenius integral describes heat injury for a parameterization supplied
+    by the caller; it must not be interpreted as cryogenic cell death.
 
-    Applications:
-    - Cryosurgery planning for liver, prostate, kidney tumors
-    - Cryopreservation analysis
-    - Thermal ablation optimization
+    Probe-mask nodes are embedded fixed-temperature nodes. Contact resistance,
+    probe coolant flow, and a conjugate probe model are not represented.
 
     Examples:
         >>> # Set up mesh with probe region
@@ -1645,15 +2916,17 @@ class BioheatCryotherapySolver:
         ...     rho_tissue=1000, rho_blood=1000, c_blood=3600,
         ...     k_unfrozen=0.5, k_frozen=2.0, ...
         ... )
-        >>> result = solver.simulate(dt=0.1, t_end=600.0)  # 10 min
+        >>> result = solver.simulate(
+        ...     dt=0.05, num_steps=12000, times_to_save_s=[0.0, 600.0]
+        ... )
     """
 
     def __init__(
         self,
         mesh: StructuredMesh,
         probe_mask: list[int],
-        perfusion_map: list[float],
-        q_met_map: list[float],
+        perfusion_map: ArrayLike,
+        q_met_map: ArrayLike,
         rho_tissue: float,
         rho_blood: float,
         c_blood: float,
@@ -1661,10 +2934,10 @@ class BioheatCryotherapySolver:
         k_frozen: float,
         c_unfrozen: float,
         c_frozen: float,
-        T_body: float,
-        T_probe: float,
-        T_freeze: float,
-        T_freeze_range: float,
+        T_body_K: float,
+        T_probe_K: float,
+        T_freeze_K: float,
+        T_freeze_range_K: float,
         L_fusion: float,
         A: float,
         E_a: float,
@@ -1673,21 +2946,44 @@ class BioheatCryotherapySolver:
         """Create bioheat cryotherapy solver."""
         ...
 
+    def set_initial_temperature_K(
+        self, temperature_K: float
+    ) -> BioheatCryotherapySolver: ...
+    def set_initial_temperature_field_K(
+        self, temperature_K: ArrayLike
+    ) -> BioheatCryotherapySolver: ...
+    def set_arterial_temperature_K(
+        self, temperature_K: float
+    ) -> BioheatCryotherapySolver: ...
+    def set_boundary_temperature_K(
+        self, temperature_K: float
+    ) -> BioheatCryotherapySolver: ...
+    def frozen_fraction(self, temperature_K: float) -> float: ...
+    def thermal_conductivity(self, temperature_K: float) -> float: ...
+    def effective_specific_heat(self, temperature_K: float) -> float: ...
+    def arrhenius_heat_injury_rate(self, temperature_K: float) -> float: ...
+    def maximum_stable_time_step_s(self) -> float: ...
     def simulate(
-        self,
-        dt: float,
-        t_end: float,
-        save_every: int = 1,
-        T_initial: float = 310.15,
-    ) -> BioheatSaved:
-        """Run coupled thermal-damage simulation."""
-        ...
+        self, dt: float, num_steps: int, times_to_save_s: list[float]
+    ) -> BioheatSaved: ...
 
 # =============================================================================
 # Viscosity Models (Rheology)
 # =============================================================================
 
-class NewtonianModel:
+class ViscosityModel:
+    """Non-constructible base for scalar generalized-Newtonian laws."""
+
+    def viscosity(self, gamma_dot: float) -> float:
+        """Return apparent dynamic viscosity for a shear-rate magnitude."""
+        ...
+    def shear_stress(self, gamma_dot: float) -> float:
+        """Return the model's nonnegative scalar shear-stress magnitude."""
+        ...
+    def name(self) -> str: ...
+    def type(self) -> FluidModel: ...
+
+class NewtonianModel(ViscosityModel):
     """Newtonian (constant viscosity) fluid model.
 
     For a Newtonian fluid, the shear stress is linearly proportional
@@ -1701,13 +2997,13 @@ class NewtonianModel:
     with non-Newtonian models.
 
     Examples:
-        >>> model = NewtonianModel(mu=0.001)  # Water at 20°C
+        >>> model = NewtonianModel(mu0=0.001)  # Water near room temperature
         >>> tau = model.shear_stress(100.0)  # Stress at γ̇ = 100 s⁻¹
         >>> print(f"Shear stress: {tau:.2f} Pa")
     """
 
-    def __init__(self, mu: float) -> None:
-        """Create Newtonian model with viscosity mu."""
+    def __init__(self, mu0: float) -> None:
+        """Create a Newtonian model with dynamic viscosity ``mu0`` [Pa s]."""
         ...
 
     def mu0(self) -> float:
@@ -1718,7 +3014,7 @@ class NewtonianModel:
         """Model name."""
         ...
 
-    def type(self) -> ViscosityModel:
+    def type(self) -> FluidModel:
         """Model type enum."""
         ...
 
@@ -1730,7 +3026,7 @@ class NewtonianModel:
         """Shear stress at given shear rate."""
         ...
 
-class PowerLawModel:
+class PowerLawModel(ViscosityModel):
     """Power-law (Ostwald-de Waele) fluid model.
 
     The power-law model relates shear stress to shear rate:
@@ -1757,7 +3053,7 @@ class PowerLawModel:
         >>> print(f"Shear-thinning: {model.is_shear_thinning()}")
     """
 
-    def __init__(self, K: float, n: float) -> None:
+    def __init__(self, K: float, n: float, gamma_min: float = 1e-10) -> None:
         """Create power-law model with consistency K and index n."""
         ...
 
@@ -1781,7 +3077,7 @@ class PowerLawModel:
         """Model name."""
         ...
 
-    def type(self) -> ViscosityModel:
+    def type(self) -> FluidModel:
         """Model type enum."""
         ...
 
@@ -1793,7 +3089,7 @@ class PowerLawModel:
         """Shear stress at given shear rate."""
         ...
 
-class CarreauModel:
+class CarreauModel(ViscosityModel):
     """Carreau viscosity model for shear-thinning fluids.
 
     The Carreau model provides a smooth transition between Newtonian
@@ -1853,7 +3149,7 @@ class CarreauModel:
         """Model name."""
         ...
 
-    def type(self) -> ViscosityModel:
+    def type(self) -> FluidModel:
         """Model type enum."""
         ...
 
@@ -1865,7 +3161,7 @@ class CarreauModel:
         """Shear stress at given shear rate."""
         ...
 
-class CarreauYasudaModel:
+class CarreauYasudaModel(ViscosityModel):
     """Carreau-Yasuda viscosity model.
 
     An extension of the Carreau model with an additional parameter
@@ -1929,8 +3225,7 @@ class CarreauYasudaModel:
         """Model name."""
         ...
 
-    @property
-    def type(self) -> ViscosityModel:
+    def type(self) -> FluidModel:
         """Model type enum."""
         ...
 
@@ -1942,7 +3237,7 @@ class CarreauYasudaModel:
         """Shear stress at given shear rate."""
         ...
 
-class CrossModel:
+class CrossModel(ViscosityModel):
     """Cross viscosity model.
 
     An alternative to the Carreau model for shear-thinning fluids:
@@ -1995,7 +3290,7 @@ class CrossModel:
         """Model name."""
         ...
 
-    def type(self) -> ViscosityModel:
+    def type(self) -> FluidModel:
         """Model type enum."""
         ...
 
@@ -2007,7 +3302,7 @@ class CrossModel:
         """Shear stress at given shear rate."""
         ...
 
-class CassonModel:
+class CassonModel(ViscosityModel):
     """Casson viscosity model for blood.
 
     The Casson model captures yield stress behavior of blood:
@@ -2035,7 +3330,7 @@ class CassonModel:
         ...     print("Flow will occur")
     """
 
-    def __init__(self, tau_y: float, mu_p: float) -> None:
+    def __init__(self, tau_y: float, mu_p: float, epsilon: float = 1e-6) -> None:
         """Create Casson model.
 
         Args:
@@ -2056,7 +3351,7 @@ class CassonModel:
         """Model name."""
         ...
 
-    def type(self) -> ViscosityModel:
+    def type(self) -> FluidModel:
         """Model type enum."""
         ...
 
@@ -2068,7 +3363,7 @@ class CassonModel:
         """Shear stress at given shear rate."""
         ...
 
-class BinghamModel:
+class BinghamModel(ViscosityModel):
     """Bingham plastic model.
 
     The Bingham model describes a fluid with a yield stress:
@@ -2097,7 +3392,7 @@ class BinghamModel:
         >>> print(f"Bingham number: {Bn:.2f}")
     """
 
-    def __init__(self, tau_y: float, mu_p: float) -> None:
+    def __init__(self, tau_y: float, mu_p: float, epsilon: float = 1e-6) -> None:
         """Create Bingham model.
 
         Args:
@@ -2118,7 +3413,7 @@ class BinghamModel:
         """Model name."""
         ...
 
-    def type(self) -> ViscosityModel:
+    def type(self) -> FluidModel:
         """Model type enum."""
         ...
 
@@ -2134,7 +3429,7 @@ class BinghamModel:
         """Shear stress at given shear rate."""
         ...
 
-class HerschelBulkleyModel:
+class HerschelBulkleyModel(ViscosityModel):
     """Herschel-Bulkley viscosity model.
 
     A generalized model combining yield stress with power-law behavior:
@@ -2162,7 +3457,7 @@ class HerschelBulkleyModel:
         >>> tau = model.shear_stress(100.0)
     """
 
-    def __init__(self, tau_y: float, K: float, n: float) -> None:
+    def __init__(self, tau_y: float, K: float, n: float, epsilon: float = 1e-6) -> None:
         """Create Herschel-Bulkley model.
 
         Args:
@@ -2188,7 +3483,7 @@ class HerschelBulkleyModel:
         """Model name."""
         ...
 
-    def type(self) -> ViscosityModel:
+    def type(self) -> FluidModel:
         """Model type enum."""
         ...
 
@@ -2201,32 +3496,221 @@ class HerschelBulkleyModel:
         ...
 
 # =============================================================================
+# Electrochemical transport
+# =============================================================================
+
+class IonSpecies:
+    """Ion transport parameters with temperature-aware Einstein mobility."""
+
+    def __init__(
+        self,
+        name: str,
+        valence: int,
+        diffusivity: float,
+        temperature: float = 310.0,
+    ) -> None: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def valence(self) -> int: ...
+    @property
+    def diffusivity(self) -> float: ...
+    @property
+    def mobility(self) -> float:
+        """Electrical-mobility magnitude at ``mobility_temperature``."""
+        ...
+    @property
+    def mobility_temperature(self) -> float: ...
+    @staticmethod
+    def thermal_voltage(temperature: float = 310.0) -> float: ...
+    def mobility_at(self, temperature: float) -> float:
+        """Evaluate mobility magnitude at an absolute temperature [K]."""
+        ...
+
+class NernstPlanckSolver:
+    """Single-ion Nernst-Planck transport in a prescribed potential.
+
+    Uses conservative fitted diffusion-drift fluxes. It does not solve
+    Poisson's equation, membrane gating, or an action-potential model.
+    """
+
+    def __init__(
+        self, mesh: StructuredMesh, ion: IonSpecies, temperature: float = 310.0
+    ) -> None: ...
+    def set_initial_condition(self, values: ArrayLike) -> None: ...
+    def set_potential_field(self, phi: ArrayLike) -> None: ...
+    def set_uniform_field(self, Ex: float, Ey: float = 0.0) -> None: ...
+    @overload
+    def set_dirichlet_boundary(self, boundary: Boundary, value: float) -> None: ...
+    @overload
+    def set_dirichlet_boundary(self, boundary_id: int, value: float) -> None: ...
+    @overload
+    def set_neumann_boundary(self, boundary: Boundary, flux: float) -> None:
+        """Set prescribed outward total molar flux [mol/(m² s)]."""
+        ...
+    @overload
+    def set_neumann_boundary(self, boundary_id: int, flux: float) -> None:
+        """Set prescribed outward total molar flux [mol/(m² s)]."""
+        ...
+    def check_stability(self, dt: float) -> bool: ...
+    def maximum_stable_time_step(self) -> float: ...
+    def recommended_time_step(self, safety: float = 0.9) -> float: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def solution(self) -> FloatArray:
+        """Return an owned concentration copy."""
+        ...
+    def potential(self) -> FloatArray:
+        """Return an owned potential copy."""
+        ...
+    def compute_current_density(self) -> FloatArray:
+        """Return interleaved Cartesian ionic current density [A/m²]."""
+        ...
+    def time(self) -> float: ...
+    def ion(self) -> IonSpecies:
+        """Return the solver-owned species object; the solver keeps it alive."""
+        ...
+    def thermal_voltage(self) -> float: ...
+    def electrical_mobility(self) -> float: ...
+    def mesh(self) -> StructuredMesh:
+        """Return the internally retained mesh object."""
+        ...
+
+class MultiIonSolver:
+    """Multiple independent ions in one prescribed potential field.
+
+    This solver does not solve Poisson's equation or enforce electroneutrality.
+    """
+
+    def __init__(
+        self,
+        mesh: StructuredMesh,
+        ions: list[IonSpecies],
+        temperature: float = 310.0,
+    ) -> None: ...
+    def set_initial_condition(self, species: int, values: ArrayLike) -> None: ...
+    @overload
+    def set_dirichlet_boundary(
+        self, species: int, boundary: Boundary, value: float
+    ) -> None: ...
+    @overload
+    def set_dirichlet_boundary(
+        self, species: int, boundary_id: int, value: float
+    ) -> None: ...
+    def set_neumann_boundary(
+        self, species: int, boundary: Boundary, flux: float
+    ) -> None:
+        """Set prescribed outward total molar flux [mol/(m² s)]."""
+        ...
+    def set_potential_field(self, phi: ArrayLike) -> None: ...
+    def set_uniform_field(self, Ex: float, Ey: float = 0.0) -> None: ...
+    def set_electroneutrality_mode(
+        self, enable: bool, background_charge: float = 0.0
+    ) -> None:
+        """Compatibility method; enabling unsupported coupling raises."""
+        ...
+    def check_stability(self, dt: float) -> bool: ...
+    def maximum_stable_time_step(self) -> float: ...
+    def recommended_time_step(self, safety: float = 0.9) -> float: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
+    def concentration(self, species: int) -> FloatArray:
+        """Return an owned concentration copy."""
+        ...
+    def potential(self) -> FloatArray:
+        """Return an owned potential copy."""
+        ...
+    def charge_density(self) -> FloatArray: ...
+    def time(self) -> float: ...
+    def num_species(self) -> int: ...
+    def ion(self, index: int) -> IonSpecies:
+        """Return a solver-owned species object; the solver keeps it alive."""
+        ...
+    def electrical_mobility(self, species: int) -> float: ...
+    def mesh(self) -> StructuredMesh:
+        """Return the internally retained mesh object."""
+        ...
+
+class constants:
+    FARADAY: float
+    GAS_CONSTANT: float
+    BOLTZMANN: float
+    ELEMENTARY_CHARGE: float
+    VACUUM_PERMITTIVITY: float
+
+class ions:
+    """Representative aqueous infinite-dilution ion parameters."""
+
+    @staticmethod
+    def sodium() -> IonSpecies: ...
+    @staticmethod
+    def potassium() -> IonSpecies: ...
+    @staticmethod
+    def chloride() -> IonSpecies: ...
+    @staticmethod
+    def calcium() -> IonSpecies: ...
+    @staticmethod
+    def magnesium() -> IonSpecies: ...
+    @staticmethod
+    def hydrogen() -> IonSpecies: ...
+    @staticmethod
+    def hydroxide() -> IonSpecies: ...
+    @staticmethod
+    def bicarbonate() -> IonSpecies: ...
+
+class ghk:
+    @staticmethod
+    def nernst_potential(
+        z: int, c_in: float, c_out: float, temperature: float = 310.0
+    ) -> float: ...
+    @staticmethod
+    def ghk_voltage(
+        P_K: float,
+        K_in: float,
+        K_out: float,
+        P_Na: float,
+        Na_in: float,
+        Na_out: float,
+        P_Cl: float,
+        Cl_in: float,
+        Cl_out: float,
+        temperature: float = 310.0,
+    ) -> float: ...
+
+# =============================================================================
 # Utility Functions
 # =============================================================================
 
 def blood_carreau_model(hematocrit: float) -> CarreauModel:
-    """Create Carreau model for blood at given hematocrit (0-0.7).
+    """Create an educational hematocrit-scaled Carreau surrogate on [0, 0.60].
 
-    Uses empirical correlations for blood viscosity parameters.
+    The model is anchored to a commonly reported 45% hematocrit fit; values
+    away from that reference are a stated surrogate, not patient-specific data.
     """
     ...
 
 def blood_casson_model(hematocrit: float) -> CassonModel:
-    """Create Casson model for blood at given hematocrit (0-0.7).
+    """Create the supported Casson blood correlation on [0, 0.60].
 
-    Uses empirical correlations for blood viscosity parameters.
+    Values outside the source study's 35%-55% range are extrapolations.
     """
     ...
 
 def pipe_wall_shear_rate(Q: float, R: float) -> float:
-    """Wall shear rate in pipe flow: gamma_w = 4Q/(pi*R^3).
+    """Return ``4*abs(Q)/(pi*R**3)``, the Newtonian nominal magnitude.
 
-    Args:
-        Q: Volumetric flow rate.
-        R: Pipe radius.
+    This is not a non-Newtonian wall correction.
+    """
+    ...
 
-    Returns:
-        Wall shear rate.
+def apparent_viscosity_pipe(
+    model: ViscosityModel,
+    Q: float,
+    R: float,
+    pressure_gradient: float,
+) -> float:
+    """Infer apparent pipe viscosity with a Rabinowitsch-Mooney correction.
+
+    ``Q`` and ``pressure_gradient`` must describe opposing flow and
+    pressure-drop directions.
     """
     ...
 
@@ -2285,143 +3769,190 @@ class analytical:
     Examples:
         >>> # Validate diffusion solver against analytical solution
         >>> C_analytical = analytical.diffusion_1d_semi_infinite(
-        ...     x=0.001, t=100.0, D=1e-9, C0=1.0
+        ...     x=0.001, t=100.0, diffusivity=1e-9,
+        ...     C_surface=1.0, C_initial=0.0
         ... )
         >>> # Check Poiseuille flow centerline velocity
         >>> u_max = analytical.poiseuille_max_velocity(
-        ...     R=0.002, dp_dx=-1000.0, mu=0.003
+        ...     radius=0.002, dp_dz=-1000.0, viscosity=0.003
         ... )
     """
 
     @staticmethod
-    def diffusion_1d_semi_infinite(x: float, t: float, D: float, C0: float) -> float:
-        """Semi-infinite diffusion: C = C0 * erfc(x / (2*sqrt(D*t)))."""
+    def diffusion_1d_semi_infinite(
+        x: float,
+        t: float,
+        diffusivity: float,
+        C_surface: float,
+        C_initial: float,
+    ) -> float:
+        """Semi-infinite constant-surface solution using ``erfc``."""
         ...
 
     @staticmethod
-    def diffusion_penetration_depth(D: float, t: float) -> float:
-        """Penetration depth: delta = sqrt(4*D*t)."""
+    def diffusion_penetration_depth(diffusivity: float, t: float) -> float:
+        """Legacy name for the characteristic length sqrt(D*t)."""
         ...
 
     @staticmethod
-    def first_order_decay(C0: float, k: float, t: float) -> float:
+    def diffusion_length(diffusivity: float, t: float) -> float:
+        """Characteristic diffusion length sqrt(D*t)."""
+        ...
+
+    @staticmethod
+    def first_order_decay(C_0: float, k: float, t: float) -> float:
         """First-order decay: C = C0 * exp(-k*t)."""
         ...
 
     @staticmethod
-    def logistic_growth(u0: float, r: float, K: float, t: float) -> float:
-        """Logistic growth: u = K / (1 + (K/u0 - 1)*exp(-r*t))."""
+    def logistic_growth(
+        C_0: float, carrying_capacity: float, growth_rate: float, t: float
+    ) -> float:
+        """Logistic growth from ``C_0`` toward ``carrying_capacity``."""
         ...
 
     @staticmethod
-    def lumped_exponential(T0: float, T_inf: float, tau: float, t: float) -> float:
-        """Lumped-capacitance: T = T_inf + (T0 - T_inf)*exp(-t/tau)."""
+    def lumped_exponential(C_0: float, C_inf: float, t: float, tau: float) -> float:
+        """``C_inf + (C_0-C_inf)*exp(-t/tau)``."""
         ...
 
     @staticmethod
-    def poiseuille_velocity(r: float, R: float, dp_dx: float, mu: float) -> float:
-        """Poiseuille velocity profile: u(r) = (1/(4*mu))*(-dp/dx)*(R² - r²)."""
+    def poiseuille_velocity(
+        r: float, radius: float, dp_dz: float, viscosity: float
+    ) -> float:
+        """Circular-pipe Poiseuille axial velocity."""
         ...
 
     @staticmethod
-    def poiseuille_max_velocity(R: float, dp_dx: float, mu: float) -> float:
+    def poiseuille_max_velocity(radius: float, dp_dz: float, viscosity: float) -> float:
         """Maximum velocity in Poiseuille flow."""
         ...
 
     @staticmethod
-    def poiseuille_flow_rate(R: float, dp_dx: float, mu: float) -> float:
+    def poiseuille_flow_rate(radius: float, dp_dz: float, viscosity: float) -> float:
         """Volumetric flow rate in Poiseuille flow: Q = pi*R⁴*(-dp/dx)/(8*mu)."""
         ...
 
     @staticmethod
-    def poiseuille_wall_shear(R: float, dp_dx: float) -> float:
+    def poiseuille_wall_shear(radius: float, dp_dz: float) -> float:
         """Wall shear stress in Poiseuille flow: tau_w = R*(-dp/dx)/2."""
         ...
 
     @staticmethod
-    def couette_velocity(y: float, H: float, U: float) -> float:
+    def plane_poiseuille_velocity(
+        y: float, half_height: float, dp_dx: float, viscosity: float
+    ) -> float:
+        """Pressure-driven velocity between two stationary parallel plates."""
+        ...
+
+    @staticmethod
+    def plane_poiseuille_max_velocity(
+        half_height: float, dp_dx: float, viscosity: float
+    ) -> float:
+        """Centerline plane-Poiseuille velocity."""
+        ...
+
+    @staticmethod
+    def couette_velocity(
+        y: float, gap_height: float, moving_wall_velocity: float
+    ) -> float:
         """Couette velocity profile: u(y) = U*y/H."""
         ...
 
     @staticmethod
-    def couette_max_velocity(U: float) -> float:
+    def couette_max_velocity(moving_wall_velocity: float) -> float:
         """Maximum velocity in Couette flow."""
         ...
 
     @staticmethod
     def taylor_couette_velocity(
-        r: float, R1: float, R2: float, omega1: float, omega2: float
+        r: float, a: float, b: float, omega_a: float, omega_b: float
     ) -> float:
         """Taylor-Couette azimuthal velocity."""
         ...
 
     @staticmethod
     def taylor_couette_torque(
-        R1: float, R2: float, omega1: float, omega2: float, mu: float, L: float
+        a: float,
+        b: float,
+        omega_a: float,
+        omega_b: float,
+        viscosity: float,
     ) -> float:
-        """Torque in Taylor-Couette flow."""
+        """Torque per unit axial length on the inner cylinder."""
         ...
 
     @staticmethod
-    def bernoulli_velocity(p1: float, p2: float, rho: float) -> float:
-        """Velocity from Bernoulli equation: v = sqrt(2*(p1-p2)/rho)."""
+    def bernoulli_velocity(
+        v1: float,
+        p1: float,
+        z1: float,
+        p2: float,
+        z2: float,
+        density: float,
+        g: float = 9.81,
+    ) -> float:
+        """Solve the steady inviscid Bernoulli relation for ``v2``."""
         ...
 
     @staticmethod
-    def maxwell_relaxation(tau: float, t: float, G: float, epsilon0: float) -> float:
-        """Maxwell stress relaxation: sigma(t) = G*epsilon0*exp(-t/tau)."""
+    def maxwell_relaxation(E: float, eta: float, epsilon_0: float, t: float) -> float:
+        """Maxwell stress relaxation with ``tau=eta/E``."""
         ...
 
     @staticmethod
-    def maxwell_relaxation_time(eta: float, G: float) -> float:
-        """Maxwell relaxation time: tau = eta/G."""
+    def maxwell_relaxation_time(E: float, eta: float) -> float:
+        """Maxwell relaxation time ``eta/E``."""
         ...
 
     @staticmethod
-    def kelvin_voigt_creep(t: float, tau: float, G: float, sigma0: float) -> float:
-        """Kelvin-Voigt creep: epsilon(t) = (sigma0/G)*(1 - exp(-t/tau))."""
+    def kelvin_voigt_creep(E: float, eta: float, sigma_0: float, t: float) -> float:
+        """Kelvin-Voigt creep with ``tau=eta/E``."""
         ...
 
     @staticmethod
     def sls_relaxation(
-        t: float, tau: float, G0: float, G_inf: float, epsilon0: float
+        E1: float, E2: float, eta: float, epsilon_0: float, t: float
     ) -> float:
         """Standard linear solid stress relaxation."""
         ...
 
     @staticmethod
-    def sls_creep(
-        t: float, tau: float, J0: float, J_inf: float, sigma0: float
-    ) -> float:
+    def sls_creep(E1: float, E2: float, eta: float, sigma_0: float, t: float) -> float:
         """Standard linear solid creep."""
         ...
 
     @staticmethod
     def burgers_creep(
-        t: float, G1: float, G2: float, eta1: float, eta2: float, sigma0: float
+        E1: float,
+        mu1: float,
+        E2: float,
+        mu2: float,
+        sigma_0: float,
+        t: float,
     ) -> float:
         """Burgers model creep response."""
         ...
 
     @staticmethod
     def burgers_compliance(
-        t: float, G1: float, G2: float, eta1: float, eta2: float
+        E1: float, mu1: float, E2: float, mu2: float, t: float
     ) -> float:
         """Burgers model compliance."""
         ...
 
     @staticmethod
-    def complex_modulus_magnitude(G_prime: float, G_double_prime: float) -> float:
+    def complex_modulus_magnitude(G1: float, G2: float) -> float:
         """Complex modulus magnitude: |G*| = sqrt(G'² + G''²)."""
         ...
 
     @staticmethod
-    def phase_angle(G_prime: float, G_double_prime: float) -> float:
+    def phase_angle(G1: float, G2: float) -> float:
         """Phase angle: delta = atan(G''/G')."""
         ...
 
     @staticmethod
-    def loss_tangent(G_prime: float, G_double_prime: float) -> float:
+    def loss_tangent(G1: float, G2: float) -> float:
         """Loss tangent: tan(delta) = G''/G'."""
         ...
 
@@ -2444,8 +3975,8 @@ class dimensionless:
     - Schmidt (Sc): Momentum vs mass diffusivity
     - Sherwood (Sh): Convective vs diffusive mass transfer
 
-    **Heat Transfer:**
-    - Biot (Bi): Surface vs internal thermal resistance
+    **Mass-transfer resistance:**
+    - Biot (Bi): Internal diffusive resistance divided by external resistance
     - Fourier (Fo): Heat diffusion scaling
 
     These numbers guide solver selection:
@@ -2454,62 +3985,104 @@ class dimensionless:
     - Bi < 0.1: Lumped capacitance valid
 
     Examples:
-        >>> # Check if flow is turbulent
-        >>> Re = dimensionless.reynolds(rho=1000, U=1.0, L=0.01, mu=0.003)
-        >>> print(f"Re = {Re:.0f}, {'turbulent' if Re > 2300 else 'laminar'}")
+        >>> # Compare with a geometry-specific transition criterion (for example,
+        >>> # the conventional fully developed circular-pipe heuristic)
+        >>> Re = dimensionless.reynolds(
+        ...     density=1000, velocity=1.0, length=0.01, viscosity=0.003
+        ... )
+        >>> print(f"Re = {Re:.0f}")
         >>>
         >>> # Check grid Peclet number for stability
-        >>> Pe_grid = dimensionless.peclet(U=0.01, L=dx, D=1e-9)
+        >>> Pe_grid = dimensionless.peclet(
+        ...     velocity=0.01, length=dx, diffusivity=1e-9
+        ... )
         >>> if Pe_grid > 2:
         ...     print("Use upwind scheme for stability")
     """
 
     @staticmethod
-    def reynolds(rho: float, U: float, L: float, mu: float) -> float:
+    def reynolds(
+        density: float, velocity: float, length: float, viscosity: float
+    ) -> float:
         """Reynolds number: Re = rho*U*L/mu."""
         ...
 
     @staticmethod
-    def reynolds_kinematic(U: float, L: float, nu: float) -> float:
+    def reynolds_kinematic(
+        velocity: float, length: float, kinematic_viscosity: float
+    ) -> float:
         """Reynolds number using kinematic viscosity: Re = U*L/nu."""
         ...
 
     @staticmethod
-    def peclet(U: float, L: float, D: float) -> float:
+    def peclet(velocity: float, length: float, diffusivity: float) -> float:
         """Peclet number: Pe = U*L/D."""
         ...
 
     @staticmethod
-    def schmidt(nu: float, D: float) -> float:
-        """Schmidt number: Sc = nu/D."""
+    def schmidt(viscosity: float, density: float, diffusivity: float) -> float:
+        """Schmidt number ``viscosity/(density*diffusivity)``."""
         ...
 
     @staticmethod
-    def schmidt_kinematic(mu: float, rho: float, D: float) -> float:
-        """Schmidt number: Sc = mu/(rho*D)."""
+    def schmidt_kinematic(kinematic_viscosity: float, diffusivity: float) -> float:
+        """Schmidt number ``kinematic_viscosity/diffusivity``."""
         ...
 
     @staticmethod
-    def sherwood(k_c: float, L: float, D: float) -> float:
+    def sherwood(h_m: float, length: float, diffusivity: float) -> float:
         """Sherwood number: Sh = k_c*L/D."""
         ...
 
     @staticmethod
-    def biot(h: float, L: float, k: float) -> float:
-        """Biot number: Bi = h*L/k."""
+    def biot(h_m: float, length: float, diffusivity: float) -> float:
+        """Mass-transfer Biot number ``h_m*length/diffusivity``."""
         ...
 
     @staticmethod
-    def fourier(alpha: float, t: float, L: float) -> float:
-        """Fourier number: Fo = alpha*t/L²."""
+    def fourier(diffusivity: float, time: float, length: float) -> float:
+        """Diffusive Fourier number ``diffusivity*time/length**2``."""
         ...
 
     @staticmethod
-    def is_lumped_valid(Bi: float) -> bool:
-        """Check if lumped capacitance is valid: Bi < 0.1."""
+    def is_lumped_valid(bi: float, threshold: float = 0.1) -> bool:
+        """Whether ``bi < threshold``."""
         ...
 
     @staticmethod
-    def is_convection_dominated(Pe: float) -> bool:
-        """Check if convection dominates: Pe > 1."""
+    def is_convection_dominated(pe: float, threshold: float = 1.0) -> bool:
+        """Whether ``pe > threshold``."""
         ...
+
+# =============================================================================
+# VTK output
+# =============================================================================
+
+def write_vtk(
+    mesh: StructuredMesh,
+    solution: ArrayLike,
+    filename: str,
+    field_name: str = "scalar",
+) -> None:
+    """Write one flat nodal field to a legacy VTK file."""
+    ...
+
+def write_vtk_series(
+    mesh: StructuredMesh,
+    solutions: list[ArrayLike],
+    times: list[float],
+    prefix: str,
+    field_name: str = "scalar",
+) -> None:
+    """Write numbered VTK snapshots for the supplied times."""
+    ...
+
+def write_vtk_series_with_metadata(
+    mesh: StructuredMesh,
+    solutions: list[ArrayLike],
+    times: list[float],
+    prefix: str,
+    field_name: str = "scalar",
+) -> None:
+    """Write numbered snapshots plus a ParaView ``.pvd`` time-series file."""
+    ...

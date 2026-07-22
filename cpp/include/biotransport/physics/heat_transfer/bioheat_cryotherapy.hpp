@@ -1,23 +1,11 @@
 /**
  * @file bioheat_cryotherapy.hpp
- * @brief Bioheat transfer solver with phase change for cryotherapy simulation.
- *
- * Solves the Pennes bioheat equation with:
- *   - Conduction with temperature-dependent thermal properties
- *   - Blood perfusion heat exchange
- *   - Metabolic heat generation
- *   - Phase change (freezing) via effective heat capacity method
- *   - Arrhenius thermal damage accumulation
- *
- * Applications: Cryosurgery, tumor ablation, tissue preservation.
- *
- * @see BioheatCryotherapyConfig for Python configuration dataclass.
+ * @brief Pennes bioheat solver with a dimensionally consistent phase-change model.
  */
 
 #ifndef BIOTRANSPORT_PHYSICS_HEAT_TRANSFER_BIOHEAT_CRYOTHERAPY_HPP
 #define BIOTRANSPORT_PHYSICS_HEAT_TRANSFER_BIOHEAT_CRYOTHERAPY_HPP
 
-#include <biotransport/core/mesh/indexing.hpp>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <cstdint>
 #include <vector>
@@ -25,81 +13,127 @@
 namespace biotransport {
 
 /**
- * @brief Output data structure from bioheat cryotherapy simulation.
+ * @brief Saved fields from a two-dimensional bioheat simulation.
  *
- * Contains time-series data of temperature and thermal damage fields.
- * Arrays are packed in row-major order: [frame][j][i].
+ * Field arrays use row-major layout `[frame][j][i]`. Temperatures are absolute
+ * temperatures in kelvin. `damage` is the Arrhenius heat-injury integral. It is
+ * not a cryogenic cell-death model and must not be interpreted as one.
  */
 struct BioheatSaved {
-    int nx = 0;      ///< Number of cells in x direction
-    int ny = 0;      ///< Number of cells in y direction
-    int frames = 0;  ///< Number of saved time frames
+    int nx = 0;      ///< Number of nodes in the x direction
+    int ny = 0;      ///< Number of nodes in the y direction
+    int frames = 0;  ///< Number of saved frames
 
-    std::vector<double> times_s;  ///< Time stamps for each frame [s]
-
-    /// Temperature field at each frame [K], packed as [frame][j][i]
-    std::vector<double> temperature_K;
-    /// Arrhenius damage integral Ω at each frame [-], packed as [frame][j][i]
-    std::vector<double> damage;
+    std::vector<double> times_s;                ///< Exact snapshot times [s]
+    std::vector<double> temperature_K;          ///< Absolute temperature [K]
+    std::vector<double> damage;                 ///< Arrhenius heat-injury integral [-]
+    std::vector<double> frozen_fraction;        ///< Apparent frozen fraction [0, 1]
+    std::vector<double> minimum_temperature_K;  ///< Spatial minimum for each frame [K]
+    std::vector<double> maximum_temperature_K;  ///< Spatial maximum for each frame [K]
+    double maximum_stable_dt_s = 0.0;           ///< Conservative explicit-Euler bound [s]
 };
 
 /**
- * @brief Solver for Pennes bioheat equation with phase change and damage.
+ * @brief Explicit finite-volume-style solver for the Pennes bioheat equation.
  *
- * Solves the transient bioheat equation:
- *   ρc ∂T/∂t = ∇·(k∇T) + ρ_b c_b w_b (T_a - T) + q_met
+ * The solver advances
  *
- * With modifications for cryotherapy:
- *   - Temperature-dependent thermal conductivity k(T)
- *   - Temperature-dependent specific heat c(T) with latent heat
- *   - Perfusion shutdown in frozen regions
- *   - Arrhenius damage accumulation: dΩ/dt = A·exp(-E_a/RT)
+ * \f[
+ * \rho_t c_{app}(T) \frac{\partial T}{\partial t}
+ * = \nabla\!\cdot(k(T)\nabla T)
+ * + \rho_b c_b \omega_b f_l(T)(T_a-T)
+ * + f_l(T)q_{met},
+ * \f]
+ *
+ * where \f$f_l=1-f_s\f$ and the apparent mass-specific heat capacity is
+ *
+ * \f[
+ * c_{app}(T)=f_l c_u+f_s c_f+L\left(-\frac{df_s}{dT}\right).
+ * \f]
+ *
+ * `T_freeze_range_K` is the width of a two-standard-deviation Gaussian mushy
+ * zone, so its Gaussian standard deviation is `T_freeze_range_K / 2`. All
+ * temperatures supplied to this class are in kelvin. The initial, arterial,
+ * and fixed outer-boundary temperatures all default to `T_body_K`; they can be
+ * separated with the explicit setters below.
+ *
+ * The Arrhenius integral is retained as a heat-injury diagnostic only. The
+ * class deliberately does not invent a low-temperature cell-death law.
+ * Probe-mask nodes are embedded fixed-temperature nodes, not a conjugate
+ * probe/tissue heat-transfer model: probe heat capacity, contact resistance,
+ * and coolant dynamics are outside this model. The perfusion and metabolism
+ * shutdown factors are likewise phenomenological extensions of Pennes' model
+ * into the freezing range and require application-specific validation.
  */
 class BioheatCryotherapySolver {
 public:
     /**
-     * @brief Construct a bioheat cryotherapy solver.
+     * @brief Construct a solver using SI units and absolute temperatures.
      *
-     * @param mesh           2D structured mesh for the tissue domain
-     * @param probe_mask     Binary mask (1 = probe location, 0 = tissue)
-     * @param perfusion_map  Blood perfusion rate at each node [1/s]
-     * @param q_met_map      Metabolic heat generation at each node [W/m³]
-     * @param rho_tissue     Tissue density [kg/m³]
-     * @param rho_blood      Blood density [kg/m³]
-     * @param c_blood        Blood specific heat [J/(kg·K)]
-     * @param k_unfrozen     Thermal conductivity of unfrozen tissue [W/(m·K)]
-     * @param k_frozen       Thermal conductivity of frozen tissue [W/(m·K)]
-     * @param c_unfrozen     Specific heat of unfrozen tissue [J/(kg·K)]
-     * @param c_frozen       Specific heat of frozen tissue [J/(kg·K)]
-     * @param T_body         Body/arterial temperature [K]
-     * @param T_probe        Cryoprobe temperature [K]
-     * @param T_freeze       Freezing point temperature [K]
-     * @param T_freeze_range Temperature range for phase transition [K]
-     * @param L_fusion       Latent heat of fusion [J/kg]
-     * @param A              Arrhenius frequency factor [1/s]
-     * @param E_a            Arrhenius activation energy [J/mol]
-     * @param R_gas          Universal gas constant [J/(mol·K)]
+     * `perfusion_map` is volumetric blood perfusion [m^3_blood/(m^3_tissue s)],
+     * numerically equivalent to s^-1. `q_met_map` is a volumetric source [W/m^3].
+     * The legacy `T_body_K` argument initializes the tissue and is also used for
+     * arterial blood and the fixed outer boundary unless explicit setters are
+     * called.
      */
     BioheatCryotherapySolver(const StructuredMesh& mesh, std::vector<std::uint8_t> probe_mask,
                              std::vector<double> perfusion_map, std::vector<double> q_met_map,
                              double rho_tissue, double rho_blood, double c_blood, double k_unfrozen,
-                             double k_frozen, double c_unfrozen, double c_frozen, double T_body,
-                             double T_probe, double T_freeze, double T_freeze_range,
+                             double k_frozen, double c_unfrozen, double c_frozen, double T_body_K,
+                             double T_probe_K, double T_freeze_K, double T_freeze_range_K,
                              double L_fusion, double A, double E_a, double R_gas);
 
+    /** Set a spatially uniform initial tissue temperature [K]. */
+    BioheatCryotherapySolver& setInitialTemperatureK(double temperature_K);
+
+    /** Set a node-wise initial tissue-temperature field [K]. */
+    BioheatCryotherapySolver& setInitialTemperatureFieldK(std::vector<double> temperature_K);
+
+    /** Set the arterial temperature in the Pennes perfusion term [K]. */
+    BioheatCryotherapySolver& setArterialTemperatureK(double temperature_K);
+
+    /** Set the fixed Dirichlet temperature on all four outer boundaries [K]. */
+    BioheatCryotherapySolver& setBoundaryTemperatureK(double temperature_K);
+
+    /** Apparent frozen mass fraction at an absolute temperature [0, 1]. */
+    [[nodiscard]] double frozenFraction(double temperature_K) const;
+
+    /** Temperature-dependent conductivity [W/(m K)]. */
+    [[nodiscard]] double thermalConductivity(double temperature_K) const;
+
+    /** Apparent mass-specific heat capacity, including latent heat [J/(kg K)]. */
+    [[nodiscard]] double effectiveSpecificHeat(double temperature_K) const;
+
+    /** Arrhenius heat-injury rate [1/s]; this is not a cryoinjury rate. */
+    [[nodiscard]] double arrheniusHeatInjuryRate(double temperature_K) const;
+
     /**
-     * @brief Run the bioheat simulation.
+     * @brief Conservative explicit-Euler time-step bound [s].
      *
-     * @param dt              Time step size [s]
-     * @param num_steps       Total number of time steps to run
-     * @param times_to_save_s Times at which to save snapshots [s]
-     * @return BioheatSaved   Simulation results with temperature and damage fields
+     * This sufficient bound uses the largest conductivity and perfusion and
+     * the smallest sensible heat capacity. It is therefore conservative in the
+     * mushy zone, where latent heat increases the apparent heat capacity.
+     */
+    [[nodiscard]] double maximumStableTimeStep() const;
+
+    /**
+     * @brief Simulate for exactly `dt * num_steps` seconds.
+     *
+     * `dt` is the maximum substep. The solver splits a substep when necessary
+     * to land exactly on an off-grid requested save time. Save times must be
+     * finite and lie in the closed simulation interval; duplicates are
+     * coalesced. An unstable `dt` is rejected before advancing the solution.
      */
     [[nodiscard]] BioheatSaved simulate(double dt, int num_steps,
                                         const std::vector<double>& times_to_save_s) const;
 
 private:
-    const StructuredMesh& mesh_;
+    [[nodiscard]] double frozenFractionUnchecked(double temperature_K) const noexcept;
+    [[nodiscard]] double thermalConductivityUnchecked(double temperature_K) const noexcept;
+    [[nodiscard]] double effectiveSpecificHeatUnchecked(double temperature_K) const noexcept;
+    [[nodiscard]] double arrheniusHeatInjuryRateUnchecked(double temperature_K) const noexcept;
+
+    StructuredMesh mesh_;
     int nx_;
     int ny_;
     int stride_;
@@ -107,6 +141,7 @@ private:
     std::vector<std::uint8_t> probe_mask_;
     std::vector<double> perfusion_map_;
     std::vector<double> q_met_map_;
+    std::vector<double> initial_temperature_K_;
 
     double rho_tissue_;
     double rho_blood_;
@@ -117,7 +152,8 @@ private:
     double c_unfrozen_;
     double c_frozen_;
 
-    double T_body_;
+    double T_arterial_;
+    double T_boundary_;
     double T_probe_;
 
     double T_freeze_;
@@ -127,8 +163,6 @@ private:
     double A_;
     double E_a_;
     double R_gas_;
-
-    // Use shared idx() from indexing.hpp
 };
 
 }  // namespace biotransport

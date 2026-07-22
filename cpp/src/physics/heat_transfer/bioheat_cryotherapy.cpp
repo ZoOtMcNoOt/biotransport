@@ -1,15 +1,54 @@
 #include <algorithm>
 #include <biotransport/physics/heat_transfer/bioheat_cryotherapy.hpp>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 namespace biotransport {
+namespace {
+
+constexpr double kSqrtTwo = 1.41421356237309504880168872420969808;
+constexpr double kInvSqrtTwoPi = 0.39894228040143267793994605993438187;
+
+void requireFinite(double value, const char* name) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument(std::string(name) + " must be finite");
+    }
+}
+
+void requirePositive(double value, const char* name) {
+    requireFinite(value, name);
+    if (!(value > 0.0)) {
+        throw std::invalid_argument(std::string(name) + " must be greater than zero");
+    }
+}
+
+void requireNonnegative(double value, const char* name) {
+    requireFinite(value, name);
+    if (value < 0.0) {
+        throw std::invalid_argument(std::string(name) + " must be nonnegative");
+    }
+}
+
+void requireAbsoluteTemperature(double value, const char* name) {
+    requirePositive(value, name);
+}
+
+double harmonicMean(double first, double second) noexcept {
+    const double smaller = std::min(first, second);
+    const double larger = std::max(first, second);
+    return (2.0 * smaller) / (1.0 + smaller / larger);
+}
+
+}  // namespace
 
 BioheatCryotherapySolver::BioheatCryotherapySolver(
     const StructuredMesh& mesh, std::vector<std::uint8_t> probe_mask,
     std::vector<double> perfusion_map, std::vector<double> q_met_map, double rho_tissue,
     double rho_blood, double c_blood, double k_unfrozen, double k_frozen, double c_unfrozen,
-    double c_frozen, double T_body, double T_probe, double T_freeze, double T_freeze_range,
+    double c_frozen, double T_body_K, double T_probe_K, double T_freeze_K, double T_freeze_range_K,
     double L_fusion, double A, double E_a, double R_gas)
     : mesh_(mesh),
       nx_(mesh_.nx()),
@@ -18,6 +57,7 @@ BioheatCryotherapySolver::BioheatCryotherapySolver(
       probe_mask_(std::move(probe_mask)),
       perfusion_map_(std::move(perfusion_map)),
       q_met_map_(std::move(q_met_map)),
+      initial_temperature_K_(static_cast<std::size_t>(mesh_.numNodes()), T_body_K),
       rho_tissue_(rho_tissue),
       rho_blood_(rho_blood),
       c_blood_(c_blood),
@@ -25,189 +65,386 @@ BioheatCryotherapySolver::BioheatCryotherapySolver(
       k_frozen_(k_frozen),
       c_unfrozen_(c_unfrozen),
       c_frozen_(c_frozen),
-      T_body_(T_body),
-      T_probe_(T_probe),
-      T_freeze_(T_freeze),
-      T_freeze_range_(T_freeze_range),
+      T_arterial_(T_body_K),
+      T_boundary_(T_body_K),
+      T_probe_(T_probe_K),
+      T_freeze_(T_freeze_K),
+      T_freeze_range_(T_freeze_range_K),
       L_fusion_(L_fusion),
       A_(A),
       E_a_(E_a),
       R_gas_(R_gas) {
     if (mesh_.is1D()) {
-        throw std::invalid_argument("BioheatCryotherapySolver requires a 2D mesh");
+        throw std::invalid_argument("BioheatCryotherapySolver requires a two-dimensional mesh");
+    }
+    if (nx_ < 2 || ny_ < 2) {
+        throw std::invalid_argument(
+            "BioheatCryotherapySolver requires at least two cells in each direction");
     }
 
-    const int n = mesh_.numNodes();
-    if (static_cast<int>(probe_mask_.size()) != n) {
-        throw std::invalid_argument("probe_mask size doesn't match mesh");
+    const auto node_count = static_cast<std::size_t>(mesh_.numNodes());
+    if (probe_mask_.size() != node_count) {
+        throw std::invalid_argument("probe_mask size must equal mesh.numNodes()");
     }
-    if (static_cast<int>(perfusion_map_.size()) != n) {
-        throw std::invalid_argument("perfusion_map size doesn't match mesh");
+    if (perfusion_map_.size() != node_count) {
+        throw std::invalid_argument("perfusion_map size must equal mesh.numNodes()");
     }
-    if (static_cast<int>(q_met_map_.size()) != n) {
-        throw std::invalid_argument("q_met_map size doesn't match mesh");
+    if (q_met_map_.size() != node_count) {
+        throw std::invalid_argument("q_met_map size must equal mesh.numNodes()");
     }
 
-    if (!(rho_tissue_ > 0.0) || !(rho_blood_ > 0.0) || !(c_blood_ > 0.0)) {
-        throw std::invalid_argument("rho/c must be positive");
+    requirePositive(rho_tissue_, "rho_tissue");
+    requirePositive(rho_blood_, "rho_blood");
+    requirePositive(c_blood_, "c_blood");
+    requirePositive(k_unfrozen_, "k_unfrozen");
+    requirePositive(k_frozen_, "k_frozen");
+    requirePositive(c_unfrozen_, "c_unfrozen");
+    requirePositive(c_frozen_, "c_frozen");
+    requireAbsoluteTemperature(T_body_K, "T_body_K");
+    requireAbsoluteTemperature(T_probe_, "T_probe_K");
+    requireAbsoluteTemperature(T_freeze_, "T_freeze_K");
+    requirePositive(T_freeze_range_, "T_freeze_range_K");
+    requireNonnegative(L_fusion_, "L_fusion");
+    requireNonnegative(A_, "A");
+    requireNonnegative(E_a_, "E_a");
+    requirePositive(R_gas_, "R_gas");
+
+    if (!(T_probe_ < T_freeze_)) {
+        throw std::invalid_argument(
+            "T_probe_K must be below T_freeze_K for a cryotherapy simulation");
     }
-    if (!(k_unfrozen_ > 0.0) || !(k_frozen_ > 0.0) || !(c_unfrozen_ > 0.0) || !(c_frozen_ > 0.0)) {
-        throw std::invalid_argument("k/c must be positive");
+    if (!(T_freeze_ < T_body_K)) {
+        throw std::invalid_argument(
+            "T_body_K must be above T_freeze_K for the default unfrozen initial state");
     }
-    if (!(T_freeze_range_ > 0.0) || !(R_gas_ > 0.0)) {
-        throw std::invalid_argument("T_freeze_range and R_gas must be positive");
+
+    for (std::size_t node = 0; node < node_count; ++node) {
+        if (probe_mask_[node] > 1U) {
+            throw std::invalid_argument("probe_mask must contain only 0 or 1");
+        }
+        requireNonnegative(perfusion_map_[node], "perfusion_map entry");
+        requireNonnegative(q_met_map_[node], "q_met_map entry");
     }
+
+    if (!std::isfinite(effectiveSpecificHeatUnchecked(T_freeze_))) {
+        throw std::invalid_argument(
+            "phase-change parameters produce a non-finite apparent heat capacity");
+    }
+    const double stable_dt_s = maximumStableTimeStep();
+    if (!std::isfinite(stable_dt_s) || !(stable_dt_s > 0.0)) {
+        throw std::invalid_argument(
+            "material properties and mesh must produce a positive finite stability bound");
+    }
+}
+
+BioheatCryotherapySolver& BioheatCryotherapySolver::setInitialTemperatureK(double temperature_K) {
+    requireAbsoluteTemperature(temperature_K, "initial temperature");
+    std::fill(initial_temperature_K_.begin(), initial_temperature_K_.end(), temperature_K);
+    return *this;
+}
+
+BioheatCryotherapySolver& BioheatCryotherapySolver::setInitialTemperatureFieldK(
+    std::vector<double> temperature_K) {
+    if (temperature_K.size() != initial_temperature_K_.size()) {
+        throw std::invalid_argument("initial temperature field size must equal mesh.numNodes()");
+    }
+    for (double value : temperature_K) {
+        requireAbsoluteTemperature(value, "initial temperature field entry");
+    }
+    initial_temperature_K_ = std::move(temperature_K);
+    return *this;
+}
+
+BioheatCryotherapySolver& BioheatCryotherapySolver::setArterialTemperatureK(double temperature_K) {
+    requireAbsoluteTemperature(temperature_K, "arterial temperature");
+    T_arterial_ = temperature_K;
+    return *this;
+}
+
+BioheatCryotherapySolver& BioheatCryotherapySolver::setBoundaryTemperatureK(double temperature_K) {
+    requireAbsoluteTemperature(temperature_K, "boundary temperature");
+    T_boundary_ = temperature_K;
+    return *this;
+}
+
+double BioheatCryotherapySolver::frozenFractionUnchecked(double temperature_K) const noexcept {
+    const double sigma_K = 0.5 * T_freeze_range_;
+    const double standardized = (temperature_K - T_freeze_) / (kSqrtTwo * sigma_K);
+    return 0.5 * std::erfc(standardized);
+}
+
+double BioheatCryotherapySolver::thermalConductivityUnchecked(double temperature_K) const noexcept {
+    const double frozen = frozenFractionUnchecked(temperature_K);
+    return k_unfrozen_ * (1.0 - frozen) + k_frozen_ * frozen;
+}
+
+double BioheatCryotherapySolver::effectiveSpecificHeatUnchecked(
+    double temperature_K) const noexcept {
+    const double frozen = frozenFractionUnchecked(temperature_K);
+    const double sensible = c_unfrozen_ * (1.0 - frozen) + c_frozen_ * frozen;
+    const double sigma_K = 0.5 * T_freeze_range_;
+    const double z = (temperature_K - T_freeze_) / sigma_K;
+    const double minus_dfrozen_dT = kInvSqrtTwoPi * std::exp(-0.5 * z * z) / sigma_K;
+    return sensible + L_fusion_ * minus_dfrozen_dT;
+}
+
+double BioheatCryotherapySolver::arrheniusHeatInjuryRateUnchecked(
+    double temperature_K) const noexcept {
+    return A_ * std::exp(-E_a_ / (R_gas_ * temperature_K));
+}
+
+double BioheatCryotherapySolver::frozenFraction(double temperature_K) const {
+    requireAbsoluteTemperature(temperature_K, "temperature_K");
+    return frozenFractionUnchecked(temperature_K);
+}
+
+double BioheatCryotherapySolver::thermalConductivity(double temperature_K) const {
+    requireAbsoluteTemperature(temperature_K, "temperature_K");
+    return thermalConductivityUnchecked(temperature_K);
+}
+
+double BioheatCryotherapySolver::effectiveSpecificHeat(double temperature_K) const {
+    requireAbsoluteTemperature(temperature_K, "temperature_K");
+    const double value = effectiveSpecificHeatUnchecked(temperature_K);
+    if (!std::isfinite(value) || !(value > 0.0)) {
+        throw std::runtime_error("apparent heat capacity is non-finite or non-positive");
+    }
+    return value;
+}
+
+double BioheatCryotherapySolver::arrheniusHeatInjuryRate(double temperature_K) const {
+    requireAbsoluteTemperature(temperature_K, "temperature_K");
+    const double value = arrheniusHeatInjuryRateUnchecked(temperature_K);
+    if (!std::isfinite(value) || value < 0.0) {
+        throw std::runtime_error("Arrhenius heat-injury rate is non-finite");
+    }
+    return value;
+}
+
+double BioheatCryotherapySolver::maximumStableTimeStep() const {
+    const double maximum_conductivity = std::max(k_unfrozen_, k_frozen_);
+    const double minimum_specific_heat = std::min(c_unfrozen_, c_frozen_);
+    const double maximum_perfusion =
+        *std::max_element(perfusion_map_.begin(), perfusion_map_.end());
+
+    const double diffusion_diagonal =
+        2.0 * maximum_conductivity *
+        (1.0 / (mesh_.dx() * mesh_.dx()) + 1.0 / (mesh_.dy() * mesh_.dy()));
+    const double perfusion_diagonal = rho_blood_ * c_blood_ * maximum_perfusion;
+    return rho_tissue_ * minimum_specific_heat / (diffusion_diagonal + perfusion_diagonal);
 }
 
 BioheatSaved BioheatCryotherapySolver::simulate(double dt, int num_steps,
                                                 const std::vector<double>& times_to_save_s) const {
-    if (!(dt > 0.0) || num_steps <= 0) {
-        throw std::invalid_argument("dt and num_steps must be positive");
+    requirePositive(dt, "dt");
+    if (num_steps <= 0) {
+        throw std::invalid_argument("num_steps must be greater than zero");
     }
 
-    std::vector<double> save_times = times_to_save_s;
+    const double total_time_s = dt * static_cast<double>(num_steps);
+    if (!std::isfinite(total_time_s)) {
+        throw std::invalid_argument("dt * num_steps must be finite");
+    }
+
+    const double stable_dt_s = maximumStableTimeStep();
+    const double comparison_tolerance = 32.0 * std::numeric_limits<double>::epsilon() * stable_dt_s;
+    if (dt > stable_dt_s + comparison_tolerance) {
+        throw std::invalid_argument("dt exceeds the conservative explicit stability limit of " +
+                                    std::to_string(stable_dt_s) + " s");
+    }
+
+    const double time_tolerance =
+        64.0 * std::numeric_limits<double>::epsilon() * std::max({1.0, total_time_s, dt});
+    std::vector<double> save_times;
+    save_times.reserve(times_to_save_s.size());
+    for (double requested : times_to_save_s) {
+        requireFinite(requested, "save time");
+        if (requested < -time_tolerance || requested > total_time_s + time_tolerance) {
+            throw std::invalid_argument("save times must lie in [0, dt * num_steps]");
+        }
+        save_times.push_back(std::clamp(requested, 0.0, total_time_s));
+    }
     std::sort(save_times.begin(), save_times.end());
+    save_times.erase(std::unique(save_times.begin(), save_times.end(),
+                                 [&](double first, double second) {
+                                     return std::abs(first - second) <= time_tolerance;
+                                 }),
+                     save_times.end());
 
-    const int n = mesh_.numNodes();
+    const auto node_count = static_cast<std::size_t>(mesh_.numNodes());
+    std::vector<double> temperature = initial_temperature_K_;
+    std::vector<double> next_temperature(node_count, 0.0);
+    std::vector<double> damage(node_count, 0.0);
 
-    std::vector<double> T(n, T_body_);
-    std::vector<double> damage(n, 0.0);
-    std::vector<double> T_new(n, T_body_);
+    const auto flatIndex = [this](int i, int j) {
+        return static_cast<std::size_t>(j * stride_ + i);
+    };
 
-    // Fix probe temperature
-    for (int i = 0; i < n; ++i) {
-        if (probe_mask_[i] != 0) {
-            T[i] = T_probe_;
+    // Enforce the fixed outer-boundary condition at t=0.
+    for (int i = 0; i <= nx_; ++i) {
+        temperature[flatIndex(i, 0)] = T_boundary_;
+        temperature[flatIndex(i, ny_)] = T_boundary_;
+    }
+    for (int j = 0; j <= ny_; ++j) {
+        temperature[flatIndex(0, j)] = T_boundary_;
+        temperature[flatIndex(nx_, j)] = T_boundary_;
+    }
+    // An embedded cryoprobe is a stronger local Dirichlet constraint.
+    for (std::size_t node = 0; node < node_count; ++node) {
+        if (probe_mask_[node] != 0U) {
+            temperature[node] = T_probe_;
         }
     }
 
-    BioheatSaved out;
-    out.nx = nx_ + 1;
-    out.ny = ny_ + 1;
+    BioheatSaved result;
+    result.nx = nx_ + 1;
+    result.ny = ny_ + 1;
+    result.maximum_stable_dt_s = stable_dt_s;
 
-    const std::size_t nodes_per_frame =
-        static_cast<std::size_t>(out.nx) * static_cast<std::size_t>(out.ny);
-
-    std::size_t next_save = 0;
-    double time = 0.0;
-
-    auto do_save = [&](double t_save) {
-        out.times_s.push_back(t_save);
-        out.temperature_K.resize(static_cast<std::size_t>(out.times_s.size()) * nodes_per_frame);
-        out.damage.resize(static_cast<std::size_t>(out.times_s.size()) * nodes_per_frame);
-
-        double* T_frame = out.temperature_K.data() +
-                          (static_cast<std::size_t>(out.times_s.size() - 1) * nodes_per_frame);
-        double* D_frame = out.damage.data() +
-                          (static_cast<std::size_t>(out.times_s.size() - 1) * nodes_per_frame);
-
-        std::copy(T.begin(), T.end(), T_frame);
-        std::copy(damage.begin(), damage.end(), D_frame);
+    const std::size_t nodes_per_frame = node_count;
+    auto save = [&](double time_s) {
+        result.times_s.push_back(time_s);
+        result.temperature_K.insert(result.temperature_K.end(), temperature.begin(),
+                                    temperature.end());
+        result.damage.insert(result.damage.end(), damage.begin(), damage.end());
+        for (double value : temperature) {
+            result.frozen_fraction.push_back(frozenFractionUnchecked(value));
+        }
+        const auto extrema = std::minmax_element(temperature.begin(), temperature.end());
+        result.minimum_temperature_K.push_back(*extrema.first);
+        result.maximum_temperature_K.push_back(*extrema.second);
     };
 
-    // Save at t=0 if requested (within half step)
-    while (next_save < save_times.size() && time + 0.5 * dt >= save_times[next_save]) {
-        do_save(save_times[next_save]);
-        next_save += 1;
+    std::size_t next_save = 0;
+    double time_s = 0.0;
+    if (next_save < save_times.size() && save_times[next_save] <= time_tolerance) {
+        save(0.0);
+        ++next_save;
     }
 
-    const double dx = mesh_.dx();
-    const double dy = mesh_.dy();
-    const double dx2 = dx * dx;
-    const double dy2 = dy * dy;
+    const double inverse_dx_squared = 1.0 / (mesh_.dx() * mesh_.dx());
+    const double inverse_dy_squared = 1.0 / (mesh_.dy() * mesh_.dy());
 
-    const double sigma = (T_freeze_range_ / 2.0);
-    const double pi = std::acos(-1.0);
-    const double inv_sqrt_2pi = 1.0 / std::sqrt(2.0 * pi);
-    const double inv_sigma_norm = inv_sqrt_2pi / sigma;
-
-    const double erf_scale = (T_freeze_range_ / std::sqrt(2.0));
-
-    for (int step = 1; step <= num_steps; ++step) {
-        // Interior updates
+    auto advance = [&](double step_s) {
 #ifdef BIOTRANSPORT_ENABLE_OPENMP
 #pragma omp parallel for schedule(static)
 #endif
         for (int j = 1; j < ny_; ++j) {
             for (int i = 1; i < nx_; ++i) {
-                const std::size_t c = idx(i, j, stride_);
-
-                if (probe_mask_[c] != 0) {
-                    T_new[c] = T_probe_;
+                const std::size_t center = flatIndex(i, j);
+                if (probe_mask_[center] != 0U) {
+                    next_temperature[center] = T_probe_;
                     continue;
                 }
 
-                const std::size_t e = idx(i + 1, j, stride_);
-                const std::size_t w = idx(i - 1, j, stride_);
-                const std::size_t nidx = idx(i, j + 1, stride_);
-                const std::size_t sidx = idx(i, j - 1, stride_);
+                const std::size_t east = flatIndex(i + 1, j);
+                const std::size_t west = flatIndex(i - 1, j);
+                const std::size_t north = flatIndex(i, j + 1);
+                const std::size_t south = flatIndex(i, j - 1);
+                const double center_temperature = temperature[center];
 
-                const double Tc = T[c];
+                const double center_conductivity = thermalConductivityUnchecked(center_temperature);
+                const double east_conductivity = harmonicMean(
+                    center_conductivity, thermalConductivityUnchecked(temperature[east]));
+                const double west_conductivity = harmonicMean(
+                    center_conductivity, thermalConductivityUnchecked(temperature[west]));
+                const double north_conductivity = harmonicMean(
+                    center_conductivity, thermalConductivityUnchecked(temperature[north]));
+                const double south_conductivity = harmonicMean(
+                    center_conductivity, thermalConductivityUnchecked(temperature[south]));
 
-                const double phase_fraction = 0.5 * (1.0 + std::erf((T_freeze_ - Tc) / erf_scale));
+                const double conduction =
+                    (east_conductivity * (temperature[east] - center_temperature) -
+                     west_conductivity * (center_temperature - temperature[west])) *
+                        inverse_dx_squared +
+                    (north_conductivity * (temperature[north] - center_temperature) -
+                     south_conductivity * (center_temperature - temperature[south])) *
+                        inverse_dy_squared;
 
-                const double k = k_unfrozen_ * (1.0 - phase_fraction) + k_frozen_ * phase_fraction;
-                const double c_base =
-                    c_unfrozen_ * (1.0 - phase_fraction) + c_frozen_ * phase_fraction;
+                const double liquid_fraction = 1.0 - frozenFractionUnchecked(center_temperature);
+                const double perfusion = rho_blood_ * c_blood_ * perfusion_map_[center] *
+                                         liquid_fraction * (T_arterial_ - center_temperature);
+                const double metabolism = q_met_map_[center] * liquid_fraction;
+                const double volumetric_heat_capacity =
+                    rho_tissue_ * effectiveSpecificHeatUnchecked(center_temperature);
 
-                const double z = (Tc - T_freeze_) / sigma;
-                const double latent_peak = std::exp(-0.5 * z * z);
-                const double c_effective =
-                    c_base + (L_fusion_ * rho_tissue_) * latent_peak * inv_sigma_norm;
-
-                const double w_b_factor = 1.0 - phase_fraction;
-
-                const double lap_T =
-                    (T[e] - 2.0 * Tc + T[w]) / dx2 + (T[nidx] - 2.0 * Tc + T[sidx]) / dy2;
-
-                const double diffusion = k * lap_T;
-                const double perfusion =
-                    rho_blood_ * c_blood_ * perfusion_map_[c] * w_b_factor * (T_body_ - Tc);
-                const double metabolism = q_met_map_[c] * w_b_factor;
-
-                const double dT_dt =
-                    (diffusion + perfusion + metabolism) / (rho_tissue_ * c_effective);
-
-                const double T_next = Tc + dt * dT_dt;
-                T_new[c] = T_next;
-
-                // Damage update (skip probe)
-                const double rate = A_ * std::exp(-E_a_ / (R_gas_ * Tc));
-                const double freezing_factor =
-                    (Tc < T_freeze_) ? (10.0 * (1.0 - Tc / T_freeze_)) : 0.0;
-                const double damage_inc = dt * rate * (1.0 + freezing_factor);
-                damage[c] += damage_inc;
+                next_temperature[center] =
+                    center_temperature +
+                    step_s * (conduction + perfusion + metabolism) / volumetric_heat_capacity;
             }
         }
 
-        // Dirichlet boundary at all edges
         for (int i = 0; i <= nx_; ++i) {
-            T_new[idx(i, 0, stride_)] = T_body_;
-            T_new[idx(i, ny_, stride_)] = T_body_;
+            next_temperature[flatIndex(i, 0)] = T_boundary_;
+            next_temperature[flatIndex(i, ny_)] = T_boundary_;
         }
         for (int j = 0; j <= ny_; ++j) {
-            T_new[idx(0, j, stride_)] = T_body_;
-            T_new[idx(nx_, j, stride_)] = T_body_;
+            next_temperature[flatIndex(0, j)] = T_boundary_;
+            next_temperature[flatIndex(nx_, j)] = T_boundary_;
         }
-
-        // Fix probe temperature on full mask
-        for (int i = 0; i < n; ++i) {
-            if (probe_mask_[i] != 0) {
-                T_new[i] = T_probe_;
+        for (std::size_t node = 0; node < node_count; ++node) {
+            if (probe_mask_[node] != 0U) {
+                next_temperature[node] = T_probe_;
             }
         }
 
-        T.swap(T_new);
-        time = step * dt;
+        for (std::size_t node = 0; node < node_count; ++node) {
+            const double next_value = next_temperature[node];
+            if (!std::isfinite(next_value) || !(next_value > 0.0)) {
+                throw std::runtime_error("temperature became non-finite or non-positive at node " +
+                                         std::to_string(node));
+            }
+            if (probe_mask_[node] == 0U) {
+                const double old_rate = arrheniusHeatInjuryRateUnchecked(temperature[node]);
+                const double new_rate = arrheniusHeatInjuryRateUnchecked(next_value);
+                damage[node] += 0.5 * step_s * (old_rate + new_rate);
+                if (!std::isfinite(damage[node]) || damage[node] < 0.0) {
+                    throw std::runtime_error("Arrhenius damage became non-finite at node " +
+                                             std::to_string(node));
+                }
+            }
+        }
+        temperature.swap(next_temperature);
+    };
 
-        while (next_save < save_times.size() && time + 0.5 * dt >= save_times[next_save]) {
-            do_save(save_times[next_save]);
-            next_save += 1;
+    while (time_s < total_time_s - time_tolerance) {
+        while (next_save < save_times.size() && save_times[next_save] <= time_s + time_tolerance) {
+            save(save_times[next_save]);
+            ++next_save;
+        }
+
+        double target_time_s = total_time_s;
+        if (next_save < save_times.size()) {
+            target_time_s = std::min(target_time_s, save_times[next_save]);
+        }
+        const double step_s = std::min(dt, target_time_s - time_s);
+        if (!(step_s > 0.0) || !std::isfinite(step_s)) {
+            throw std::runtime_error("time integration failed to make positive finite progress");
+        }
+
+        advance(step_s);
+        time_s += step_s;
+        if (std::abs(time_s - target_time_s) <= time_tolerance) {
+            time_s = target_time_s;
         }
     }
 
-    out.frames = static_cast<int>(out.times_s.size());
-    return out;
+    time_s = total_time_s;
+    while (next_save < save_times.size()) {
+        if (std::abs(save_times[next_save] - time_s) > time_tolerance) {
+            throw std::runtime_error("failed to reach a requested save time exactly");
+        }
+        save(save_times[next_save]);
+        ++next_save;
+    }
+
+    result.frames = static_cast<int>(result.times_s.size());
+    const std::size_t expected_values = static_cast<std::size_t>(result.frames) * nodes_per_frame;
+    if (result.temperature_K.size() != expected_values || result.damage.size() != expected_values ||
+        result.frozen_fraction.size() != expected_values) {
+        throw std::logic_error("internal bioheat result packing error");
+    }
+    return result;
 }
 
 }  // namespace biotransport

@@ -74,6 +74,9 @@ struct RunResult {
 class ExplicitFD {
 public:
     ExplicitFD& safetyFactor(double factor) {
+        if (!std::isfinite(factor) || factor <= 0.0 || factor > 1.0) {
+            throw std::invalid_argument("safety factor must be finite and in (0, 1]");
+        }
         safety_factor_ = factor;
         return *this;
     }
@@ -91,14 +94,14 @@ public:
      * @return RunResult with solution and statistics
      */
     RunResult run(const TransportProblem& problem, double t_end) const {
-        if (t_end <= 0.0) {
-            throw std::invalid_argument("t_end must be positive");
+        if (!std::isfinite(t_end) || t_end <= 0.0) {
+            throw std::invalid_argument("t_end must be finite and positive");
         }
 
         // Validate diffusivity based on type
         if (problem.hasUniformDiffusivity()) {
-            if (problem.diffusivity() <= 0.0) {
-                throw std::invalid_argument("Uniform diffusivity must be > 0");
+            if (!std::isfinite(problem.diffusivity()) || problem.diffusivity() <= 0.0) {
+                throw std::invalid_argument("Uniform diffusivity must be finite and positive");
             }
         } else {
             if (problem.diffusivityField().empty()) {
@@ -106,10 +109,18 @@ public:
             }
         }
 
-        const auto& mesh = problem.mesh();
-
         // Choose solver based on problem configuration
         if (problem.hasAdvection()) {
+            if (problem.hasReaction()) {
+                throw std::invalid_argument(
+                    "legacy ExplicitFD does not couple advection and reaction; use "
+                    "solve_transport");
+            }
+            if (!problem.hasUniformDiffusivity()) {
+                throw std::invalid_argument(
+                    "legacy ExplicitFD does not couple advection and variable diffusivity; use "
+                    "solve_transport");
+            }
             return runAdvectionDiffusion(problem, t_end);
         } else {
             return runReactionDiffusion(problem, t_end);
@@ -125,8 +136,28 @@ private:
     };
 
     static StepsAndDt chooseStepsAndDt(double t_end, double dt) {
-        const int steps = std::max(1, static_cast<int>(std::ceil(t_end / dt)));
+        if (!std::isfinite(t_end) || t_end <= 0.0 || !std::isfinite(dt) || dt <= 0.0) {
+            throw std::invalid_argument(
+                "end time and candidate time step must be finite and positive");
+        }
+        const double required_steps = std::ceil(t_end / dt);
+        if (!std::isfinite(required_steps) ||
+            required_steps > static_cast<double>(std::numeric_limits<int>::max())) {
+            throw std::overflow_error(
+                "explicit solve would require more steps than the legacy integer API can "
+                "represent");
+        }
+        const int steps = std::max(1, static_cast<int>(required_steps));
         return StepsAndDt{steps, t_end / static_cast<double>(steps)};
+    }
+
+    template <typename SolverT>
+    static void configureBoundaries(SolverT& solver, const TransportProblem& problem) {
+        const int boundary_count = problem.mesh().is1D() ? 2 : 4;
+        for (int index = 0; index < boundary_count; ++index) {
+            solver.setBoundaryCondition(static_cast<Boundary>(index),
+                                        problem.boundaries()[static_cast<std::size_t>(index)]);
+        }
     }
 
     RunResult runReactionDiffusion(const TransportProblem& problem, double t_end) const {
@@ -134,7 +165,16 @@ private:
 
         // Check for variable diffusivity - use specialized solver
         if (!problem.hasUniformDiffusivity()) {
+            if (problem.hasReaction()) {
+                throw std::invalid_argument(
+                    "legacy ExplicitFD does not couple variable diffusivity and reaction; use "
+                    "solve_transport");
+            }
             return runVariableDiffusion(problem, t_end);
+        }
+
+        if (!problem.hasReaction()) {
+            return runDiffusion(problem, t_end);
         }
 
         // Check if this is a linear decay problem - use specialized solver with implicit treatment
@@ -150,14 +190,24 @@ private:
         if (!problem.initial().empty()) {
             solver.setInitialCondition(problem.initial());
         }
-        for (int i = 0; i < 4; ++i) {
-            solver.setBoundaryCondition(i, problem.boundaries()[i]);
-        }
+        configureBoundaries(solver, problem);
 
         // Choose stable time step
         const double dt = chooseStableDt(mesh, problem.diffusivity(), 0.0);
         const auto steps_dt = chooseStepsAndDt(t_end, dt);
 
+        return runConfiguredSolver(solver, mesh, t_end, steps_dt.steps, steps_dt.dt_eff);
+    }
+
+    RunResult runDiffusion(const TransportProblem& problem, double t_end) const {
+        const auto& mesh = problem.mesh();
+        DiffusionSolver solver(mesh, problem.diffusivity());
+        if (!problem.initial().empty()) {
+            solver.setInitialCondition(problem.initial());
+        }
+        configureBoundaries(solver, problem);
+        const double dt = chooseStableDt(mesh, problem.diffusivity(), 0.0);
+        const auto steps_dt = chooseStepsAndDt(t_end, dt);
         return runConfiguredSolver(solver, mesh, t_end, steps_dt.steps, steps_dt.dt_eff);
     }
 
@@ -171,9 +221,7 @@ private:
         if (!problem.initial().empty()) {
             solver.setInitialCondition(problem.initial());
         }
-        for (int i = 0; i < 4; ++i) {
-            solver.setBoundaryCondition(i, problem.boundaries()[i]);
-        }
+        configureBoundaries(solver, problem);
 
         // Use max diffusivity for stability calculation
         const double dt = chooseStableDt(mesh, solver.maxDiffusivity(), 0.0);
@@ -193,9 +241,7 @@ private:
         if (!problem.initial().empty()) {
             solver.setInitialCondition(problem.initial());
         }
-        for (int i = 0; i < 4; ++i) {
-            solver.setBoundaryCondition(i, problem.boundaries()[i]);
-        }
+        configureBoundaries(solver, problem);
 
         // Only need diffusion stability (implicit decay is unconditionally stable)
         const double dt = chooseStableDt(mesh, problem.diffusivity(), 0.0);
@@ -223,9 +269,7 @@ private:
         if (!problem.initial().empty()) {
             solver->setInitialCondition(problem.initial());
         }
-        for (int i = 0; i < 4; ++i) {
-            solver->setBoundaryCondition(i, problem.boundaries()[i]);
-        }
+        configureBoundaries(*solver, problem);
 
         const double dt = solver->maxTimeStep(safety_factor_);
         const auto steps_dt = chooseStepsAndDt(t_end, dt);

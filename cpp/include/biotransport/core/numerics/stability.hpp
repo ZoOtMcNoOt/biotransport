@@ -6,19 +6,73 @@
  * @brief Time step stability helpers for explicit finite-difference schemes.
  *
  * These functions compute maximum stable time steps (dt) for various PDEs
- * solved with explicit time integration. All assume 2nd-order central
- * differencing in space with forward Euler in time.
+ * solved with forward Euler time integration. Diffusion uses second-order
+ * centered differences; the advection and combined advection-diffusion bounds
+ * are for first-order upwind advection.
  *
  * Usage:
- *   double dt = suggest_diffusion_dt(dx, D, 0.9);  // 90% of CFL limit
+ *   double dt = suggest_diffusion_dt_1d(dx, D, 0.9);  // 90% of the limit
  */
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace biotransport {
 namespace stability {
+
+namespace detail {
+
+inline void requireFinite(double value, const char* name) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument(std::string(name) + " must be finite");
+    }
+}
+
+inline void requirePositive(double value, const char* name) {
+    requireFinite(value, name);
+    if (value <= 0.0) {
+        throw std::invalid_argument(std::string(name) + " must be positive");
+    }
+}
+
+inline void requireNonnegative(double value, const char* name) {
+    requireFinite(value, name);
+    if (value < 0.0) {
+        throw std::invalid_argument(std::string(name) + " must be non-negative");
+    }
+}
+
+inline void requireSafety(double safety) {
+    requireFinite(safety, "safety");
+    if (safety <= 0.0 || safety > 1.0) {
+        throw std::invalid_argument("safety must be in (0, 1]");
+    }
+}
+
+inline double stepFromRate(long double rate, double safety, const char* name) {
+    if (!std::isfinite(rate) || rate <= 0.0L) {
+        throw std::overflow_error(std::string(name) + " rate is non-finite or non-positive");
+    }
+    const long double step = static_cast<long double>(safety) / rate;
+    if (!std::isfinite(step) || step <= 0.0L ||
+        step > static_cast<long double>(std::numeric_limits<double>::max())) {
+        throw std::overflow_error(std::string(name) + " time step is not representable");
+    }
+    return static_cast<double>(step);
+}
+
+inline double finiteResult(long double value, const char* name) {
+    if (!std::isfinite(value) ||
+        std::abs(value) > static_cast<long double>(std::numeric_limits<double>::max())) {
+        throw std::overflow_error(std::string(name) + " is not representable");
+    }
+    return static_cast<double>(value);
+}
+
+}  // namespace detail
 
 /**
  * @brief Maximum stable dt for 1D diffusion equation.
@@ -31,20 +85,18 @@ namespace stability {
  * @return Maximum stable time step
  */
 inline double suggest_diffusion_dt_1d(double dx, double D, double safety = 0.9) {
-    if (dx <= 0.0)
-        throw std::invalid_argument("dx must be positive");
-    if (D <= 0.0)
-        throw std::invalid_argument("D must be positive");
-    if (safety <= 0.0 || safety > 1.0)
-        throw std::invalid_argument("safety must be in (0, 1]");
-
-    return safety * (dx * dx) / (2.0 * D);
+    detail::requirePositive(dx, "dx");
+    detail::requirePositive(D, "D");
+    detail::requireSafety(safety);
+    const long double spacing = dx;
+    const long double rate = 2.0L * D / (spacing * spacing);
+    return detail::stepFromRate(rate, safety, "1D diffusion");
 }
 
 /**
  * @brief Maximum stable dt for 2D diffusion equation.
  *
- * Stability condition: dt <= min(dx², dy²) / (4D)
+ * Stability condition: dt <= 1 / (2D(1/dx² + 1/dy²))
  *
  * @param dx Grid spacing in x
  * @param dy Grid spacing in y
@@ -53,17 +105,15 @@ inline double suggest_diffusion_dt_1d(double dx, double D, double safety = 0.9) 
  * @return Maximum stable time step
  */
 inline double suggest_diffusion_dt_2d(double dx, double dy, double D, double safety = 0.9) {
-    if (dx <= 0.0)
-        throw std::invalid_argument("dx must be positive");
-    if (dy <= 0.0)
-        throw std::invalid_argument("dy must be positive");
-    if (D <= 0.0)
-        throw std::invalid_argument("D must be positive");
-    if (safety <= 0.0 || safety > 1.0)
-        throw std::invalid_argument("safety must be in (0, 1]");
-
-    const double min_h2 = std::min(dx * dx, dy * dy);
-    return safety * min_h2 / (4.0 * D);
+    detail::requirePositive(dx, "dx");
+    detail::requirePositive(dy, "dy");
+    detail::requirePositive(D, "D");
+    detail::requireSafety(safety);
+    const long double x_spacing = dx;
+    const long double y_spacing = dy;
+    const long double rate =
+        2.0L * D * (1.0L / (x_spacing * x_spacing) + 1.0L / (y_spacing * y_spacing));
+    return detail::stepFromRate(rate, safety, "2D diffusion");
 }
 
 /**
@@ -77,16 +127,14 @@ inline double suggest_diffusion_dt_2d(double dx, double dy, double D, double saf
  * @return Maximum stable time step
  */
 inline double suggest_advection_dt_1d(double dx, double v, double safety = 0.9) {
-    if (dx <= 0.0)
-        throw std::invalid_argument("dx must be positive");
-    if (safety <= 0.0 || safety > 1.0)
-        throw std::invalid_argument("safety must be in (0, 1]");
-
-    const double v_mag = std::abs(v);
-    if (v_mag < 1e-15)
-        return 1e10;  // No advection limit
-
-    return safety * dx / v_mag;
+    detail::requirePositive(dx, "dx");
+    detail::requireFinite(v, "v");
+    detail::requireSafety(safety);
+    const long double rate = std::abs(static_cast<long double>(v)) / dx;
+    if (rate == 0.0L) {
+        return std::numeric_limits<double>::max();
+    }
+    return detail::stepFromRate(rate, safety, "1D advection");
 }
 
 /**
@@ -103,24 +151,27 @@ inline double suggest_advection_dt_1d(double dx, double v, double safety = 0.9) 
  */
 inline double suggest_advection_dt_2d(double dx, double dy, double vx, double vy,
                                       double safety = 0.9) {
-    if (dx <= 0.0)
-        throw std::invalid_argument("dx must be positive");
-    if (dy <= 0.0)
-        throw std::invalid_argument("dy must be positive");
-    if (safety <= 0.0 || safety > 1.0)
-        throw std::invalid_argument("safety must be in (0, 1]");
-
-    const double inv_cfl = std::abs(vx) / dx + std::abs(vy) / dy;
-    if (inv_cfl < 1e-15)
-        return 1e10;  // No advection limit
-
-    return safety / inv_cfl;
+    detail::requirePositive(dx, "dx");
+    detail::requirePositive(dy, "dy");
+    detail::requireFinite(vx, "vx");
+    detail::requireFinite(vy, "vy");
+    detail::requireSafety(safety);
+    const long double rate =
+        std::abs(static_cast<long double>(vx)) / dx + std::abs(static_cast<long double>(vy)) / dy;
+    if (rate == 0.0L) {
+        return std::numeric_limits<double>::max();
+    }
+    return detail::stepFromRate(rate, safety, "2D advection");
 }
 
 /**
  * @brief Maximum stable dt for advection-diffusion (1D).
  *
- * Takes the minimum of diffusion and advection constraints.
+ * For forward Euler with first-order upwind advection, non-negative stencil
+ * coefficients require
+ *   dt * (2D/dx² + |v|/dx) <= 1.
+ * This combined bound is stricter than taking the minimum of the separate
+ * diffusion and advection limits.
  *
  * @param dx Grid spacing
  * @param D Diffusion coefficient
@@ -130,15 +181,22 @@ inline double suggest_advection_dt_2d(double dx, double dy, double vx, double vy
  */
 inline double suggest_advection_diffusion_dt_1d(double dx, double D, double v,
                                                 double safety = 0.9) {
-    const double dt_diff = suggest_diffusion_dt_1d(dx, D, safety);
-    const double dt_adv = suggest_advection_dt_1d(dx, v, safety);
-    return std::min(dt_diff, dt_adv);
+    detail::requirePositive(dx, "dx");
+    detail::requirePositive(D, "D");
+    detail::requireFinite(v, "v");
+    detail::requireSafety(safety);
+    const long double spacing = dx;
+    const long double rate =
+        2.0L * D / (spacing * spacing) + std::abs(static_cast<long double>(v)) / spacing;
+    return detail::stepFromRate(rate, safety, "1D advection-diffusion");
 }
 
 /**
  * @brief Maximum stable dt for advection-diffusion (2D).
  *
- * Takes the minimum of diffusion and advection constraints.
+ * For forward Euler with dimension-by-dimension first-order upwinding,
+ * non-negative stencil coefficients require
+ *   dt * (2D(1/dx² + 1/dy²) + |vx|/dx + |vy|/dy) <= 1.
  *
  * @param dx Grid spacing in x
  * @param dy Grid spacing in y
@@ -150,15 +208,26 @@ inline double suggest_advection_diffusion_dt_1d(double dx, double D, double v,
  */
 inline double suggest_advection_diffusion_dt_2d(double dx, double dy, double D, double vx,
                                                 double vy, double safety = 0.9) {
-    const double dt_diff = suggest_diffusion_dt_2d(dx, dy, D, safety);
-    const double dt_adv = suggest_advection_dt_2d(dx, dy, vx, vy, safety);
-    return std::min(dt_diff, dt_adv);
+    detail::requirePositive(dx, "dx");
+    detail::requirePositive(dy, "dy");
+    detail::requirePositive(D, "D");
+    detail::requireFinite(vx, "vx");
+    detail::requireFinite(vy, "vy");
+    detail::requireSafety(safety);
+    const long double x_spacing = dx;
+    const long double y_spacing = dy;
+    const long double rate =
+        2.0L * D * (1.0L / (x_spacing * x_spacing) + 1.0L / (y_spacing * y_spacing)) +
+        std::abs(static_cast<long double>(vx)) / x_spacing +
+        std::abs(static_cast<long double>(vy)) / y_spacing;
+    return detail::stepFromRate(rate, safety, "2D advection-diffusion");
 }
 
 /**
  * @brief Maximum stable dt for reaction-diffusion with linear decay.
  *
- * Combines diffusion stability with reaction stability: dt <= 1/k
+ * For forward Euler applied to dc/dt = D*d2c/dx2 - k*c, the
+ * positivity-preserving combined bound is dt*(2D/dx^2 + k) <= 1.
  *
  * @param dx Grid spacing
  * @param D Diffusion coefficient
@@ -167,12 +236,13 @@ inline double suggest_advection_diffusion_dt_2d(double dx, double dy, double D, 
  * @return Maximum stable time step
  */
 inline double suggest_reaction_diffusion_dt_1d(double dx, double D, double k, double safety = 0.9) {
-    const double dt_diff = suggest_diffusion_dt_1d(dx, D, safety);
-    if (k <= 0.0)
-        return dt_diff;
-
-    const double dt_react = safety / k;
-    return std::min(dt_diff, dt_react);
+    detail::requirePositive(dx, "dx");
+    detail::requirePositive(D, "D");
+    detail::requireNonnegative(k, "k");
+    detail::requireSafety(safety);
+    const long double spacing = dx;
+    const long double rate = 2.0L * D / (spacing * spacing) + k;
+    return detail::stepFromRate(rate, safety, "1D reaction-diffusion");
 }
 
 /**
@@ -187,18 +257,24 @@ inline double suggest_reaction_diffusion_dt_1d(double dx, double D, double k, do
  */
 inline double suggest_reaction_diffusion_dt_2d(double dx, double dy, double D, double k,
                                                double safety = 0.9) {
-    const double dt_diff = suggest_diffusion_dt_2d(dx, dy, D, safety);
-    if (k <= 0.0)
-        return dt_diff;
-
-    const double dt_react = safety / k;
-    return std::min(dt_diff, dt_react);
+    detail::requirePositive(dx, "dx");
+    detail::requirePositive(dy, "dy");
+    detail::requirePositive(D, "D");
+    detail::requireNonnegative(k, "k");
+    detail::requireSafety(safety);
+    const long double x_spacing = dx;
+    const long double y_spacing = dy;
+    const long double rate =
+        2.0L * D * (1.0L / (x_spacing * x_spacing) + 1.0L / (y_spacing * y_spacing)) + k;
+    return detail::stepFromRate(rate, safety, "2D reaction-diffusion");
 }
 
 /**
  * @brief Maximum stable dt for Michaelis-Menten kinetics.
  *
- * Linearization at u=0 gives f'(0) = -Vmax/Km, so dt <= Km/Vmax
+ * Linearization at u=0 gives the maximum loss slope Vmax/Km. The returned
+ * positivity bound combines that slope with the diffusion depletion rate
+ * instead of taking two separate minima.
  *
  * @param dx Grid spacing
  * @param D Diffusion coefficient
@@ -209,14 +285,15 @@ inline double suggest_reaction_diffusion_dt_2d(double dx, double dy, double D, d
  */
 inline double suggest_michaelis_menten_dt_1d(double dx, double D, double Vmax, double Km,
                                              double safety = 0.9) {
-    if (Vmax <= 0.0)
-        throw std::invalid_argument("Vmax must be positive");
-    if (Km <= 0.0)
-        throw std::invalid_argument("Km must be positive");
-
-    const double dt_diff = suggest_diffusion_dt_1d(dx, D, safety);
-    const double dt_react = safety * Km / Vmax;
-    return std::min(dt_diff, dt_react);
+    detail::requirePositive(dx, "dx");
+    detail::requirePositive(D, "D");
+    detail::requirePositive(Vmax, "Vmax");
+    detail::requirePositive(Km, "Km");
+    detail::requireSafety(safety);
+    const long double spacing = dx;
+    const long double rate = 2.0L * D / (spacing * spacing) +
+                             static_cast<long double>(Vmax) / static_cast<long double>(Km);
+    return detail::stepFromRate(rate, safety, "Michaelis-Menten reaction-diffusion");
 }
 
 /**
@@ -231,9 +308,12 @@ inline double suggest_michaelis_menten_dt_1d(double dx, double D, double Vmax, d
  * @return Péclet number (cell Péclet number)
  */
 inline double peclet_number(double dx, double v, double D) {
-    if (D <= 0.0)
-        throw std::invalid_argument("D must be positive");
-    return std::abs(v) * dx / D;
+    detail::requirePositive(dx, "dx");
+    detail::requireFinite(v, "v");
+    detail::requirePositive(D, "D");
+    const long double value =
+        std::abs(static_cast<long double>(v)) * static_cast<long double>(dx) / D;
+    return detail::finiteResult(value, "Peclet number");
 }
 
 /**
@@ -248,9 +328,12 @@ inline double peclet_number(double dx, double v, double D) {
  * @return Courant number
  */
 inline double courant_number(double dt, double dx, double v) {
-    if (dx <= 0.0)
-        throw std::invalid_argument("dx must be positive");
-    return std::abs(v) * dt / dx;
+    detail::requireNonnegative(dt, "dt");
+    detail::requirePositive(dx, "dx");
+    detail::requireFinite(v, "v");
+    const long double value =
+        std::abs(static_cast<long double>(v)) * static_cast<long double>(dt) / dx;
+    return detail::finiteResult(value, "Courant number");
 }
 
 /**
@@ -266,9 +349,13 @@ inline double courant_number(double dt, double dx, double v) {
  * @return Fourier number
  */
 inline double fourier_number(double dt, double dx, double D) {
-    if (dx <= 0.0)
-        throw std::invalid_argument("dx must be positive");
-    return D * dt / (dx * dx);
+    detail::requireNonnegative(dt, "dt");
+    detail::requirePositive(dx, "dx");
+    detail::requireNonnegative(D, "D");
+    const long double spacing = dx;
+    const long double value =
+        static_cast<long double>(D) * static_cast<long double>(dt) / (spacing * spacing);
+    return detail::finiteResult(value, "Fourier number");
 }
 
 }  // namespace stability

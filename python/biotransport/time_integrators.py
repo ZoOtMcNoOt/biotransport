@@ -1,17 +1,16 @@
-"""
-Time Integration Methods for Transport Simulations.
+"""Legacy Python time-integration orchestration.
 
-Provides higher-order time integration methods beyond Forward Euler:
-- Heun's method (RK2) - 2nd order accurate
-- Classic RK4 - 4th order accurate
+The standalone :func:`euler_step`, :func:`heun_step`, and :func:`rk4_step`
+functions are generic ODE building blocks.  The :class:`HeunIntegrator` and
+:class:`RK4Integrator` problem wrappers are deliberately narrower: they only
+implement one-dimensional, uniform-diffusivity diffusion with fixed
+Dirichlet values at the left and right boundaries.  They reject other
+transport physics instead of silently dropping it.
 
-These methods offer better time accuracy for problems with:
-- Smooth solutions
-- Stiff reactions
-- Long-time integration
-
-Note: Higher-order methods require more function evaluations per step
-but can use larger time steps while maintaining accuracy.
+For general transport problems, including reactions, sources, advection,
+variable diffusivity, multidimensional meshes, or natural boundary
+conditions, use :func:`biotransport.solve`.  The ``euler`` branch of
+:func:`integrate` delegates to that canonical C++ solver.
 
 Example:
     >>> mesh = bt.mesh_1d(100, 0.0, 1.0)
@@ -25,12 +24,97 @@ Example:
 
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+
 import numpy as np
 
 from ._core import (
-    TransportProblem,
+    BoundaryCondition,
+    BoundaryType,
     StructuredMesh,
+    TransportProblem,
 )
+
+
+_RK4_NEGATIVE_REAL_AXIS_RADIUS = 2.785293563405282
+
+
+def _problem_flag(problem: TransportProblem, name: str, component: str) -> bool:
+    """Read a native problem capability required for honest legacy dispatch."""
+    accessor = getattr(problem, name, None)
+    if accessor is None:
+        raise RuntimeError(
+            f"{component} requires a current biotransport native extension with "
+            f"TransportProblem.{name}(). Rebuild the extension before using this "
+            "legacy Python integrator."
+        )
+    return bool(accessor())
+
+
+def _validate_legacy_diffusion_problem(
+    problem: TransportProblem,
+    component: str,
+) -> tuple[StructuredMesh, float, BoundaryCondition, BoundaryCondition]:
+    """Validate the intentionally narrow problem contract of Python steppers."""
+    mesh = problem.mesh()
+    if not mesh.is_1d():
+        raise ValueError(
+            f"{component} supports only 1D diffusion; use biotransport.solve "
+            "for 2D or 3D transport."
+        )
+    if not _problem_flag(problem, "has_uniform_diffusivity", component):
+        raise ValueError(
+            f"{component} does not support variable diffusivity; "
+            "use biotransport.solve."
+        )
+    if _problem_flag(problem, "has_reaction", component):
+        raise ValueError(
+            f"{component} does not support reactions or sources; "
+            "use biotransport.solve."
+        )
+    if _problem_flag(problem, "has_advection", component):
+        raise ValueError(
+            f"{component} does not support advection; use biotransport.solve."
+        )
+
+    diffusivity = float(problem.diffusivity())
+    if not np.isfinite(diffusivity) or diffusivity < 0.0:
+        raise ValueError(f"{component} requires a finite, non-negative diffusivity")
+
+    boundaries = problem.boundaries()
+    left_bc = boundaries[0]
+    right_bc = boundaries[1]
+    if (
+        left_bc.type != BoundaryType.DIRICHLET
+        or right_bc.type != BoundaryType.DIRICHLET
+    ):
+        raise ValueError(
+            f"{component} supports Dirichlet left/right boundaries only; "
+            "use biotransport.solve for Neumann or Robin conditions."
+        )
+
+    return mesh, diffusivity, left_bc, right_bc
+
+
+def _validate_safety_factor(value: float, component: str) -> float:
+    safety = float(value)
+    if not np.isfinite(safety) or not 0.0 < safety <= 1.0:
+        raise ValueError(f"{component} safety_factor must be in (0, 1]")
+    return safety
+
+
+def _validate_solve_times(
+    t_end: float, dt: Optional[float]
+) -> tuple[float, Optional[float]]:
+    final_time = float(t_end)
+    if not np.isfinite(final_time) or final_time <= 0.0:
+        raise ValueError("t_end must be finite and positive")
+    if dt is None:
+        return final_time, None
+
+    requested_dt = float(dt)
+    if not np.isfinite(requested_dt) or requested_dt <= 0.0:
+        raise ValueError("dt must be finite and positive")
+    return final_time, requested_dt
 
 
 @dataclass
@@ -51,18 +135,15 @@ def _compute_diffusion_rhs(
     mesh: StructuredMesh,
     u: np.ndarray,
     D: float,
-    boundary_values: tuple,
 ) -> np.ndarray:
-    """Compute the right-hand side for the diffusion equation: du/dt = D * d²u/dx².
+    """Compute the 1D uniform-diffusion right-hand side.
 
-    Uses second-order central differences for the Laplacian.
+    The caller owns enforcement of the validated Dirichlet boundary values.
 
     Args:
         mesh: The computational mesh
         u: Current solution array
         D: Diffusion coefficient
-        boundary_values: Tuple of (left_value, right_value) for Dirichlet BCs
-
     Returns:
         Array of du/dt values
     """
@@ -76,8 +157,7 @@ def _compute_diffusion_rhs(
     for i in range(1, n - 1):
         dudt[i] = D * (u[i - 1] - 2 * u[i] + u[i + 1]) / dx2
 
-    # Boundary nodes: Dirichlet (du/dt = 0 for fixed values)
-    # Note: BCs are applied after the update, so we set dudt to maintain them
+    # Fixed Dirichlet nodes do not evolve.
     dudt[0] = 0.0
     dudt[-1] = 0.0
 
@@ -152,10 +232,14 @@ def rk4_step(u: np.ndarray, rhs: Callable, t: float, dt: float) -> np.ndarray:
 
 
 class RK4Integrator:
-    """4th-order Runge-Kutta integrator for diffusion problems.
+    """Legacy RK4 wrapper for a narrow 1D diffusion problem.
 
     This integrator uses method of lines: discretize in space first,
     then integrate the resulting ODE system in time using RK4.
+
+    Only a uniform, non-negative diffusivity and Dirichlet conditions at both
+    ends are supported.  General transport physics belongs in
+    :func:`biotransport.solve`.
 
     Compared to Forward Euler (1st order), RK4 provides:
     - 4th-order time accuracy (error ~ O(dt⁴))
@@ -167,7 +251,9 @@ class RK4Integrator:
 
     Example:
         >>> mesh = bt.mesh_1d(50, 0.0, 1.0)
-        >>> problem = bt.Problem(mesh).diffusivity(0.01).initial_condition(u0)
+        >>> problem = (bt.Problem(mesh).diffusivity(0.01).initial_condition(u0)
+        ...            .dirichlet(bt.Boundary.Left, 0.0)
+        ...            .dirichlet(bt.Boundary.Right, 0.0))
         >>> integrator = bt.RK4Integrator(problem)
         >>> result = integrator.solve(t_end=1.0, dt=0.01)
     """
@@ -185,33 +271,27 @@ class RK4Integrator:
             safety_factor: Factor applied to CFL-based dt (default 0.5 for RK4)
         """
         self.problem = problem
-        self.mesh = problem.mesh()
-        self.D = problem.diffusivity()
-        self.safety = safety_factor
+        self.mesh, self.D, self.left_bc, self.right_bc = (
+            _validate_legacy_diffusion_problem(problem, "RK4Integrator")
+        )
+        self.safety = _validate_safety_factor(safety_factor, "RK4Integrator")
 
         # Get initial condition
-        self.u0 = np.array(problem.initial())
-
-        # Get boundary conditions
-        boundaries = problem.boundaries()
-        self.left_bc = boundaries[0]
-        self.right_bc = boundaries[1]
+        self.u0 = np.asarray(problem.initial(), dtype=float).copy()
 
     def max_stable_dt(self) -> float:
         """Compute the maximum stable time step for RK4.
 
-        For RK4 with the diffusion equation, stability requires:
-        dt ≤ 2.78 * dx² / (4D)  (approximately)
-
-        This is more permissive than Forward Euler's dt ≤ dx²/(2D).
+        For centered 1D diffusion, the most negative semi-discrete eigenvalue
+        approaches ``-4D/dx²``.  Classical RK4 is stable on the negative real
+        axis through approximately ``-2.7852935634``, so
+        ``dt <= 2.7852935634 * dx² / (4D)``.
         """
+        if self.D == 0.0:
+            return float("inf")
         dx = self.mesh.dx()
-        # RK4 stability region is larger than Euler
-        # For 1D diffusion: dt_max ≈ 2.78 * dx²/(4D) ≈ 0.7 * dx²/D
-        # Use conservative factor
-        dt_cfl = dx * dx / (2 * self.D)
-        # RK4 can use about 2x larger dt than Euler
-        return self.safety * 2.0 * dt_cfl
+        stability_limit = _RK4_NEGATIVE_REAL_AXIS_RADIUS * dx * dx / (4.0 * self.D)
+        return self.safety * stability_limit
 
     def solve(
         self,
@@ -232,10 +312,12 @@ class RK4Integrator:
         """
         import time as time_module
 
+        t_end, dt = _validate_solve_times(t_end, dt)
+
         # Determine time step
         dt_max = self.max_stable_dt()
         if dt is None:
-            dt = dt_max
+            dt = t_end if not np.isfinite(dt_max) else dt_max
         else:
             # Enforce stability - use at most the stable dt
             dt = min(dt, dt_max)
@@ -246,22 +328,19 @@ class RK4Integrator:
 
         # Initialize
         u = self.u0.copy()
+        u[0] = self.left_bc.value
+        u[-1] = self.right_bc.value
         t = 0.0
         history = [u.copy()] if store_history else None
 
         # RHS function for diffusion
-        def rhs(u_state: np.ndarray, t_val: float) -> np.ndarray:
-            return _compute_diffusion_rhs(
-                self.mesh,
-                u_state,
-                self.D,
-                (self.left_bc.value, self.right_bc.value),
-            )
+        def rhs(u_state: np.ndarray, _t_val: float) -> np.ndarray:
+            return _compute_diffusion_rhs(self.mesh, u_state, self.D)
 
         # Time integration loop
         start = time_module.perf_counter()
 
-        for step in range(num_steps):
+        for _ in range(num_steps):
             u = rk4_step(u, rhs, t, dt)
 
             # Apply boundary conditions
@@ -295,11 +374,15 @@ class RK4Integrator:
 
 
 class HeunIntegrator:
-    """2nd-order Heun (improved Euler) integrator for diffusion problems.
+    """Legacy Heun wrapper for a narrow 1D diffusion problem.
 
-    This is a good compromise between Forward Euler and RK4:
+    Within its supported uniform-diffusion contract, this offers:
     - 2nd-order time accuracy (error ~ O(dt²))
     - Only 2 function evaluations per step (vs 4 for RK4)
+
+    Reactions, sources, advection, variable diffusivity, multidimensional
+    meshes, and non-Dirichlet conditions are rejected.  Use
+    :func:`biotransport.solve` for those problems.
 
     Example:
         >>> integrator = bt.HeunIntegrator(problem)
@@ -319,22 +402,24 @@ class HeunIntegrator:
             safety_factor: Factor applied to CFL-based dt
         """
         self.problem = problem
-        self.mesh = problem.mesh()
-        self.D = problem.diffusivity()
-        self.safety = safety_factor
+        self.mesh, self.D, self.left_bc, self.right_bc = (
+            _validate_legacy_diffusion_problem(problem, "HeunIntegrator")
+        )
+        self.safety = _validate_safety_factor(safety_factor, "HeunIntegrator")
 
-        self.u0 = np.array(problem.initial())
-
-        boundaries = problem.boundaries()
-        self.left_bc = boundaries[0]
-        self.right_bc = boundaries[1]
+        self.u0 = np.asarray(problem.initial(), dtype=float).copy()
 
     def max_stable_dt(self) -> float:
-        """Compute the maximum stable time step for Heun's method."""
+        """Return the safety-scaled centered-diffusion stability limit.
+
+        Explicit Heun/RK2 reaches ``-2`` on the negative real axis, exactly
+        the same limit as Forward Euler for this semi-discrete operator.
+        """
+        if self.D == 0.0:
+            return float("inf")
         dx = self.mesh.dx()
         dt_cfl = dx * dx / (2 * self.D)
-        # Heun has slightly better stability than Euler
-        return self.safety * 1.5 * dt_cfl
+        return self.safety * dt_cfl
 
     def solve(
         self,
@@ -346,9 +431,10 @@ class HeunIntegrator:
         """Solve the problem to t_end using Heun's method."""
         import time as time_module
 
+        t_end, dt = _validate_solve_times(t_end, dt)
         dt_max = self.max_stable_dt()
         if dt is None:
-            dt = dt_max
+            dt = t_end if not np.isfinite(dt_max) else dt_max
         else:
             # Enforce stability
             dt = min(dt, dt_max)
@@ -357,20 +443,17 @@ class HeunIntegrator:
         dt = t_end / num_steps
 
         u = self.u0.copy()
+        u[0] = self.left_bc.value
+        u[-1] = self.right_bc.value
         t = 0.0
         history = [u.copy()] if store_history else None
 
-        def rhs(u_state: np.ndarray, t_val: float) -> np.ndarray:
-            return _compute_diffusion_rhs(
-                self.mesh,
-                u_state,
-                self.D,
-                (self.left_bc.value, self.right_bc.value),
-            )
+        def rhs(u_state: np.ndarray, _t_val: float) -> np.ndarray:
+            return _compute_diffusion_rhs(self.mesh, u_state, self.D)
 
         start = time_module.perf_counter()
 
-        for step in range(num_steps):
+        for _ in range(num_steps):
             u = heun_step(u, rhs, t, dt)
 
             u[0] = self.left_bc.value
@@ -408,9 +491,12 @@ def integrate(
     method: str = "rk4",
     dt: Optional[float] = None,
 ) -> IntegrationResult:
-    """Solve a transport problem using the specified time integration method.
+    """Dispatch to canonical Euler or limited legacy Python integrators.
 
-    This is a convenience function that selects the appropriate integrator.
+    ``method="euler"`` uses the canonical C++ transport solver and preserves
+    every configured problem term.  ``"heun"`` and ``"rk4"`` retain the
+    legacy Python orchestration and therefore accept only 1D uniform diffusion
+    with Dirichlet conditions at both ends.
 
     Args:
         problem: The transport problem to solve
@@ -425,33 +511,44 @@ def integrate(
         >>> result = bt.integrate(problem, t_end=1.0, method="rk4")
         >>> print(f"Final solution: {result.solution}")
     """
-    if method.lower() == "euler":
-        # Use the standard ExplicitFD for Euler
+    normalized_method = method.lower()
+    if normalized_method not in {"euler", "heun", "rk4"}:
+        raise ValueError(
+            f"Unknown integration method: {method}. Choose from: 'euler', 'heun', 'rk4'"
+        )
+
+    if normalized_method == "euler":
+        import time as time_module
+
         from .run import solve
 
-        run_result = solve(problem, t_end, dt=dt)
+        t_end, dt = _validate_solve_times(t_end, dt)
+        start = time_module.perf_counter()
+        run_result = solve(
+            problem,
+            end_time=t_end,
+            time_step=dt,
+            method="explicit",
+        )
+        elapsed = time_module.perf_counter() - start
+        diagnostics = run_result.diagnostics
         return IntegrationResult(
-            solution=np.array(run_result.solution()),
-            time=t_end,
+            solution=np.asarray(run_result.concentration, dtype=float).copy(),
+            time=float(run_result.time),
             stats={
-                "steps": run_result.stats.steps,
-                "dt": run_result.stats.dt,
-                "t_end": run_result.stats.t_end,
-                "wall_time_s": run_result.stats.wall_time_s,
+                "steps": diagnostics.steps,
+                "dt": diagnostics.maximum_time_step,
+                "dt_min": diagnostics.minimum_time_step,
+                "t_end": run_result.time,
+                "wall_time_s": elapsed,
                 "method": "euler",
+                "diagnostics": diagnostics,
             },
         )
 
-    elif method.lower() == "heun":
+    if normalized_method == "heun":
         integrator = HeunIntegrator(problem)
         return integrator.solve(t_end, dt=dt)
 
-    elif method.lower() == "rk4":
-        integrator = RK4Integrator(problem)
-        return integrator.solve(t_end, dt=dt)
-
-    else:
-        raise ValueError(
-            f"Unknown integration method: {method}. "
-            f"Choose from: 'euler', 'heun', 'rk4'"
-        )
+    integrator = RK4Integrator(problem)
+    return integrator.solve(t_end, dt=dt)

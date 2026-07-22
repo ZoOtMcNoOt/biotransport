@@ -7,6 +7,28 @@ import numpy as np
 import biotransport as bt
 
 
+def trapezoidal_mass(mesh, values):
+    """Integral for the vertex-centred control volumes used by the solver."""
+    field = np.asarray(values).reshape(mesh.nz() + 1, mesh.ny() + 1, mesh.nx() + 1)
+    weights = np.ones_like(field)
+    weights[:, :, (0, -1)] *= 0.5
+    weights[:, (0, -1), :] *= 0.5
+    weights[(0, -1), :, :] *= 0.5
+    return np.sum(weights * field) * mesh.dx() * mesh.dy() * mesh.dz()
+
+
+def set_homogeneous_neumann(solver):
+    for face in (
+        bt.Boundary3D.XMin,
+        bt.Boundary3D.XMax,
+        bt.Boundary3D.YMin,
+        bt.Boundary3D.YMax,
+        bt.Boundary3D.ZMin,
+        bt.Boundary3D.ZMax,
+    ):
+        solver.set_neumann_boundary(face, 0.0)
+
+
 class TestStructuredMesh3D(unittest.TestCase):
     """Tests for 3D structured mesh."""
 
@@ -71,9 +93,11 @@ class TestDiffusionSolver3D(unittest.TestCase):
         mesh = bt.StructuredMesh3D(5, 5, 5, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
         solver = bt.DiffusionSolver3D(mesh, 0.01)
 
-        # Set all 6 faces
-        solver.set_dirichlet_boundary(bt.Boundary3D.XMin, 1.0)
-        solver.set_dirichlet_boundary(bt.Boundary3D.XMax, 0.0)
+        # A constant Dirichlet value on every face is compatible at all edges
+        # and corners. Conflicting face traces are rejected instead of being
+        # silently resolved by face-application order.
+        solver.set_dirichlet_boundary(bt.Boundary3D.XMin, 0.5)
+        solver.set_dirichlet_boundary(bt.Boundary3D.XMax, 0.5)
         solver.set_dirichlet_boundary(bt.Boundary3D.YMin, 0.5)
         solver.set_dirichlet_boundary(bt.Boundary3D.YMax, 0.5)
         solver.set_dirichlet_boundary(bt.Boundary3D.ZMin, 0.5)
@@ -84,6 +108,16 @@ class TestDiffusionSolver3D(unittest.TestCase):
 
         # Should run without error
         solver.solve(0.0001, 10)
+
+    def test_conflicting_dirichlet_edges_fail_loudly(self):
+        mesh = bt.StructuredMesh3D(5, 5, 5, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
+        solver = bt.DiffusionSolver3D(mesh, 0.01)
+        solver.set_dirichlet_boundary(bt.Boundary3D.XMin, 1.0)
+        solver.set_dirichlet_boundary(bt.Boundary3D.YMin, 0.0)
+        solver.set_initial_condition(np.full(mesh.num_nodes(), 0.5).tolist())
+
+        with self.assertRaisesRegex(ValueError, "Conflicting Dirichlet"):
+            solver.solve(0.0001, 1)
         solution = np.array(solver.solution())
         self.assertFalse(np.any(np.isnan(solution)))
 
@@ -91,25 +125,44 @@ class TestDiffusionSolver3D(unittest.TestCase):
         """Test heat diffuses from hot center."""
         mesh = bt.StructuredMesh3D(10, 10, 10, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
         solver = bt.DiffusionSolver3D(mesh, 0.01)
+        set_homogeneous_neumann(solver)
 
         # Hot spot at center
         ic = np.zeros(mesh.num_nodes())
-        # Find center index (approximately)
-        nx, ny, nz = 11, 11, 11  # num_nodes per dimension
-        center_i, center_j, center_k = nx // 2, ny // 2, nz // 2
-        center_idx = center_i + center_j * nx + center_k * nx * ny
+        center_idx = mesh.index(mesh.nx() // 2, mesh.ny() // 2, mesh.nz() // 2)
         ic[center_idx] = 100.0
-
         solver.set_initial_condition(ic.tolist())
+        initial_mass = trapezoidal_mass(mesh, ic)
 
-        # Solve
-        solver.solve(0.0001, 50)
+        solver.solve(0.5 * solver.max_stable_time_step(), 50)
         solution = np.array(solver.solution())
 
-        # Peak should decrease (heat spreads)
         self.assertLess(np.max(solution), 100.0)
-        # Should still be bounded
-        self.assertFalse(np.any(np.isnan(solution)))
+        self.assertTrue(np.all(np.isfinite(solution)))
+        self.assertAlmostEqual(
+            trapezoidal_mass(mesh, solution), initial_mass, places=12
+        )
+
+    def test_outward_neumann_derivative_preserves_linear_field(self):
+        """A harmonic linear field is stationary with its exact outward derivatives."""
+        mesh = bt.StructuredMesh3D(7, 5, 4, 0.0, 1.0, -0.5, 0.5, 0.0, 2.0)
+        solver = bt.DiffusionSolver3D(mesh, 0.3)
+        exact = np.empty(mesh.num_nodes())
+        for k in range(mesh.nz() + 1):
+            for j in range(mesh.ny() + 1):
+                for i in range(mesh.nx() + 1):
+                    exact[mesh.index(i, j, k)] = (
+                        4 + mesh.x(i) + 2 * mesh.y(j) + 3 * mesh.z(k)
+                    )
+        solver.set_initial_condition(exact)
+        solver.set_neumann_boundary(bt.Boundary3D.XMin, -1.0)
+        solver.set_neumann_boundary(bt.Boundary3D.XMax, 1.0)
+        solver.set_neumann_boundary(bt.Boundary3D.YMin, -2.0)
+        solver.set_neumann_boundary(bt.Boundary3D.YMax, 2.0)
+        solver.set_neumann_boundary(bt.Boundary3D.ZMin, -3.0)
+        solver.set_neumann_boundary(bt.Boundary3D.ZMax, 3.0)
+        solver.solve(0.8 * solver.max_stable_time_step(), 12)
+        np.testing.assert_allclose(solver.solution(), exact, rtol=0.0, atol=3e-13)
 
     def test_stability(self):
         """Test explicit solver respects CFL condition."""
@@ -121,14 +174,25 @@ class TestDiffusionSolver3D(unittest.TestCase):
         dt_stable = dx**2 / (6 * D) * 0.5  # 50% of limit
 
         solver = bt.DiffusionSolver3D(mesh, D)
-        ic = np.random.rand(mesh.num_nodes())
+        ic = np.random.default_rng(17).random(mesh.num_nodes())
         solver.set_initial_condition(ic.tolist())
 
         solver.solve(dt_stable, 10)
         solution = np.array(solver.solution())
 
-        # Should remain bounded
         self.assertTrue(np.all(np.isfinite(solution)))
+        with self.assertRaises(ValueError):
+            solver.solve(np.nextafter(solver.max_stable_time_step(), np.inf), 1)
+
+    def test_invalid_physical_inputs_are_rejected(self):
+        mesh = bt.StructuredMesh3D(3, 3, 3, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
+        with self.assertRaises(ValueError):
+            bt.DiffusionSolver3D(mesh, 0.0)
+        solver = bt.DiffusionSolver3D(mesh, 0.1)
+        with self.assertRaises(ValueError):
+            solver.set_initial_condition([0.0] * (mesh.num_nodes() - 1))
+        with self.assertRaises(ValueError):
+            solver.solve(np.inf, 1)
 
 
 class TestBoundary3D(unittest.TestCase):

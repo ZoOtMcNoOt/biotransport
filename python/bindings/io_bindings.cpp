@@ -17,6 +17,22 @@
 
 namespace py = pybind11;
 
+namespace {
+
+using ContiguousDoubleArray = py::array_t<double, py::array::c_style | py::array::forcecast>;
+
+std::vector<double> copy_1d_array(const ContiguousDoubleArray& array) {
+    const py::buffer_info info = array.request();
+    if (info.ndim != 1) {
+        throw py::value_error("Solution must be a 1D array");
+    }
+
+    const auto* data = static_cast<const double*>(info.ptr);
+    return {data, data + info.size};
+}
+
+}  // namespace
+
 void register_io_bindings(py::module& m) {
     using namespace biotransport;
     using namespace biotransport::io;
@@ -24,19 +40,10 @@ void register_io_bindings(py::module& m) {
     // write_vtk function: single snapshot
     m.def(
         "write_vtk",
-        [](const StructuredMesh& mesh, py::array_t<double> solution, const std::string& filename,
-           const std::string& field_name) {
-            // Convert numpy array to vector
-            py::buffer_info info = solution.request();
-            if (info.ndim != 1) {
-                throw std::runtime_error("Solution must be a 1D array");
-            }
-
-            std::vector<double> sol_vec(static_cast<double*>(info.ptr),
-                                        static_cast<double*>(info.ptr) + info.size);
-
+        [](const StructuredMesh& mesh, const ContiguousDoubleArray& solution,
+           const std::string& filename, const std::string& field_name) {
             // Call C++ function
-            write_vtk(mesh, sol_vec, filename, field_name);
+            write_vtk(mesh, copy_1d_array(solution), filename, field_name);
         },
         py::arg("mesh"), py::arg("solution"), py::arg("filename"), py::arg("field_name") = "scalar",
         R"(
@@ -57,7 +64,7 @@ void register_io_bindings(py::module& m) {
     // write_vtk_series function: multiple snapshots
     m.def(
         "write_vtk_series",
-        [](const StructuredMesh& mesh, const std::vector<py::array_t<double>>& solutions,
+        [](const StructuredMesh& mesh, const std::vector<ContiguousDoubleArray>& solutions,
            const std::vector<double>& times, const std::string& prefix,
            const std::string& field_name) {
             // Convert list of numpy arrays to vector of vectors
@@ -65,12 +72,7 @@ void register_io_bindings(py::module& m) {
             sol_vecs.reserve(solutions.size());
 
             for (const auto& sol : solutions) {
-                py::buffer_info info = sol.request();
-                if (info.ndim != 1) {
-                    throw std::runtime_error("Each solution must be a 1D array");
-                }
-                sol_vecs.emplace_back(static_cast<double*>(info.ptr),
-                                      static_cast<double*>(info.ptr) + info.size);
+                sol_vecs.push_back(copy_1d_array(sol));
             }
 
             // Call C++ function
@@ -101,7 +103,7 @@ void register_io_bindings(py::module& m) {
     // write_vtk_series_with_metadata: includes .pvd file
     m.def(
         "write_vtk_series_with_metadata",
-        [](const StructuredMesh& mesh, const std::vector<py::array_t<double>>& solutions,
+        [](const StructuredMesh& mesh, const std::vector<ContiguousDoubleArray>& solutions,
            const std::vector<double>& times, const std::string& prefix,
            const std::string& field_name) {
             // Convert list of numpy arrays to vector of vectors
@@ -109,12 +111,7 @@ void register_io_bindings(py::module& m) {
             sol_vecs.reserve(solutions.size());
 
             for (const auto& sol : solutions) {
-                py::buffer_info info = sol.request();
-                if (info.ndim != 1) {
-                    throw std::runtime_error("Each solution must be a 1D array");
-                }
-                sol_vecs.emplace_back(static_cast<double*>(info.ptr),
-                                      static_cast<double*>(info.ptr) + info.size);
+                sol_vecs.push_back(copy_1d_array(sol));
             }
 
             // Call C++ function

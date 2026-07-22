@@ -254,9 +254,7 @@ def _write_pvd_file(pvd_path: Path, vtk_files: list[tuple[float, Path]]) -> None
     """Write ParaView Data (PVD) collection file for time series."""
     with open(pvd_path, "w", encoding="utf-8") as f:
         f.write('<?xml version="1.0"?>\n')
-        f.write(
-            '<VTKFile type="Collection" version="0.1" ' 'byte_order="LittleEndian">\n'
-        )
+        f.write('<VTKFile type="Collection" version="0.1" byte_order="LittleEndian">\n')
         f.write("  <Collection>\n")
 
         for time_val, vtk_path in vtk_files:

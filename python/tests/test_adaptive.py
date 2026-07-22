@@ -121,9 +121,8 @@ class TestAdaptiveTimeStepper:
         """Test CFL limit is computed."""
         stepper = AdaptiveTimeStepper(simple_problem)
 
-        # CFL limit should be positive and reasonable
-        assert stepper._cfl_limit > 0
-        assert stepper._cfl_limit < 100.0  # Should be finite and reasonable
+        expected = simple_problem.mesh().dx() ** 2 / (2 * 1e-3)
+        assert stepper._cfl_limit == pytest.approx(expected)
 
     def test_solve_basic(self, simple_problem):
         """Test basic solve."""
@@ -176,7 +175,7 @@ class TestAdaptiveTimeStepper:
         """Test that negative end time raises error."""
         stepper = AdaptiveTimeStepper(simple_problem)
 
-        with pytest.raises(ValueError, match="t_end must be positive"):
+        with pytest.raises(ValueError, match="t_end must be finite and positive"):
             stepper.solve(t_end=-1.0)
 
     def test_solve_custom_initial_dt(self, simple_problem):
@@ -188,6 +187,14 @@ class TestAdaptiveTimeStepper:
 
         assert result.time == pytest.approx(0.005)
         assert result.stats["steps"] > 0
+
+    @pytest.mark.parametrize("dt_initial", [0.0, -1.0, np.inf, np.nan])
+    def test_invalid_initial_dt_raises(self, simple_problem, dt_initial):
+        """Invalid initial steps must not enter or stall the adaptive loop."""
+        stepper = AdaptiveTimeStepper(simple_problem)
+
+        with pytest.raises(ValueError, match="dt_initial"):
+            stepper.solve(t_end=0.005, dt_initial=dt_initial)
 
     def test_step_rejection_tracking(self, simple_problem):
         """Test that step rejections are tracked."""
@@ -211,7 +218,7 @@ class TestAdaptiveTimeStepper:
 
 
 class TestAdaptiveTimeStepper2D:
-    """Tests for adaptive time-stepping on 2D problems."""
+    """The legacy adaptive wrapper must reject multidimensional problems."""
 
     @pytest.fixture
     def simple_2d_problem(self):
@@ -226,20 +233,65 @@ class TestAdaptiveTimeStepper2D:
 
         return problem
 
-    def test_2d_cfl_limit(self, simple_2d_problem):
-        """Test CFL limit computation for 2D."""
-        stepper = AdaptiveTimeStepper(simple_2d_problem)
-
-        # 2D CFL should be smaller due to both directions
-        assert stepper._cfl_limit > 0
+    def test_2d_problem_is_rejected(self, simple_2d_problem):
+        """A 2D field must not be flattened and evolved as a 1D chain."""
+        with pytest.raises(ValueError, match="only 1D diffusion"):
+            AdaptiveTimeStepper(simple_2d_problem)
 
     def test_2d_solve(self, simple_2d_problem):
-        """Test solve on 2D problem."""
-        stepper = AdaptiveTimeStepper(simple_2d_problem, tol=1e-3)
-        result = stepper.solve(t_end=0.001)
+        """The convenience wrapper applies the same dimensional guard."""
+        with pytest.raises(ValueError, match="only 1D diffusion"):
+            solve_adaptive(simple_2d_problem, t_end=0.001, tol=1e-3)
 
-        assert result.time == pytest.approx(0.001)
-        assert len(result.solution) == 11 * 11
+
+class TestAdaptiveProblemValidation:
+    """Unsupported physics must fail before the legacy step loop starts."""
+
+    @pytest.mark.parametrize(
+        "physics", ["variable diffusivity", "reaction", "advection"]
+    )
+    def test_rejects_unrepresented_physics(self, physics):
+        mesh = bt.mesh_1d(10)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(0.0)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
+        if physics == "variable diffusivity":
+            problem.diffusivity_field(np.full(mesh.num_nodes(), 0.01))
+        elif physics == "reaction":
+            problem.constant_source(1.0)
+        else:
+            problem.velocity(0.1)
+
+        with pytest.raises(ValueError, match=physics):
+            AdaptiveTimeStepper(problem)
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"tol": 0.0}, "tol"),
+            ({"atol": np.nan}, "atol"),
+            ({"safety": 1.1}, "safety"),
+            ({"dt_min": 0.0}, "dt_min"),
+            ({"dt_max": np.inf}, "dt_max"),
+            ({"dt_min": 0.1, "dt_max": 0.01}, "dt_max"),
+        ],
+    )
+    def test_rejects_invalid_controller_configuration(self, kwargs, message):
+        mesh = bt.mesh_1d(10)
+        problem = (
+            bt.Problem(mesh)
+            .diffusivity(0.01)
+            .initial_condition(0.0)
+            .dirichlet(bt.Boundary.Left, 0.0)
+            .dirichlet(bt.Boundary.Right, 0.0)
+        )
+
+        with pytest.raises(ValueError, match=message):
+            AdaptiveTimeStepper(problem, **kwargs)
 
 
 class TestSolveAdaptive:
@@ -271,6 +323,8 @@ class TestSolveAdaptive:
 
         u0 = np.ones(21) * 0.5
         problem.initial_condition(u0.tolist())
+        problem.dirichlet(bt.Boundary.Left, 0.0)
+        problem.dirichlet(bt.Boundary.Right, 0.0)
 
         # Looser tolerance should require fewer steps
         result_loose = solve_adaptive(problem, t_end=0.01, tol=1e-2)
@@ -310,8 +364,8 @@ class TestAdaptiveIntegration:
 
         assert numerical_decay == pytest.approx(expected_decay, rel=0.1)
 
-    def test_mass_conservation_neumann(self):
-        """Test mass conservation with Neumann BCs."""
+    def test_neumann_problem_is_rejected(self):
+        """Natural boundaries are delegated to the canonical solver."""
         mesh = bt.mesh_1d(50)  # 50 cells = 51 nodes
         problem = bt.DiffusionProblem(mesh)
         problem.diffusivity(0.01)
@@ -325,11 +379,5 @@ class TestAdaptiveIntegration:
         problem.neumann(bt.Boundary.Left, 0.0)
         problem.neumann(bt.Boundary.Right, 0.0)
 
-        result = solve_adaptive(problem, t_end=0.5, tol=1e-4)
-
-        # Total mass should be approximately conserved
-        dx = 1.0 / 50
-        initial_mass = np.sum(u0) * dx
-        final_mass = np.sum(result.solution) * dx
-
-        assert final_mass == pytest.approx(initial_mass, rel=0.05)
+        with pytest.raises(ValueError, match="Dirichlet left/right"):
+            solve_adaptive(problem, t_end=0.5, tol=1e-4)

@@ -1,569 +1,384 @@
-```
-    ____  _       _____                                        _   
-   | __ )(_) ___ |_   _| __ __ _ _ __  ___ _ __   ___  _ __ __| |_ 
-   |  _ \| |/ _ \  | || '__/ _` | '_ \/ __| '_ \ / _ \| '__/ _` __|
-   | |_) | | (_) | | || | | (_| | | | \__ \ |_) | (_) | | | (_| |_ 
-   |____/|_|\___/  |_||_|  \__,_|_| |_|___/ .__/ \___/|_|  \__|\__|
-                                          |_|                       
-```
+# BioTransport
 
 <div align="center">
 
-**High-performance biotransport simulation library**
+**A science-first library for conservative transport and auditable modeling workflows**
 
-*C++ core | Python interface | Educational focus*
+*C++17 numerical core · Python bindings and scientific workflows · research and teaching*
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![C++17](https://img.shields.io/badge/C++-17-blue.svg)](https://isocpp.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-293%20passing-brightgreen.svg)]()
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#testing-and-development-status)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
 </div>
 
----
+BioTransport is being rebuilt around one explicit scientific contract: define a scalar transport
+problem once, solve every configured term in the C++ core, and report what the numerical method can
+and cannot certify. The canonical API currently targets conservative, explicit transport on 1D and
+2D Cartesian structured meshes.
 
-## What is BioTransport?
+The repository also contains older and specialized solvers. They remain available for development,
+but they do **not** automatically inherit the verification claims of the canonical `Problem` / `solve`
+path.
 
-BioTransport is a computational library for simulating transport phenomena in biological systems. It combines a high-performance C++ numerical core with an intuitive Python interface, making it ideal for both research applications and educational use in biomedical engineering courses.
+Performance-critical canonical and native specialized solver kernels are implemented in C++17.
+Python provides bindings, configuration, unit conversion, provenance, sensitivity/uncertainty
+orchestration, and reproducibility tooling. Some older Python numerical helpers also remain public;
+the package is therefore not universally a thin wrapper, and those helpers require their own
+scientific evidence.
 
-```
-                                    Transport Phenomena
-                                           |
-              +----------------------------+----------------------------+
-              |                            |                            |
-        Mass Transport              Fluid Dynamics               Heat Transfer
-              |                            |                            |
-    +---------+---------+        +---------+---------+                  |
-    |         |         |        |         |         |                  |
- Diffusion  Advection  Reaction  Stokes  Navier-   Darcy           Bioheat
-    |       Diffusion  Diffusion   |     Stokes    Flow            Equation
-    |                              |         |
-    +--- Membrane Transport        +--- Non-Newtonian Models
-    |                                   (Blood Rheology)
-    +--- Nernst-Planck (Ion Transport)
-```
+## Governing equation and sign convention
 
----
+The canonical solver advances
 
-## Quick Start
+$$
+\frac{\partial c}{\partial t}
+= \nabla\!\cdot(D\nabla c)
+- \nabla\!\cdot(\mathbf{v}c)
++ R(c,\mathbf{x},t).
+$$
+
+Equivalently, with the physical transport flux
+
+$$
+\mathbf{J} = -D\nabla c + \mathbf{v}c,
+\qquad
+\frac{\partial c}{\partial t} = -\nabla\!\cdot\mathbf{J} + R.
+$$
+
+This is conservative advection: spatial variation in velocity is included through
+$-\nabla\cdot(\mathbf{v}c)$, not approximated as only $-\mathbf{v}\cdot\nabla c$. A positive reaction
+term adds concentration. All quantities must use one mutually consistent unit system; the library
+does not attach units to raw C++ solver scalars. The optional `biotransport.units` Python layer
+performs explicit, dimension-checked conversion to solver-ready SI values.
+
+## Python quick start
+
+This example solves 1D advection-diffusion with first-order decay. `mesh_1d(100, ...)` creates 100
+cells and 101 nodes.
 
 ```python
-import biotransport as bt
 import numpy as np
+import biotransport as bt
 
-# Create a mesh
-mesh = bt.mesh_1d(100, x_min=0, x_max=1)
+mesh = bt.mesh_1d(100, x_min=0.0, x_max=1.0)
+x = bt.x_nodes(mesh)
+initial = np.exp(-((x - 0.35) / 0.07) ** 2)
 
-# Define the problem
 problem = (
     bt.Problem(mesh)
-    .diffusivity(0.01)
-    .initial_condition(bt.gaussian(mesh, center=0.5, width=0.05))
+    .diffusivity(1.0e-2)
+    .velocity(0.15)
+    .linear_decay(0.20)
+    .initial_condition(initial)
     .dirichlet(bt.Boundary.Left, 0.0)
-    .dirichlet(bt.Boundary.Right, 0.0)
+    .neumann(bt.Boundary.Right, 0.0)
 )
 
-# Solve and visualize
-result = bt.solve(problem, t_end=0.5)
-bt.plot(mesh, result.solution(), title="Diffusion of a Gaussian Pulse")
+# The C++ core selects a stable explicit step and shortens the last step so
+# the returned time is exactly end_time.
+result = bt.solve(problem, end_time=0.10)
+
+print(f"time: {result.time}")
+print(f"steps: {result.diagnostics.steps}")
+print(f"mass change: {result.diagnostics.mass_change:.6g}")
+print(result.concentration)  # NumPy array containing the final nodal field
 ```
 
----
+To request a maximum step explicitly, use `time_step`:
+
+```python
+result = bt.solve(problem, end_time=0.10, time_step=1.0e-3)
+```
+
+The step is honored unless it exceeds the solver's explicit stability limit, in which case the
+solve raises an exception. `t` and `dt` remain compatibility aliases for `end_time` and `time_step`.
+
+For discovery without a flat wall of class names, many native solver objects are grouped into thin
+namespaces: `bt.diffusion`, `bt.electrochem`, `bt.flow`, and `bt.applications`. These modules only
+organize the API; numerical work still runs in the C++ core. Application configuration objects also
+provide high-level factories, such as `BioheatCryotherapyConfig.create_solver(...)`, so ordinary
+users do not need to call long low-level constructors directly.
+
+## Scientific workflow and evidence APIs
+
+The numerical result is only one part of a defensible workflow. BioTransport now exposes separate,
+machine-readable tools for the assumptions and evidence around a run:
+
+| Capability | Python surface | Scope boundary |
+|---|---|---|
+| Explicit unit conversion | `biotransport.units` | Converts and dimension-checks selected quantities; raw C++ solvers still receive plain, caller-consistent doubles. |
+| Parameter traceability | `biotransport.provenance` | Records sources, context, validity, and uncertainty; bundled application values remain honestly illustrative and unprovenanced. |
+| Sensitivity and uncertainty screening | `biotransport.analysis` | Seeded sweeps, local sensitivities, independent-marginal Latin hypercubes, propagation, and linear SRC screening—not calibration, causality, or model validation. |
+| Solver contracts | `biotransport.contracts` | Records equations, units, supported terms, exclusions, and exact test references for native solver entry points. |
+| Balance accounting | `BalanceLedger` and `reconcile_balances` | Audits caller-supplied inventories and exchanges; it does not couple PDEs or infer fluxes from fields. |
+| Reproducible artifacts | `biotransport.reproducibility` | Produces deterministic, fingerprinted JSON manifests; a manifest is not a publication repository or biological validation. |
+
+For example, a units object fails before a length can be passed where diffusivity is expected:
+
+```python
+from biotransport import units
+
+D = units.diffusivity(1.33e-5, "cm^2/s")
+problem.diffusivity(D.require(units.Dimension.DIFFUSIVITY))  # 1.33e-9 m^2/s
+```
+
+The contract registry can be queried by stable ID or native symbol:
+
+```python
+from biotransport.contracts import get_contract
+
+contract = get_contract("NernstPlanckSolver")
+print(contract.equation)
+print(contract.evidence_level.value)
+print(contract.exclusions)
+```
+
+The first nonuniform-geometry slice is a separate native C++
+`NonuniformDiffusion1D` solver. It uses a fitted node-centred finite-volume mesh, harmonic face
+diffusivity, a conservative shared flux, and a checked local Forward-Euler limit. It does not add
+nonuniform 2D/3D geometry, unstructured meshes, AMR, moving meshes, advection, or reaction.
+
+## C++ quick start
+
+```cpp
+#include <biotransport/core/boundary.hpp>
+#include <biotransport/core/mesh/structured_mesh.hpp>
+#include <biotransport/core/problems/transport_problem.hpp>
+#include <biotransport/solvers/transport_solver.hpp>
+
+#include <cmath>
+#include <cstddef>
+#include <iostream>
+#include <vector>
+
+int main() {
+    using namespace biotransport;
+
+    StructuredMesh mesh(100, 0.0, 1.0);
+    std::vector<double> initial(static_cast<std::size_t>(mesh.numNodes()));
+    for (int i = 0; i <= mesh.nx(); ++i) {
+        const double x = mesh.x(i);
+        initial[static_cast<std::size_t>(mesh.index(i))] =
+            std::exp(-std::pow((x - 0.35) / 0.07, 2));
+    }
+
+    TransportProblem problem(mesh);
+    problem.diffusivity(1.0e-2)
+        .velocity(0.15)
+        .linearDecay(0.20)
+        .initialCondition(initial)
+        .dirichlet(Boundary::Left, 0.0)
+        .neumann(Boundary::Right, 0.0);
+
+    SolveOptions options = SolveOptions::until(0.10);
+    const TransportResult result = solve(problem, options);
+
+    std::cout << "time: " << result.time << '\n';
+    std::cout << "steps: " << result.diagnostics.steps << '\n';
+    std::cout << "mass change: " << result.diagnostics.mass_change << '\n';
+}
+```
+
+After installing the C++ package, a CMake consumer can link the exported target:
+
+```cmake
+find_package(biotransport CONFIG REQUIRED)
+target_link_libraries(my_model PRIVATE biotransport::biotransport)
+```
+
+## Boundary semantics
+
+The outward unit normal $\mathbf{n}$ defines every derivative boundary value.
+
+| Builder | Mathematical meaning | Important detail |
+|---|---|---|
+| `.dirichlet(side, value)` | $c=\text{value}$ | Essential nodal value, imposed before the first stencil. |
+| `.neumann(side, g)` | $\partial c/\partial n=g$ | `g` is an outward-normal **derivative**, not a premultiplied flux. The outward diffusive flux is $-Dg$. |
+| `.robin(side, a, b, rhs)` | $a c+b\,\partial c/\partial n=rhs$ | `b == 0` is treated as an essential condition. |
+
+Unspecified sides default to zero outward-normal derivative. That removes diffusive flux, but it is
+not a no-transport wall when $\mathbf{v}\cdot\mathbf{n}\ne0$: advection can still carry material
+through the boundary. Pure-advection inflow (`D == 0`) therefore requires concentration data through
+Dirichlet or `b == 0` Robin data.
+
+In 2D, essential conditions meeting at a corner must agree. Contradictory corner values are rejected
+rather than resolved by an arbitrary side-ordering rule.
+
+## Canonical API
+
+### `TransportProblem`
+
+`TransportProblem` (exported to Python as both `TransportProblem` and `Problem`) owns a mesh and a
+complete scalar model. Its fluent builder supports:
+
+- uniform or node-centred non-negative diffusivity;
+- uniform or node-centred velocity in 1D/2D;
+- fixed fields or scalar values for the initial condition;
+- constant sources, linear decay, Michaelis-Menten consumption, logistic growth, and custom
+  `R(c, x, y, t)` reactions;
+- composable reactions through the `add...` methods; and
+- Dirichlet, outward-derivative Neumann, and Robin boundaries.
+
+Calling a replacement method such as `linear_decay` replaces the current reaction. Calling an
+`add_...` method composes it with the existing reaction, making multi-process source terms explicit.
+
+### `SolveOptions`
+
+| C++ field | Python `solve` argument | Meaning |
+|---|---|---|
+| `final_time` | `end_time` | Non-negative physical duration. |
+| `time_step` | `time_step` | Maximum explicit step; zero/omitted selects one automatically. |
+| `safety_factor` | `safety_factor` | Fraction of the certified transport stability limit; default `0.8`. |
+| `reaction_step_fraction` | `reaction_step_fraction` | Reaction-timescale accuracy guard; default `0.1`. |
+| `max_steps` | `max_steps` | Guard against unexpectedly large explicit runs. |
+| `check_finite` | `check_finite` | Reject non-finite reaction or solution values. |
+
+Built-in bounded reactions provide a derivative bound for automatic stepping. For a custom reaction,
+either declare `max_abs_dc` or choose `time_step` yourself:
+
+```python
+problem.reaction(
+    lambda c, x, y, t: -0.4 * c * c,
+    max_abs_dc=0.8,  # valid over the concentration range expected in this model
+)
+```
+
+An explicit step for a custom reaction without a bound is allowed, but diagnostics mark the reaction
+stability certificate as unknown.
+
+### Results and diagnostics
+
+`TransportResult` contains the final `concentration`, exact returned `time`, and `diagnostics`.
+Diagnostics report the requested and used step sizes, transport and certified stability limits,
+whether reaction stability was known, initial/final extrema, and trapezoidal mass change. They are
+there to make numerical assumptions inspectable, not to replace problem-specific verification.
+
+## Architecture
+
+```text
+Python: units/provenance/UQ/artifacts + configuration/convenience APIs
+                              |
+         canonical solve() normalization and pybind11 bindings
+                              |
+C++: validation -> conservative fluxes -> stable-step policy -> solvers -> diagnostics
+```
+
+The Python `solve()` function is deliberately thin: it validates aliases and method names, constructs
+`SolveOptions`, and calls `solve_transport`. It does not duplicate the PDE operator or integrate a
+different model in Python. The C++ `solve(problem, options)` function is the canonical implementation.
+That statement is scoped to the canonical path; unit/provenance/UQ/artifact utilities and some legacy
+numerical helpers are genuine Python implementations.
+
+## Verified scope
+
+The current science-first verification contract covers:
+
+- one scalar field on 1D and 2D Cartesian `StructuredMesh` grids;
+- node-centred finite-volume balances with half control volumes at physical boundaries;
+- harmonic face averaging for variable diffusivity;
+- conservative first-order upwind advection;
+- first-order explicit Euler time integration with enforced transport/CFL limits;
+- configured diffusion, advection, and reaction terms advanced together;
+- Dirichlet, outward-normal Neumann, and Robin boundary behavior;
+- conservation for closed variable-coefficient problems, manufactured steady cases, reaction
+  temporal convergence, exact final-time landing, and deterministic corner handling.
+
+The runnable `examples/verification/grid_convergence.py` performs a scoped spatial and temporal
+refinement study for one diffusion case. It is not an always-on CTest/pytest convergence certificate
+for every canonical configuration. The nonuniform 1D solver separately has an automated smooth-mesh
+spatial-convergence test; other specialized convergence claims are listed individually in the
+contract registry.
+
+This canonical contract does **not** extend automatically to 3D or cylindrical grids, implicit or
+higher-order integration, central/QUICK/hybrid advection, coupled multi-species systems, fluid
+dynamics, electrochemical transport, or application-scale models. Several specialized classes now
+have their own focused conservation, manufactured-solution, stability, or limit-case tests. Those
+are separate evidence scopes—not a blanket validation of every parameter regime, biological
+closure, or clinical use. Review the model-specific documentation and validate the intended case
+before drawing scientific conclusions.
+
+## Fail-loud policy
+
+The canonical API rejects unsupported or scientifically ambiguous configurations instead of silently
+substituting another model. Examples include:
+
+- `bt.solve(..., method="crank_nicolson")` or another unverified method;
+- `AdvectionScheme.CENTRAL`, `HYBRID`, or `QUICK` in the canonical solver;
+- an explicit step above the enforced stability ceiling;
+- automatic stepping for a custom reaction without a derivative bound;
+- non-finite fields or model evaluations;
+- contradictory essential values at a 2D corner; and
+- pure-advection inflow without prescribed concentration data.
+
+At present, `method="conservative"`, `"explicit"`, and `"explicit_euler"` all name the same verified
+canonical algorithm. Other algorithms must be selected through their specialized APIs, where their
+own assumptions and validation apply.
 
 ## Installation
 
-### Option 1: pip (Recommended)
+### Python development install
+
+Python 3.9+ and a C++17 compiler are required to build the extension. The PEP 517
+build declares and installs its CMake, Ninja, pybind11, and Eigen header dependencies;
+it does not clone build dependencies during CMake configuration.
 
 ```bash
 git clone https://github.com/ZoOtMcNoOt/biotransport.git
 cd biotransport
-pip install -e .
+python -m pip install -e ".[test]"
 ```
 
-### Option 2: Docker
+On Windows, install Visual Studio Build Tools with the Desktop development with C++ workload.
+
+### C++ build
+
+Direct C++ builds require CMake 3.16+ and a discoverable Eigen 3.4 package for the
+default sparse backend. Configure with `-DBIOTRANSPORT_EIGEN=OFF` only when that
+backend is intentionally unavailable.
 
 ```bash
-docker build -t biotransport:latest .
-docker run -it -v $(pwd):/biotransport biotransport:latest
-./dev.sh build && ./dev.sh install
+cmake -S . -B build -DBUILD_PYTHON_BINDINGS=OFF -DBUILD_TESTING=ON
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-### Option 3: Conda
+## Testing and development status
 
 ```bash
-conda env create -f environment.yml
-conda activate biotransport
-./dev.sh build && ./dev.sh install
+# Python API and regression tests
+python -m pytest python/tests -q
+
+# C++ tests after configuring/building
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-### Prerequisites
-
-| Requirement | Version |
-|-------------|---------|
-| Python      | >= 3.9  |
-| CMake       | >= 3.13 |
-| C++ Compiler| C++17   |
-| NumPy       | any     |
-| Matplotlib  | any     |
-
-> **Windows Users**: Install Visual Studio Build Tools with the C++ workload.
-
----
-
-## Architecture
-
-```
-+===========================================================================+
-|                              PYTHON LAYER                                  |
-|   +-------+  +-------+  +-------+  +-------+  +-------+  +-------+        |
-|   | solve |  | plot  |  |mesh_1d|  |gaussian|  |adaptive|  | RK4  |       |
-|   +-------+  +-------+  +-------+  +-------+  +-------+  +-------+        |
-|                              |                                             |
-|                         pybind11                                           |
-+===========================================================================+
-                               |
-+===========================================================================+
-|                               C++ CORE                                     |
-|                                                                            |
-|   +-------------------+    +-------------------+    +-------------------+  |
-|   |   StructuredMesh  |    |   ExplicitFD      |    |  TransportProblem |  |
-|   |   CylindricalMesh |    |   CrankNicolson   |    |  (Fluent Builder) |  |
-|   +-------------------+    |   ADI Solvers     |    +-------------------+  |
-|                            |   Implicit        |                           |
-|   +-------------------+    +-------------------+    +-------------------+  |
-|   | Diffusion         |                             | Dimensionless Nos |  |
-|   | Advection-Diff    |    +-------------------+    | Analytical Solns  |  |
-|   | Reaction-Diff     |    | Stokes Flow       |    | Blood Rheology    |  |
-|   | Nernst-Planck     |    | Navier-Stokes     |    +-------------------+  |
-|   +-------------------+    | Darcy Flow        |                           |
-|                            +-------------------+                           |
-+===========================================================================+
-```
-
----
-
-## Module Reference
-
-### Core Simulation
-
-| Module | Description | Key Functions |
-|--------|-------------|---------------|
-| `Problem` | Fluent problem builder | `.diffusivity()`, `.velocity()`, `.reaction()`, `.dirichlet()`, `.neumann()` |
-| `solve` | One-line solver | `solve(problem, t_end)` |
-| `run` | Full control solver | `run(problem, t_end, dt, callbacks)` |
-| `mesh_1d`, `mesh_2d` | Mesh creation | `mesh_1d(nx, x_min, x_max)` |
-
-### Time Integration
-
-| Method | Order | Stability | Use Case |
-|--------|-------|-----------|----------|
-| `euler_step` | 1st | Conditional | Fast, simple problems |
-| `heun_step` | 2nd | Conditional | Moderate accuracy |
-| `rk4_step` | 4th | Conditional | High accuracy |
-| `RK4Integrator` | 4th | Automatic dt | Production simulations |
-| `AdaptiveTimeStepper` | Variable | Error-controlled | Stiff problems |
-
-```python
-# High-order time integration
-result = bt.integrate(problem, t_end=1.0, method="rk4")
-
-# Adaptive stepping with error control
-result = bt.solve_adaptive(problem, t_end=1.0, tol=1e-6)
-```
-
-### Mass Transport Solvers
-
-```
-+------------------+     +----------------------+     +------------------+
-|  DiffusionSolver |     | AdvectionDiffusion   |     | ReactionDiffusion|
-|------------------|     |----------------------|     |------------------|
-| - 1D, 2D, 3D     |     | - Upwind scheme      |     | - Linear         |
-| - Uniform D      |     | - Central difference |     | - Logistic       |
-| - Spatially-     |     | - Velocity fields    |     | - Michaelis-     |
-|   varying D      |     |                      |     |   Menten         |
-+------------------+     +----------------------+     +------------------+
-         |                        |                          |
-         +------------------------+---------------------------+
-                                  |
-                    +---------------------------+
-                    | MembraneDiffusion1DSolver |
-                    |---------------------------|
-                    | - Partition coefficients  |
-                    | - Hindered transport      |
-                    | - Multi-layer membranes   |
-                    | - Renkin equation         |
-                    +---------------------------+
-```
-
-### Fluid Dynamics
-
-| Solver | Regime | Features |
-|--------|--------|----------|
-| `StokesSolver` | Creeping flow (Re << 1) | Incompressible, pressure-velocity coupling |
-| `NavierStokesSolver` | Inertial flow | Convection schemes, pressure projection |
-| `DarcyFlowSolver` | Porous media | Permeability fields, pressure BC |
-
-### Non-Newtonian Blood Rheology
-
-```python
-# Available viscosity models
-models = [
-    bt.NewtonianModel(mu=0.003),           # Constant viscosity
-    bt.PowerLawModel(K=0.017, n=0.708),    # Shear-thinning
-    bt.CarreauModel(mu_0=0.056, mu_inf=0.00345, lam=3.31, n=0.357),
-    bt.CassonModel(tau_y=0.005, k=0.004),  # Yield stress
-    bt.CrossModel(mu_0=0.056, mu_inf=0.00345, K=3.31, n=0.357),
-]
-
-# Built-in blood models
-casson = bt.blood_casson_model()
-carreau = bt.blood_carreau_model()
-```
-
-### Multi-Physics Applications
-
-```
-+----------------------------------+     +----------------------------------+
-|     TumorDrugDeliverySolver      |     |     BioheatCryotherapySolver     |
-|----------------------------------|     |----------------------------------|
-|                                  |     |                                  |
-|  Pressure Field (IFP)            |     |  Pennes Bioheat Equation         |
-|         |                        |     |         |                        |
-|         v                        |     |         v                        |
-|  Velocity Field                  |     |  Phase Change (Freezing)         |
-|         |                        |     |         |                        |
-|         v                        |     |         v                        |
-|  Drug Concentration              |     |  Arrhenius Tissue Damage         |
-|                                  |     |                                  |
-+----------------------------------+     +----------------------------------+
-```
-
-```python
-from biotransport import TumorDrugDeliveryConfig, BioheatCryotherapyConfig
-
-# Configure with documented parameters
-config = TumorDrugDeliveryConfig(
-    tumor_radius=0.003,      # 3mm tumor
-    IFP_tumor=25.0,          # Elevated interstitial pressure (mmHg)
-    D_drug_tumor=1e-11,      # Lower diffusivity in tumor
-)
-
-# View all parameters with units
-print(config.describe())
-```
-
-### Electrochemical Transport (Nernst-Planck)
-
-```python
-# Ion transport with electric field coupling
-from biotransport import IonSpecies, MultiIonSolver, ions, ghk
-
-# Pre-defined ion species
-na = ions.sodium()    # Na+
-k = ions.potassium()  # K+
-cl = ions.chloride()  # Cl-
-
-# Goldman-Hodgkin-Katz equation
-V_m = ghk.membrane_potential([na, k, cl], P_Na=1, P_K=1, P_Cl=0.45)
-```
-
-### Pattern Formation
-
-```python
-# Gray-Scott reaction-diffusion (Turing patterns)
-solver = bt.GrayScottSolver(mesh, Du=0.16, Dv=0.08, F=0.035, k=0.065)
-result = solver.run(t_end=10000, dt=1.0)
-```
-
-### Multi-Species Dynamics
-
-```python
-# Epidemic models
-sir = bt.SIRReaction(beta=0.3, gamma=0.1)
-seir = bt.SEIRReaction(beta=0.3, sigma=0.2, gamma=0.1)
-
-# Ecological models  
-predator_prey = bt.LotkaVolterraReaction(alpha=1.0, beta=0.1, gamma=0.1, delta=0.1)
-
-# Biochemical reactions
-brusselator = bt.BrusselatorReaction(a=1.0, b=3.0)
-enzyme = bt.EnzymeCascadeReaction(k1=1.0, k2=0.5, k3=0.1)
-```
-
----
-
-## Educational Utilities (BMEN 341)
-
-### Dimensionless Numbers
-
-```python
-from biotransport import dimensionless
-
-Re = dimensionless.reynolds(rho=1000, v=0.1, L=0.01, mu=0.001)    # = 1000
-Sc = dimensionless.schmidt(mu=0.001, rho=1000, D=1e-9)            # = 1000
-Pe = dimensionless.peclet(v=0.001, L=0.01, D=1e-9)                # = 10000
-Da = dimensionless.damkohler(k=0.1, L=0.01, D=1e-9)               # = 1e7
-Bi = dimensionless.biot(h=100, L=0.01, k=0.5)                     # = 2.0
-```
-
-### Analytical Solutions
-
-```python
-from biotransport import analytical
-
-# Semi-infinite diffusion
-c = analytical.semi_infinite_diffusion(x=0.001, t=100, D=1e-9, c0=1.0)
-
-# Poiseuille flow
-v = analytical.poiseuille_velocity(r=0.001, R=0.005, dp_dx=1000, mu=0.001)
-
-# Taylor-Couette flow  
-v_theta = analytical.taylor_couette(r, R1=0.01, R2=0.02, omega1=10, omega2=0)
-```
-
----
-
-## Visualization
-
-```python
-# Simple plotting
-bt.plot(mesh, solution, title="My Simulation")
-
-# 1D with custom options
-bt.plot_1d(mesh, solution, xlabel="Position (m)", ylabel="Concentration (mol/L)")
-
-# 2D with colorbar
-bt.plot_2d(mesh, solution, cmap="viridis", colorbar=True)
-
-# 3D surface
-bt.plot_2d_surface(mesh, solution, elevation=30, azimuth=45)
-```
-
-### VTK Export for ParaView
-
-```python
-# Single timestep
-bt.write_vtk(mesh, {"concentration": c, "velocity": v}, "output.vtk")
-
-# Time series
-bt.write_vtk_series(mesh, snapshots, times, "simulation", "results/")
-```
-
----
-
-## Examples
-
-### Basic
-
-| Example | Description |
-|---------|-------------|
-| `1d_diffusion.py` | Simple diffusion with Gaussian IC |
-| `heat_conduction.py` | 2D heat equation |
-
-### Intermediate
-
-| Example | Description |
-|---------|-------------|
-| `membrane_diffusion.py` | Transient membrane transport |
-| `steady_membrane_diffusion.py` | Steady-state with partitioning |
-| `oxygen_diffusion.py` | O2 consumption in tissue |
-| `drug_diffusion_2d.py` | 2D drug release |
-| `advection_diffusion.py` | Convection-diffusion |
-| `darcy_flow.py` | Porous media flow |
-| `stokes_flow.py` | Creeping viscous flow |
-| `navier_stokes_flow.py` | Inertial viscous flow |
-| `blood_rheology.py` | Non-Newtonian blood models |
-| `cylindrical_coordinates.py` | Axisymmetric problems |
-| `time_integration_methods.py` | Euler vs Heun vs RK4 |
-
-### Advanced
-
-| Example | Description |
-|---------|-------------|
-| `tumor_drug_delivery.py` | Multi-physics drug transport |
-| `bioheat_cryotherapy.py` | Cryotherapy with tissue damage |
-| `turing_patterns.py` | Gray-Scott reaction-diffusion |
-
-### Verification
-
-| Example | Description |
-|---------|-------------|
-| `verify_diffusion.py` | Analytical solution comparison |
-| `verify_poiseuille.py` | Pipe flow validation |
-| `verify_taylor_couette.py` | Rotating cylinders |
-| `verify_viscoelastic.py` | Non-Newtonian validation |
-
-```bash
-# Run all examples
-python run_examples.py
-```
-
----
-
-## Project Structure
-
-```
-biotransport/
-|
-+-- cpp/                          # C++ core library
-|   +-- include/biotransport/
-|   |   +-- core/                 # Mesh, numerics, analytical solutions
-|   |   +-- physics/              # Fluid dynamics, mass transport, heat transfer
-|   |   +-- solvers/              # Diffusion, advection-diffusion, explicit FD
-|   +-- src/                      # Implementation files
-|   +-- tests/                    # C++ unit tests (Google Test)
-|   +-- benchmarks/               # Performance benchmarks
-|
-+-- python/
-|   +-- bindings/                 # pybind11 bindings
-|   +-- biotransport/             # Python package
-|   |   +-- config/               # Configuration dataclasses
-|   |   +-- adaptive.py           # Adaptive time-stepping
-|   |   +-- convergence.py        # Grid convergence studies
-|   |   +-- time_integrators.py   # RK4, Heun, Euler
-|   |   +-- visualization.py      # Plotting utilities
-|   |   +-- vtk_export.py         # VTK file output
-|   +-- tests/                    # Python tests (pytest)
-|
-+-- examples/
-|   +-- basic/                    # Introductory examples
-|   +-- intermediate/             # Standard physics problems
-|   +-- advanced/                 # Multi-physics simulations
-|   +-- verification/             # Validation against analytical solutions
-|
-+-- docs/
-|   +-- notes/                    # Development notes, gap analysis
-|
-+-- results/                      # Output directory for simulations
-```
-
----
-
-## API Cheatsheet
-
-```python
-import biotransport as bt
-import numpy as np
-
-# ---------------------------------------------------------------------------
-#                              MESH CREATION
-# ---------------------------------------------------------------------------
-mesh = bt.mesh_1d(100, 0, 1)                    # 1D: 100 nodes, [0, 1]
-mesh = bt.mesh_2d(50, 50, 0, 1, 0, 1)           # 2D: 50x50, [0,1] x [0,1]
-mesh = bt.StructuredMesh(100, 0.0, 1.0)         # Alternative 1D
-mesh = bt.StructuredMesh(50, 50, 0, 1, 0, 1)    # Alternative 2D
-mesh = bt.CylindricalMesh(50, 50, 0, R, 0, L)   # Cylindrical (r, z)
-
-# ---------------------------------------------------------------------------
-#                           PROBLEM DEFINITION
-# ---------------------------------------------------------------------------
-problem = (
-    bt.Problem(mesh)
-    .diffusivity(D)                             # Scalar or array
-    .velocity(vx, vy)                           # For advection
-    .reaction(rate)                             # Reaction term
-    .initial_condition(u0)                      # Array or helper
-    .dirichlet(bt.Boundary.Left, value)         # Fixed value BC
-    .neumann(bt.Boundary.Right, flux)           # Fixed flux BC
-)
-
-# ---------------------------------------------------------------------------
-#                              SOLVING
-# ---------------------------------------------------------------------------
-result = bt.solve(problem, t_end=1.0)           # Simplest
-result = bt.run(problem, t_end=1.0, dt=0.001)   # With dt control
-result = bt.integrate(problem, 1.0, method="rk4")  # Higher-order
-result = bt.solve_adaptive(problem, 1.0, tol=1e-6) # Adaptive
-
-# ---------------------------------------------------------------------------
-#                            VISUALIZATION
-# ---------------------------------------------------------------------------
-bt.plot(mesh, result.solution())                # Auto 1D/2D
-bt.plot_1d(mesh, solution)                      # Force 1D
-bt.plot_2d(mesh, solution, cmap="hot")          # Force 2D
-bt.write_vtk(mesh, {"u": solution}, "out.vtk")  # ParaView export
-```
-
----
-
-## Testing
-
-```bash
-# Run all Python tests
-python -m pytest python/tests/ -v
-
-# Run with coverage
-python -m pytest python/tests/ --cov=biotransport --cov-report=html
-
-# Run C++ tests
-cd build && ctest --output-on-failure
-```
-
-**Current Status**: 293 tests passing
-
----
-
-## Troubleshooting
-
-### Python Version Mismatch
-
-```
-ImportError: module was compiled for Python 3.12, but interpreter is 3.9
-```
-
-**Solution**: Rebuild with the correct Python version:
-```bash
-rm -rf build/
-pip install -e .
-```
-
-### Windows Build Issues
-
-- Ensure Visual Studio Build Tools with C++ workload is installed
-- Verify CMake can find the MSVC compiler
-
-### Docker Issues
-
-```bash
-# Rebuild without cache
-docker build --no-cache -t biotransport:latest .
-
-# Install GDB for debugging
-docker run -it --name fix biotransport:latest bash -c "apt-get update && apt-get install -y gdb"
-docker commit fix biotransport:latest
-docker rm fix
-```
-
----
+BioTransport is alpha software. Readiness is stated as a verified method/scope rather than a
+hard-coded test count: the count changes as the suite grows and is not evidence that every legacy or
+specialized module has the same validation depth. Check the current test run and review the relevant
+verification cases for the physics you plan to model.
+
+The implementation rationale and near-term boundaries are recorded in
+[`docs/notes/SCIENCE_FIRST_ARCHITECTURE.md`](docs/notes/SCIENCE_FIRST_ARCHITECTURE.md).
+Application equations, provenance, and biological-validity limits are recorded in
+[`docs/notes/MODEL_SCOPE_AND_REFERENCES.md`](docs/notes/MODEL_SCOPE_AND_REFERENCES.md).
+The current machine-readable solver evidence is summarized in
+[`docs/notes/SOLVER_CONTRACTS.md`](docs/notes/SOLVER_CONTRACTS.md). Workflow guides cover
+[`units`](docs/notes/UNITS.md), [`parameter provenance`](docs/notes/PARAMETER_PROVENANCE.md),
+[`sensitivity and uncertainty`](docs/notes/SENSITIVITY_AND_UNCERTAINTY.md),
+[`balance accounting`](docs/notes/BALANCE_ACCOUNTING.md),
+[`reproducible artifacts`](docs/notes/REPRODUCIBILITY.md), and the
+[`nonuniform 1D geometry slice`](docs/notes/NONUNIFORM_GEOMETRY.md).
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-See [docs/notes/GAP_ANALYSIS.md](docs/notes/GAP_ANALYSIS.md) for current development priorities and the project roadmap.
-
----
+Contributions are welcome. New numerical paths should state their equation, sign and boundary
+conventions, supported dimensions, stability policy, and verification evidence. Unsupported choices
+should fail explicitly until that evidence exists.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+BioTransport is available under the [MIT License](LICENSE).
 
----
-
-<div align="center">
-
-```
-    +-----------------------------------------------------------+
-    |                                                           |
-    |     "The purpose of computation is insight, not numbers"  |
-    |                                                           |
-    |                              - Richard Hamming            |
-    |                                                           |
-    +-----------------------------------------------------------+
-```
-
-**Built for Texas A&M University BMEN 341**
-
-*Biotransport*
-
-</div>
+Built for transport-phenomena research and teaching at Texas A&M University.

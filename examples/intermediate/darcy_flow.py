@@ -56,18 +56,18 @@ def run_uniform_flow():
     p_right = 0.0  # Pa
 
     print("\nPhysical Parameters:")
-    print(f"  Domain: {Lx*100:.1f} cm x {Ly*100:.1f} cm")
+    print(f"  Domain: {Lx * 100:.1f} cm x {Ly * 100:.1f} cm")
     print(f"  Grid: {nx} x {ny}")
     print(f"  Hydraulic conductivity: {kappa:.2e} m^2/(Pa*s)")
-    print(f"  Pressure drop: {p_left:.0f} Pa over {Lx*100:.1f} cm")
+    print(f"  Pressure drop: {p_left:.0f} Pa over {Lx * 100:.1f} cm")
 
     # Create solver with boundary conditions
     solver = (
         bt.DarcyFlowSolver(mesh, kappa)
         .set_dirichlet(bt.Boundary.Left, p_left)
         .set_dirichlet(bt.Boundary.Right, p_right)
-        .set_neumann(bt.Boundary.Top, 0.0)  # No-flux
-        .set_neumann(bt.Boundary.Bottom, 0.0)  # No-flux
+        .set_outward_pressure_gradient(bt.Boundary.Top, 0.0)  # Impermeable here
+        .set_outward_pressure_gradient(bt.Boundary.Bottom, 0.0)
         .set_omega(1.6)
         .set_tolerance(1e-8)
     )
@@ -91,9 +91,9 @@ def run_uniform_flow():
     v_expected = -kappa * dp_dx  # Darcy velocity
 
     print("\nVelocity Analysis:")
-    print(f"  Expected velocity: {v_expected*1e6:.2f} um/s")
-    print(f"  Computed mean |v|: {np.mean(v_mag)*1e6:.2f} um/s")
-    print(f"  Max |v|: {np.max(v_mag)*1e6:.2f} um/s")
+    print(f"  Expected velocity: {v_expected * 1e6:.2f} um/s")
+    print(f"  Computed mean |v|: {np.mean(v_mag) * 1e6:.2f} um/s")
+    print(f"  Max |v|: {np.max(v_mag) * 1e6:.2f} um/s")
 
     # Plot
     x = np.linspace(0, Lx * 100, nx + 1)  # cm
@@ -170,7 +170,7 @@ def run_heterogeneous_medium():
     print("\nPermeability Field:")
     print(f"  Background kappa: {kappa_base:.2e} m^2/(Pa*s)")
     print(f"  Core kappa: {kappa_low:.2e} m^2/(Pa*s)")
-    print(f"  Ratio: {kappa_base/kappa_low:.0f}x")
+    print(f"  Ratio: {kappa_base / kappa_low:.0f}x")
 
     # Boundary conditions
     p_left = 1000.0
@@ -180,8 +180,8 @@ def run_heterogeneous_medium():
         bt.DarcyFlowSolver(mesh, kappa_list)
         .set_dirichlet(bt.Boundary.Left, p_left)
         .set_dirichlet(bt.Boundary.Right, p_right)
-        .set_neumann(bt.Boundary.Top, 0.0)
-        .set_neumann(bt.Boundary.Bottom, 0.0)
+        .set_outward_pressure_gradient(bt.Boundary.Top, 0.0)
+        .set_outward_pressure_gradient(bt.Boundary.Bottom, 0.0)
         .set_omega(1.5)
         .set_tolerance(1e-8)
         .set_max_iterations(20000)
@@ -199,9 +199,9 @@ def run_heterogeneous_medium():
     v_mag = np.sqrt(vx**2 + vy**2)
 
     print("\nVelocity Statistics:")
-    print(f"  Min |v|: {np.min(v_mag)*1e6:.2f} um/s")
-    print(f"  Max |v|: {np.max(v_mag)*1e6:.2f} um/s")
-    print(f"  Mean |v|: {np.mean(v_mag)*1e6:.2f} um/s")
+    print(f"  Min |v|: {np.min(v_mag) * 1e6:.2f} um/s")
+    print(f"  Max |v|: {np.max(v_mag) * 1e6:.2f} um/s")
+    print(f"  Mean |v|: {np.mean(v_mag) * 1e6:.2f} um/s")
 
     # Plot
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
@@ -295,10 +295,10 @@ def run_tumor_flow():
     p_boundary = 500.0  # Pa (~ 3.75 mmHg, normal tissue)
 
     print("\nTumor Model Parameters:")
-    print(f"  Domain: {Lx*100:.1f} cm x {Ly*100:.1f} cm")
-    print(f"  Tumor radius: {tumor_radius*1000:.1f} mm")
-    print(f"  Tumor IFP: {p_tumor:.0f} Pa ({p_tumor/133.322:.1f} mmHg)")
-    print(f"  Normal tissue IFP: {p_boundary:.0f} Pa ({p_boundary/133.322:.1f} mmHg)")
+    print(f"  Domain: {Lx * 100:.1f} cm x {Ly * 100:.1f} cm")
+    print(f"  Tumor radius: {tumor_radius * 1000:.1f} mm")
+    print(f"  Tumor IFP: {p_tumor:.0f} Pa ({p_tumor / 133.322:.1f} mmHg)")
+    print(f"  Normal tissue IFP: {p_boundary:.0f} Pa ({p_boundary / 133.322:.1f} mmHg)")
 
     solver = (
         bt.DarcyFlowSolver(mesh, kappa)
@@ -325,9 +325,9 @@ def run_tumor_flow():
     tumor_mask_2d = np.array(tumor_mask).reshape(ny + 1, nx + 1)
 
     print("\nFlow Analysis:")
-    print(f"  Max velocity at tumor edge: {np.max(v_mag)*1e6:.2f} um/s")
+    print(f"  Max velocity at tumor edge: {np.max(v_mag) * 1e6:.2f} um/s")
     print(
-        f"  Mean velocity in tissue: {np.mean(v_mag[tumor_mask_2d == 0])*1e6:.2f} um/s"
+        f"  Mean velocity in tissue: {np.mean(v_mag[tumor_mask_2d == 0]) * 1e6:.2f} um/s"
     )
 
     # Plot

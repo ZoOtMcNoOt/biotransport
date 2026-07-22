@@ -35,6 +35,9 @@ class TestIonSpecies(unittest.TestCase):
 
         # Mobility should be positive for positive ions
         self.assertGreater(na.mobility, 0)
+        self.assertEqual(na.mobility_temperature, T)
+        self.assertAlmostEqual(na.mobility_at(T), na.mobility, places=18)
+        self.assertGreater(na.mobility_at(298.0), na.mobility)
 
     def test_thermal_voltage(self):
         """Test thermal voltage calculation."""
@@ -62,6 +65,9 @@ class TestNernstPlanckSolver(unittest.TestCase):
         Vt = solver.thermal_voltage()
         self.assertGreater(Vt, 0.02)  # > 20 mV
         self.assertLess(Vt, 0.03)  # < 30 mV
+        self.assertAlmostEqual(
+            solver.electrical_mobility(), ion.mobility_at(310.0), places=18
+        )
 
     def test_pure_diffusion(self):
         """Test with zero electric field (pure diffusion)."""
@@ -83,8 +89,54 @@ class TestNernstPlanckSolver(unittest.TestCase):
 
         # Should diffuse (peak decreases)
         self.assertLess(np.max(solution), np.max(ic))
-        # Mass should be conserved (approximately, with Neumann BCs)
+        # Mass should be conserved (with the default zero-total-flux walls)
+        weights = np.ones_like(solution)
+        weights[[0, -1]] = 0.5
+        initial_amount = mesh.dx() * np.sum(weights * ic)
+        final_amount = mesh.dx() * np.sum(weights * solution)
+        self.assertAlmostEqual(final_amount, initial_amount, delta=2e-13)
         self.assertFalse(np.any(np.isnan(solution)))
+
+    def test_boltzmann_equilibrium_is_stationary(self):
+        """The fitted flux must exactly preserve c proportional to exp(-z phi/Vt)."""
+        mesh = bt.StructuredMesh(80, 0.0, 1e-3)
+        ion = bt.IonSpecies("Na+", 1, 1.33e-9)
+        solver = bt.NernstPlanckSolver(mesh, ion, 310.0)
+        x = bt.x_nodes(mesh)
+        potential = 0.04 * x / 1e-3
+        concentration = 100.0 * np.exp(-potential / solver.thermal_voltage())
+        solver.set_potential_field(potential.tolist())
+        solver.set_initial_condition(concentration.tolist())
+
+        current = np.asarray(solver.compute_current_density()).reshape(-1, 2)
+        current_scale = bt.constants.FARADAY * ion.diffusivity * 100.0 / mesh.dx()
+        self.assertLess(np.max(np.abs(current[:, 0])) / current_scale, 3e-13)
+        solver.solve(1e-3, 20)
+        np.testing.assert_allclose(
+            solver.solution(), concentration, rtol=3e-13, atol=2e-14
+        )
+
+    def test_outward_flux_has_declared_mass_balance(self):
+        """A positive right-wall flux removes exactly flux times elapsed time."""
+        mesh = bt.StructuredMesh(100, 0.0, 1e-3)
+        solver = bt.NernstPlanckSolver(mesh, bt.IonSpecies("X+", 1, 1e-9))
+        initial = np.full(mesh.num_nodes(), 10.0)
+        solver.set_initial_condition(initial.tolist())
+        outward_flux = 1e-4
+        solver.set_neumann_boundary(bt.Boundary.Right, outward_flux)
+        dt = 1e-4
+        steps = 100
+        solver.solve(dt, steps)
+
+        weights = np.ones_like(initial)
+        weights[[0, -1]] = 0.5
+        initial_amount = mesh.dx() * np.sum(weights * initial)
+        final_amount = mesh.dx() * np.sum(weights * np.asarray(solver.solution()))
+        self.assertAlmostEqual(
+            final_amount,
+            initial_amount - outward_flux * dt * steps,
+            delta=2e-14,
+        )
 
     def test_electromigration(self):
         """Test ion migration in electric field."""
@@ -120,6 +172,26 @@ class TestNernstPlanckSolver(unittest.TestCase):
         dt = 1e-6
         is_stable = solver.check_stability(dt)
         self.assertIsInstance(is_stable, bool)
+        maximum = solver.maximum_stable_time_step()
+        self.assertTrue(solver.check_stability(maximum))
+        self.assertFalse(solver.check_stability(1.01 * maximum))
+        self.assertAlmostEqual(solver.recommended_time_step(0.5), 0.5 * maximum)
+
+    def test_invalid_physical_inputs_are_rejected(self):
+        """Temperatures, concentrations, fields, and boundary values need a real domain."""
+        with self.assertRaises(ValueError):
+            bt.IonSpecies("", 1, 1e-9)
+        with self.assertRaises(ValueError):
+            bt.IonSpecies("Na+", 1, 1e-9, 0.0)
+
+        mesh = bt.StructuredMesh(8, 0.0, 1.0)
+        solver = bt.NernstPlanckSolver(mesh, bt.IonSpecies("Na+", 1, 1e-9))
+        with self.assertRaises(ValueError):
+            solver.set_initial_condition([-1.0] * mesh.num_nodes())
+        with self.assertRaises(ValueError):
+            solver.set_potential_field([float("nan")] * mesh.num_nodes())
+        with self.assertRaises(ValueError):
+            solver.set_dirichlet_boundary(bt.Boundary.Left, -1.0)
 
 
 class TestMultiIonSolver(unittest.TestCase):
@@ -145,6 +217,12 @@ class TestMultiIonSolver(unittest.TestCase):
         ]
         solver = bt.MultiIonSolver(mesh, ions)
         self.assertEqual(solver.num_species(), 2)
+        maximum = solver.maximum_stable_time_step()
+        self.assertTrue(solver.check_stability(maximum))
+        self.assertAlmostEqual(solver.recommended_time_step(0.5), 0.5 * maximum)
+        self.assertAlmostEqual(
+            solver.electrical_mobility(0), ions[0].mobility_at(310.0), places=18
+        )
 
     def test_ion_accessor(self):
         """Test accessing ion by index."""
@@ -199,6 +277,46 @@ class TestMultiIonSolver(unittest.TestCase):
         rho = np.array(solver.charge_density())
         self.assertLess(np.max(np.abs(rho)), 1e-10)
 
+    def test_species_conserve_independently_in_prescribed_potential(self):
+        """The multi-ion class is conservative but intentionally not self-coupled."""
+        mesh = bt.StructuredMesh(48, 0.0, 8e-4)
+        ions = [
+            bt.IonSpecies("X+", 1, 1.2e-9),
+            bt.IonSpecies("Y-", -1, 1.8e-9),
+        ]
+        solver = bt.MultiIonSolver(mesh, ions, 305.0)
+        x = bt.x_nodes(mesh)
+        xi = x / 8e-4
+        fields = [
+            4.0 + 3.0 * np.sin(np.pi * xi) ** 2,
+            7.0 + 2.0 * np.exp(-(((xi - 0.65) / 0.15) ** 2)),
+        ]
+        solver.set_potential_field((0.02 * (xi - 0.3 * xi**2)).tolist())
+        for species, field in enumerate(fields):
+            solver.set_initial_condition(species, field.tolist())
+
+        weights = np.ones(mesh.num_nodes())
+        weights[[0, -1]] = 0.5
+        initial_amounts = [mesh.dx() * np.sum(weights * field) for field in fields]
+        solver.solve(1e-4, 80)
+        for species, initial_amount in enumerate(initial_amounts):
+            concentration = np.asarray(solver.concentration(species))
+            final_amount = mesh.dx() * np.sum(weights * concentration)
+            self.assertAlmostEqual(final_amount, initial_amount, delta=2e-13)
+            self.assertGreaterEqual(np.min(concentration), 0.0)
+
+    def test_unimplemented_electroneutrality_fails_loudly(self):
+        """The class must not imply a self-consistent field it does not solve."""
+        mesh = bt.StructuredMesh(8, 0.0, 1.0)
+        solver = bt.MultiIonSolver(
+            mesh,
+            [bt.IonSpecies("Na+", 1, 1e-9), bt.IonSpecies("Cl-", -1, 1e-9)],
+        )
+        with self.assertRaises(RuntimeError):
+            solver.set_electroneutrality_mode(True)
+        with self.assertRaises(RuntimeError):
+            solver.set_electroneutrality_mode(False, background_charge=1.0)
+
 
 class TestGHKEquation(unittest.TestCase):
     """Tests for Goldman-Hodgkin-Katz utilities."""
@@ -240,6 +358,22 @@ class TestGHKEquation(unittest.TestCase):
         E_K = bt.ghk.nernst_potential(z=1, c_in=140.0, c_out=5.0, temperature=310.0)
         self.assertLess(E_K * 1000, -80)  # < -80 mV
         self.assertGreater(E_K * 1000, -100)  # > -100 mV
+
+    def test_single_permeant_ion_reduces_to_nernst(self):
+        """GHK must recover Nernst in its one-permeant-ion limits."""
+        nernst_k = bt.ghk.nernst_potential(1, 140.0, 5.0, 310.0)
+        ghk_k = bt.ghk.ghk_voltage(1.0, 140.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 310.0)
+        self.assertAlmostEqual(ghk_k, nernst_k, places=15)
+
+        nernst_cl = bt.ghk.nernst_potential(-1, 10.0, 110.0, 310.0)
+        ghk_cl = bt.ghk.ghk_voltage(
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 10.0, 110.0, 310.0
+        )
+        self.assertAlmostEqual(ghk_cl, nernst_cl, places=15)
+
+    def test_invalid_ghk_domain_is_rejected(self):
+        with self.assertRaises(ValueError):
+            bt.ghk.ghk_voltage(0.0, 1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0)
 
 
 class TestPhysicalConstants(unittest.TestCase):

@@ -25,6 +25,8 @@
 #include <Eigen/SparseCholesky>
 #include <Eigen/SparseLU>
 
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -32,6 +34,43 @@
 
 namespace biotransport {
 namespace linalg {
+
+enum class SparseSolverType;
+
+namespace sparse_detail {
+
+inline void requireFinite(double value, const char* name) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument(std::string(name) + " must be finite");
+    }
+}
+
+inline void requirePositive(double value, const char* name) {
+    requireFinite(value, name);
+    if (value <= 0.0) {
+        throw std::invalid_argument(std::string(name) + " must be positive");
+    }
+}
+
+inline void requireNonnegative(double value, const char* name) {
+    requireFinite(value, name);
+    if (value < 0.0) {
+        throw std::invalid_argument(std::string(name) + " must be non-negative");
+    }
+}
+
+inline void requireFiniteVector(const std::vector<double>& values, const char* name) {
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (!std::isfinite(values[index])) {
+            throw std::invalid_argument(std::string(name) + " contains a non-finite value at " +
+                                        std::to_string(index));
+        }
+    }
+}
+
+inline void validateSolverType(SparseSolverType solver_type);
+
+}  // namespace sparse_detail
 
 /**
  * @brief Sparse solver type enumeration.
@@ -43,6 +82,19 @@ enum class SparseSolverType {
     ConjugateGradient,  ///< Iterative CG (SPD matrices, memory efficient)
     BiCGSTAB            ///< Iterative BiCGSTAB (general matrices)
 };
+
+inline void sparse_detail::validateSolverType(SparseSolverType solver_type) {
+    switch (solver_type) {
+        case SparseSolverType::SparseLU:
+        case SparseSolverType::SimplicialLLT:
+        case SparseSolverType::SimplicialLDLT:
+        case SparseSolverType::ConjugateGradient:
+        case SparseSolverType::BiCGSTAB:
+            return;
+        default:
+            throw std::invalid_argument("Unknown SparseSolverType value");
+    }
+}
 
 /**
  * @brief Result of a sparse linear solve.
@@ -85,8 +137,7 @@ struct Triplet {
  *
  *   // Solve Ax = b
  *   std::vector<double> b = {...};
- *   auto result = A.solve(b, SparseSolverType::SparseLU);
- *   std::vector<double> x = result.solution;
+ *   std::vector<double> x = A.solve(b, SparseSolverType::SparseLU);
  * @endcode
  */
 class SparseMatrix {
@@ -104,13 +155,21 @@ public:
      * @brief Construct a sparse matrix of given dimensions.
      */
     SparseMatrix(int rows, int cols) : rows_(rows), cols_(cols), finalized_(false) {
+        if (rows < 0 || cols < 0) {
+            throw std::invalid_argument("Sparse matrix dimensions must be non-negative");
+        }
         matrix_.resize(rows, cols);
     }
 
     /**
      * @brief Reserve space for estimated number of non-zeros.
      */
-    void reserve(int nnz_estimate) { triplets_.reserve(nnz_estimate); }
+    void reserve(int nnz_estimate) {
+        if (nnz_estimate < 0) {
+            throw std::invalid_argument("Sparse nonzero estimate must be non-negative");
+        }
+        triplets_.reserve(static_cast<std::size_t>(nnz_estimate));
+    }
 
     /**
      * @brief Add a single entry to the matrix.
@@ -124,6 +183,7 @@ public:
         if (row < 0 || row >= rows_ || col < 0 || col >= cols_) {
             throw std::out_of_range("Matrix index out of range");
         }
+        sparse_detail::requireFinite(value, "Sparse matrix entry");
         triplets_.emplace_back(row, col, value);
     }
 
@@ -171,6 +231,15 @@ public:
 
         matrix_.setFromTriplets(eigen_triplets.begin(), eigen_triplets.end());
         matrix_.makeCompressed();
+        for (int outer = 0; outer < matrix_.outerSize(); ++outer) {
+            for (EigenSparseMatrix::InnerIterator entry(matrix_, outer); entry; ++entry) {
+                if (!std::isfinite(entry.value())) {
+                    throw std::overflow_error(
+                        "Sparse assembly produced a non-finite coefficient after summing "
+                        "duplicate entries");
+                }
+            }
+        }
         finalized_ = true;
 
         // Clear triplets to save memory
@@ -221,6 +290,15 @@ public:
         if (static_cast<int>(b.size()) != rows_) {
             throw std::invalid_argument("RHS size doesn't match matrix rows");
         }
+        if (rows_ <= 0 || cols_ <= 0 || rows_ != cols_) {
+            throw std::invalid_argument("Sparse solve requires a non-empty square matrix");
+        }
+        sparse_detail::requireFiniteVector(b, "RHS");
+        sparse_detail::requirePositive(tolerance, "Sparse solve tolerance");
+        if (max_iterations <= 0) {
+            throw std::invalid_argument("Sparse solve maximum iterations must be positive");
+        }
+        sparse_detail::validateSolverType(solver_type);
 
         // Convert to Eigen vector
         Eigen::VectorXd b_eigen = Eigen::Map<const Eigen::VectorXd>(b.data(), b.size());
@@ -234,6 +312,9 @@ public:
                     throw std::runtime_error("SparseLU factorization failed");
                 }
                 x_eigen = solver.solve(b_eigen);
+                if (solver.info() != Eigen::Success) {
+                    throw std::runtime_error("SparseLU solve failed");
+                }
                 break;
             }
             case SparseSolverType::SimplicialLLT: {
@@ -243,6 +324,9 @@ public:
                     throw std::runtime_error("SimplicialLLT factorization failed");
                 }
                 x_eigen = solver.solve(b_eigen);
+                if (solver.info() != Eigen::Success) {
+                    throw std::runtime_error("SimplicialLLT solve failed");
+                }
                 break;
             }
             case SparseSolverType::SimplicialLDLT: {
@@ -252,6 +336,9 @@ public:
                     throw std::runtime_error("SimplicialLDLT factorization failed");
                 }
                 x_eigen = solver.solve(b_eigen);
+                if (solver.info() != Eigen::Success) {
+                    throw std::runtime_error("SimplicialLDLT solve failed");
+                }
                 break;
             }
             case SparseSolverType::ConjugateGradient: {
@@ -259,8 +346,12 @@ public:
                 solver.setTolerance(tolerance);
                 solver.setMaxIterations(max_iterations);
                 solver.compute(matrix_);
-                x_eigen = solver.solve(b_eigen);
                 if (solver.info() != Eigen::Success) {
+                    throw std::runtime_error("ConjugateGradient setup failed");
+                }
+                x_eigen = solver.solve(b_eigen);
+                if (solver.info() != Eigen::Success || !std::isfinite(solver.error()) ||
+                    solver.error() > tolerance) {
                     throw std::runtime_error("ConjugateGradient failed to converge");
                 }
                 break;
@@ -270,12 +361,26 @@ public:
                 solver.setTolerance(tolerance);
                 solver.setMaxIterations(max_iterations);
                 solver.compute(matrix_);
-                x_eigen = solver.solve(b_eigen);
                 if (solver.info() != Eigen::Success) {
+                    throw std::runtime_error("BiCGSTAB setup failed");
+                }
+                x_eigen = solver.solve(b_eigen);
+                if (solver.info() != Eigen::Success || !std::isfinite(solver.error()) ||
+                    solver.error() > tolerance) {
                     throw std::runtime_error("BiCGSTAB failed to converge");
                 }
                 break;
             }
+            default:
+                throw std::invalid_argument("Unknown SparseSolverType value");
+        }
+
+        if (x_eigen.size() != rows_ || !x_eigen.allFinite()) {
+            throw std::runtime_error("Sparse solve produced a non-finite or incomplete solution");
+        }
+        const double residual = (matrix_ * x_eigen - b_eigen).norm();
+        if (!std::isfinite(residual)) {
+            throw std::runtime_error("Sparse solve produced a non-finite residual");
         }
 
         // Convert back to std::vector
@@ -304,6 +409,9 @@ public:
             Eigen::VectorXd b_eigen = Eigen::Map<const Eigen::VectorXd>(b.data(), b.size());
             Eigen::VectorXd x_eigen = Eigen::Map<const Eigen::VectorXd>(x.data(), x.size());
             result.residual = (matrix_ * x_eigen - b_eigen).norm();
+            if (!std::isfinite(result.residual)) {
+                throw std::runtime_error("Sparse solve produced a non-finite residual");
+            }
 
         } catch (const std::exception& e) {
             result.success = false;
@@ -323,9 +431,13 @@ public:
         if (static_cast<int>(x.size()) != cols_) {
             throw std::invalid_argument("Vector size doesn't match matrix columns");
         }
+        sparse_detail::requireFiniteVector(x, "Sparse matrix input vector");
 
         Eigen::VectorXd x_eigen = Eigen::Map<const Eigen::VectorXd>(x.data(), x.size());
         Eigen::VectorXd y_eigen = matrix_ * x_eigen;
+        if (!y_eigen.allFinite()) {
+            throw std::runtime_error("Sparse matrix multiplication produced non-finite values");
+        }
 
         return std::vector<double>(y_eigen.data(), y_eigen.data() + y_eigen.size());
     }
@@ -343,6 +455,9 @@ public:
      * @brief Resize the matrix (clears existing data).
      */
     void resize(int rows, int cols) {
+        if (rows < 0 || cols < 0) {
+            throw std::invalid_argument("Sparse matrix dimensions must be non-negative");
+        }
         rows_ = rows;
         cols_ = cols;
         clear();
@@ -372,6 +487,11 @@ private:
  * @return Sparse Laplacian matrix of size (nx+1)*(ny+1)
  */
 inline SparseMatrix build2DLaplacian(int nx, int ny, double dx, double dy) {
+    if (nx < 1 || ny < 1) {
+        throw std::invalid_argument("Laplacian cell counts must be positive");
+    }
+    sparse_detail::requirePositive(dx, "dx");
+    sparse_detail::requirePositive(dy, "dy");
     const int nodes_x = nx + 1;
     const int nodes_y = ny + 1;
     const int n = nodes_x * nodes_y;
@@ -425,6 +545,13 @@ inline SparseMatrix build2DLaplacian(int nx, int ny, double dx, double dy) {
  */
 inline SparseMatrix buildImplicitDiffusion2D(int nx, int ny, double dx, double dy, double alpha,
                                              double dt) {
+    if (nx < 1 || ny < 1) {
+        throw std::invalid_argument("Implicit diffusion cell counts must be positive");
+    }
+    sparse_detail::requirePositive(dx, "dx");
+    sparse_detail::requirePositive(dy, "dy");
+    sparse_detail::requireNonnegative(alpha, "alpha");
+    sparse_detail::requireNonnegative(dt, "dt");
     const int nodes_x = nx + 1;
     const int nodes_y = ny + 1;
     const int n = nodes_x * nodes_y;
@@ -466,6 +593,14 @@ inline SparseMatrix buildImplicitDiffusion2D(int nx, int ny, double dx, double d
  */
 inline SparseMatrix buildImplicitDiffusion3D(int nx, int ny, int nz, double dx, double dy,
                                              double dz, double alpha, double dt) {
+    if (nx < 1 || ny < 1 || nz < 1) {
+        throw std::invalid_argument("Implicit diffusion cell counts must be positive");
+    }
+    sparse_detail::requirePositive(dx, "dx");
+    sparse_detail::requirePositive(dy, "dy");
+    sparse_detail::requirePositive(dz, "dz");
+    sparse_detail::requireNonnegative(alpha, "alpha");
+    sparse_detail::requireNonnegative(dt, "dt");
     const int nodes_x = nx + 1;
     const int nodes_y = ny + 1;
     const int nodes_z = nz + 1;

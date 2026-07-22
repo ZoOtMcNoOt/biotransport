@@ -8,8 +8,13 @@ Prerequisites
 ~~~~~~~~~~~~~
 
 - Python >= 3.9
-- CMake >= 3.13
 - C++ compiler with C++17 support (MSVC, GCC, or Clang)
+
+The Python build declares CMake, Ninja, pybind11, and Eigen as PEP 517 build
+dependencies, so ``pip`` installs them in its isolated build environment. It
+does not clone build dependencies during CMake configuration. Direct C++
+builds require CMake >= 3.16 and a discoverable Eigen >= 3.4 package unless
+``BIOTRANSPORT_EIGEN=OFF`` is selected deliberately.
 
 From Source
 ~~~~~~~~~~~
@@ -18,16 +23,7 @@ From Source
 
    git clone https://github.com/ZoOtMcNoOt/biotransport.git
    cd biotransport
-   pip install -e .
-
-Using Docker
-~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   docker build -t biotransport:latest .
-   docker run -it -v $(pwd):/biotransport biotransport:latest
-   ./dev.sh build && ./dev.sh install
+   python -m pip install -e ".[test]"
 
 
 Basic Concepts
@@ -36,57 +32,148 @@ Basic Concepts
 Meshes
 ~~~~~~
 
-BioTransport uses structured meshes for finite difference computations:
+The canonical :class:`Problem` builder uses uniform Cartesian 1D/2D meshes.
+The convenience constructors make the cell count and physical bounds explicit:
 
 .. code-block:: python
 
-   from biotransport import StructuredMesh
+   import biotransport as bt
 
    # 1D mesh: 100 cells from 0 to 1 meter
-   mesh_1d = StructuredMesh(nx=100, xmin=0.0, xmax=1.0)
+   line = bt.mesh_1d(100, x_min=0.0, x_max=1.0)
 
-   # 2D mesh: 50x50 cells
-   mesh_2d = StructuredMesh(
-       nx=50, ny=50,
-       xmin=0.0, xmax=1.0,
-       ymin=0.0, ymax=1.0
+   # 2D mesh: 50 by 40 cells
+   rectangle = bt.mesh_2d(
+       50, 40,
+       x_min=0.0, x_max=1.0,
+       y_min=0.0, y_max=0.5,
    )
+
+Separate APIs exist for cylindrical coordinates, uniform Cartesian 3D, and a
+fixed fitted nonuniform 1D finite-volume diffusion slice.  The nonuniform API
+does not extend :class:`Problem` to arbitrary geometry:
+
+.. code-block:: python
+
+   mesh = bt.NonuniformMesh1D([0.0, 0.02, 0.08, 0.25, 1.0])
+   solver = bt.NonuniformDiffusion1D(
+       mesh,
+       [1.0e-9, 1.0e-9, 5.0e-10, 2.0e-10, 2.0e-10],
+   )
+   solver.set_dirichlet_boundary(bt.Boundary.Left, 1.0)
+   solver.set_neumann_boundary(bt.Boundary.Right, 0.0)
+   solver.set_initial_condition([1.0, 0.5, 0.1, 0.0, 0.0])
+   solver.solve_until(3600.0, 0.9 * solver.max_stable_time_step())
+
+This solver is diffusion-only and fixed 1D.  It does not provide unstructured
+meshes, AMR, moving meshes, nonuniform 2D/3D, advection, or reaction.  Read
+:download:`its contract <../notes/NONUNIFORM_GEOMETRY.md>` before use.
+
+
+Units
+~~~~~
+
+Native solvers accept plain numbers.  Prefer SI at the solver boundary and use
+``biotransport.units`` when an input needs explicit conversion or semantic
+dimension checking:
+
+.. code-block:: python
+
+   from biotransport import units
+
+   D = units.diffusivity(1.33e-5, "cm^2/s")
+   D_m2_s = D.require(units.Dimension.DIFFUSIVITY)
+
+   problem = bt.Problem(line).diffusivity(D_m2_s)
+
+``require`` fails if, for example, a length or porous permeability is supplied
+where diffusivity is required.  The units layer does not attach unit metadata
+to fields inside C++ and does not establish parameter validity.  See
+:download:`the units guide <../notes/UNITS.md>`.
 
 
 Solvers
 ~~~~~~~
 
-Each physics module provides a solver class with a configuration dataclass:
+The canonical interface separates the physical problem from solve controls.
+The C++ core advances every configured term together:
 
 .. code-block:: python
 
-   from biotransport import DiffusionSolver, DiffusionConfig
+   import numpy as np
+   import biotransport as bt
 
-   config = DiffusionConfig(
-       D=1e-9,       # Diffusion coefficient [m²/s]
-       dt=0.01,      # Time step [s]
-       t_end=10.0,   # End time [s]
+   mesh = bt.mesh_1d(100, x_min=0.0, x_max=1.0)
+   x = bt.x_nodes(mesh)
+   problem = (
+       bt.Problem(mesh)
+       .diffusivity(1.0e-9)              # m²/s
+       .initial_condition(np.exp(-((x - 0.5) / 0.08) ** 2))
+       .neumann(bt.Boundary.Left, 0.0)   # outward derivative dc/dn
+       .neumann(bt.Boundary.Right, 0.0)
    )
+   result = bt.solve(problem, end_time=10.0)
 
-   solver = DiffusionSolver(mesh, config)
-   result = solver.run()
+``result.time`` is the exact requested final time.  ``result.concentration`` is
+an owned NumPy copy of the returned C++ field, and ``result.diagnostics``
+exposes stability, mass, and extrema information.
+
+
+Choosing a specialized solver
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Do not select a solver from its class name alone.  Query the native contract
+registry for its equation, units, boundary meanings, evidence, and exclusions:
+
+.. code-block:: python
+
+   from biotransport.contracts import get_contract
+
+   contract = get_contract("NernstPlanckSolver")
+   print(contract.equation)
+   print(contract.evidence_level.value)
+   print(contract.warnings)
+
+A canonical transport test does not certify a specialized flow,
+electrochemical, membrane, or application solver.  See
+:download:`the complete registry guide <../notes/SOLVER_CONTRACTS.md>`.
 
 
 Boundary Conditions
 ~~~~~~~~~~~~~~~~~~~
 
-Boundary conditions are specified via enums:
+Boundary conditions are fluent problem-builder calls:
 
 .. code-block:: python
 
-   from biotransport import BCType
+   problem.dirichlet(bt.Boundary.Left, 1.0)
+   problem.neumann(bt.Boundary.Right, 0.0)
+   problem.robin(bt.Boundary.Top, a=1.0, b=0.2, rhs=0.0)
 
-   config = DiffusionConfig(
-       D=1e-9,
-       dt=0.01,
-       t_end=1.0,
-       bc_left=BCType.DIRICHLET,
-       bc_right=BCType.NEUMANN,
-       bc_left_value=1.0,  # Concentration = 1.0 at left
-       bc_right_value=0.0, # Zero flux at right
-   )
+Neumann data are outward-normal derivatives, ``dc/dn``.  The corresponding
+outward diffusive flux is ``-D * dc/dn``.  Robin data mean
+``a*c + b*dc/dn = rhs``.  See :doc:`science_contract` before interpreting a
+specialized solver result: electrochemical Neumann data, for example, are
+outward total molar fluxes, and the nonuniform 1D solver rejects Robin data.
+
+
+From a run to an auditable artifact
+-----------------------------------
+
+For a quantitative report, the field alone is insufficient.  A defensible
+workflow should also record:
+
+* unit conversions and raw solver units;
+* parameter source, material/population, method, applicability, and uncertainty
+  through ``biotransport.provenance``;
+* grid/time evidence and available balance residuals;
+* sensitivity or uncertainty screening conditional on declared ranges and
+  distributions through ``biotransport.analysis``; and
+* a frozen, fingerprinted manifest through
+  ``biotransport.reproducibility``.
+
+The top-level :class:`BalanceLedger` API can reconcile caller-supplied amount,
+energy, and volume exchanges, but it does not infer them from solver fields or
+couple PDEs automatically.  A closed ledger, sourced parameter manifest, and
+reproducible JSON file are useful evidence components; none is biological or
+clinical validation.

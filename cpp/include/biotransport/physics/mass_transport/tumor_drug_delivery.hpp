@@ -1,19 +1,33 @@
 /**
  * @file tumor_drug_delivery.hpp
- * @brief Coupled tumor drug delivery model with Darcy flow and transport.
+ * @brief Prescribed-pressure Darcy transport model for tumor drug delivery.
  *
- * Solves a coupled system for drug delivery to solid tumors:
- *   1. Steady-state interstitial fluid pressure (IFP) via Darcy's law
- *   2. Transient drug transport with diffusion, convection, binding, and uptake
+ * The implementation deliberately separates what is solved from what must be
+ * supplied.  Interstitial pressure is a prescribed-pressure surrogate: the
+ * outer boundary is held at @c p_boundary and nodes selected by
+ * @c tumor_mask are held at @c p_tumor.  All remaining nodes solve
  *
- * Physics:
- *   - Darcy velocity: v = -K ∇p
- *   - Drug transport: ∂C/∂t = D∇²C - v·∇C - k_bind*C - k_uptake*C + source
- *   - Vascular source term based on vessel density and permeability
+ *     div(K grad(p)) = 0,              v = -K grad(p).
  *
- * Applications: Chemotherapy optimization, nanoparticle delivery, drug screening.
+ * The mask therefore identifies pressure-clamped nodes, not merely a tissue
+ * label.  This class does not solve a Starling fluid-source or lymphatic-drainage
+ * model; measured or externally calculated pressures must be supplied when
+ * those mechanisms matter.  A pressure clamp implies an unresolved fluid
+ * source at the clamp interface.  Conservative transport treats that implied
+ * fluid source as solute-free; solvent-drag delivery from vascular filtration
+ * is not represented by the permeability source below.
  *
- * @see TumorDrugDeliveryConfig for Python configuration dataclass.
+ * Free drug is advanced conservatively on node-centred dual control volumes:
+ *
+ *   dC_f/dt = -div(v C_f - D grad(C_f))
+ *              + P S_v (C_plasma - C_f) - (k_b + k_u) C_f,
+ *   dC_b/dt = k_b C_f,
+ *   dC_c/dt = k_u C_f.
+ *
+ * Here P is vessel-wall permeability [m/s] and S_v is perfused vascular
+ * surface area per tissue volume [1/m], so P*S_v is an exchange rate [1/s].
+ * The outer boundary has zero diffusive flux and permits Darcy outflow.  Inflow
+ * is rejected because the API has no external inflow concentration.
  */
 
 #ifndef BIOTRANSPORT_PHYSICS_MASS_TRANSPORT_TUMOR_DRUG_DELIVERY_HPP
@@ -27,88 +41,113 @@
 namespace biotransport {
 
 /**
- * @brief Output data structure from tumor drug delivery simulation.
+ * @brief Saved concentration fields and integral mass-balance diagnostics.
  *
- * Contains time-series data of drug concentration fields in different
- * compartments. Arrays are packed in row-major order: [frame][j][i].
+ * Concentration arrays are packed in row-major order as [frame][j][i].  The
+ * amount diagnostics integrate the node-centred dual control volumes.  For a
+ * 2D model their units are concentration times area, i.e. amount per unit
+ * out-of-plane depth when concentration is volumetric.
  */
 struct TumorDrugDeliverySaved {
-    int nx = 0;      ///< Number of cells in x direction
-    int ny = 0;      ///< Number of cells in y direction
+    int nx = 0;      ///< Number of nodes in x direction
+    int ny = 0;      ///< Number of nodes in y direction
     int frames = 0;  ///< Number of saved time frames
 
-    std::vector<double> times_s;  ///< Time stamps for each frame [s]
+    std::vector<double> times_s;  ///< Exact time stamp for each frame [s]
 
-    /// Free (unbound) drug concentration, packed as [frame][j][i]
-    std::vector<double> free;
-    /// Bound drug concentration (reversible binding), packed as [frame][j][i]
-    std::vector<double> bound;
-    /// Intracellular drug concentration (uptake), packed as [frame][j][i]
-    std::vector<double> cellular;
-    /// Total drug concentration (free + bound + cellular), packed as [frame][j][i]
-    std::vector<double> total;
+    std::vector<double> free;      ///< Free extracellular concentration
+    std::vector<double> bound;     ///< Irreversibly tissue-sequestered concentration
+    std::vector<double> cellular;  ///< Irreversibly internalized concentration
+    std::vector<double> total;     ///< free + bound + cellular
+
+    /// Integral amounts at each saved time [concentration*m^2].
+    std::vector<double> free_amount_per_depth;
+    std::vector<double> bound_amount_per_depth;
+    std::vector<double> cellular_amount_per_depth;
+    std::vector<double> total_amount_per_depth;
+
+    /// Time-integrated net vascular transfer into tissue [concentration*m^2].
+    std::vector<double> cumulative_net_vascular_exchange_per_depth;
+    /// Time-integrated free-drug loss by Darcy outflow [concentration*m^2].
+    std::vector<double> cumulative_boundary_outflow_per_depth;
+    /// total - initial - vascular_exchange + boundary_outflow.
+    std::vector<double> mass_balance_error_per_depth;
+
+    double final_time_s = 0.0;       ///< Requested simulation end time [s]
+    double stability_limit_s = 0.0;  ///< Monotonic explicit-Euler limit [s]
 };
 
 /**
- * @brief Coupled tumor drug delivery solver with Darcy flow and transport.
+ * @brief Prescribed-pressure Darcy flow coupled to conservative drug transport.
  *
- * Solves a two-step coupled system:
- * 1. Steady-state pressure: ∇·(K ∇p) = 0 with Dirichlet BCs
- * 2. Transient drug transport: ∂C/∂t = D∇²C - v·∇C + R(C) + S
- *
- * The model accounts for:
- *   - Elevated interstitial fluid pressure (IFP) in tumor
- *   - Convective washout from tumor center
- *   - Spatially varying diffusivity and vessel density
- *   - Drug binding and cellular uptake kinetics
+ * Important limitations:
+ * - pressure-clamped tumor nodes are an empirical surrogate, not a prediction
+ *   from Starling filtration or lymphatic drainage;
+ * - the fluid source implied by a pressure clamp carries no advected drug;
+ * - binding and uptake are irreversible first-order compartments;
+ * - vascular exchange is linear and requires S_v [1/m], not a normalized
+ *   vessel-count map;
+ * - plasma concentration is constant in time and binding saturation,
+ *   metabolism, and systemic pharmacokinetics are not represented.
  */
 class TumorDrugDeliverySolver {
 public:
     /**
-     * @brief Construct a tumor drug delivery solver.
-     *
-     * @param mesh                   2D structured mesh for the tissue domain
-     * @param tumor_mask             Binary mask (1 = tumor, 0 = normal tissue)
-     * @param hydraulic_conductivity Hydraulic conductivity at each node [m²/(Pa·s)]
-     * @param p_boundary             Pressure at domain boundary [Pa]
-     * @param p_tumor                Pressure in tumor core [Pa]
+     * @param mesh                    2D structured tissue mesh
+     * @param tumor_mask              Binary pressure-clamp mask (1 means p_tumor)
+     * @param hydraulic_conductivity Darcy mobility K [m^2/(Pa*s)] at every node
+     * @param p_boundary              Outer-boundary pressure [Pa]
+     * @param p_tumor                 Pressure on masked nodes [Pa]; must be >= p_boundary
      */
     TumorDrugDeliverySolver(const StructuredMesh& mesh, std::vector<std::uint8_t> tumor_mask,
                             std::vector<double> hydraulic_conductivity, double p_boundary,
                             double p_tumor);
 
     /**
-     * @brief Solve the steady-state pressure field using SOR iteration.
+     * @brief Solve div(K grad(p)) = 0 outside the fixed-pressure nodes by SOR.
      *
-     * @param max_iter Maximum number of iterations
-     * @param tol      Convergence tolerance (L∞ norm of residual)
-     * @param omega    SOR relaxation factor (1.0-2.0, typically 1.5-1.9)
-     * @return Pressure field on nodes [Pa] (size = numNodes)
+     * Harmonic face mobilities preserve normal Darcy flux at material
+     * interfaces.  Failure to reduce the post-sweep discrete pressure defect
+     * below the requested tolerance is reported with an exception instead of
+     * returning an unconverged field.  Unlike an update-size test, this
+     * criterion cannot be fooled by choosing an extremely small relaxation
+     * factor.
+     *
+     * @param max_iter Maximum number of SOR sweeps
+     * @param tol      Absolute maximum discrete pressure-defect tolerance [Pa]
+     * @param omega    SOR relaxation factor in (0,2)
      */
-    std::vector<double> solvePressureSOR(int max_iter, double tol, double omega) const;
+    [[nodiscard]] std::vector<double> solvePressureSOR(int max_iter, double tol,
+                                                       double omega) const;
 
     /**
-     * @brief Run the drug transport simulation.
+     * @brief Advance conservative drug transport from an initially drug-free tissue.
      *
-     * @param pressure        Steady-state pressure field from solvePressureSOR()
-     * @param diffusivity     Drug diffusion coefficient at each node [m²/s]
-     * @param permeability    Vessel permeability at each node [m/s]
-     * @param vessel_density  Microvascular density at each node [1/m²]
-     * @param k_binding       Drug binding rate constant [1/s]
-     * @param k_uptake        Cellular uptake rate constant [1/s]
-     * @param c_plasma        Plasma drug concentration [mol/m³ or normalized]
-     * @param dt              Time step size [s]
-     * @param num_steps       Total number of time steps
-     * @param times_to_save_s Times at which to save snapshots [s]
-     * @return TumorDrugDeliverySaved Simulation results with concentration fields
+     * @param pressure        Pressure field consistent with this solver [Pa]
+     * @param diffusivity     Effective free-drug diffusivity D [m^2/s], non-negative
+     * @param vessel_wall_solute_permeability Vessel-wall solute permeability P [m/s],
+     *                                        non-negative
+     * @param vascular_surface_area_density Perfused vessel surface area per tissue volume
+     *                                      S_v [1/m]
+     * @param k_binding       Irreversible tissue-sequestration rate [1/s]
+     * @param k_uptake        Irreversible cellular-uptake rate [1/s]
+     * @param c_plasma        Constant plasma concentration, in the same units as C
+     * @param dt              Maximum explicit time step [s]
+     * @param num_steps       Defines final time as dt*num_steps; may be zero
+     * @param times_to_save_s Requested exact snapshot times in [0, final_time]
+     *
+     * Unsorted save times are accepted and duplicates are collapsed.  A step is
+     * shortened to land exactly on every requested time.  Inputs that would
+     * violate the monotonic explicit-Euler bound are rejected.  Non-negative
+     * data therefore remain non-negative; values below zero by roundoff only
+     * are reset to zero and any material negativity is an error.
      */
-    [[nodiscard]] TumorDrugDeliverySaved simulate(const std::vector<double>& pressure,
-                                                  const std::vector<double>& diffusivity,
-                                                  const std::vector<double>& permeability,
-                                                  const std::vector<double>& vessel_density,
-                                                  double k_binding, double k_uptake,
-                                                  double c_plasma, double dt, int num_steps,
-                                                  const std::vector<double>& times_to_save_s) const;
+    [[nodiscard]] TumorDrugDeliverySaved simulate(
+        const std::vector<double>& pressure, const std::vector<double>& diffusivity,
+        const std::vector<double>& vessel_wall_solute_permeability,
+        const std::vector<double>& vascular_surface_area_density, double k_binding, double k_uptake,
+        double c_plasma, double dt, int num_steps,
+        const std::vector<double>& times_to_save_s) const;
 
 private:
     const StructuredMesh& mesh_;
@@ -120,8 +159,6 @@ private:
     std::vector<double> K_;
     double p_boundary_;
     double p_tumor_;
-
-    // Use shared idx() from indexing.hpp
 };
 
 }  // namespace biotransport

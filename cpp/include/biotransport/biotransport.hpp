@@ -9,14 +9,19 @@
 #ifndef BIOTRANSPORT_HPP
 #define BIOTRANSPORT_HPP
 
+// Boundary types are required by mesh_iterators.hpp.
+#include <biotransport/core/boundary.hpp>
+
 // Core components - mesh
 #include <biotransport/core/mesh/cylindrical_mesh.hpp>
 #include <biotransport/core/mesh/mesh_iterators.hpp>
+#include <biotransport/core/mesh/nonuniform_mesh_1d.hpp>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 
 // Core components - boundary and utilities
 #include <biotransport/core/analytical.hpp>
-#include <biotransport/core/boundary.hpp>
+#include <biotransport/core/balance.hpp>
+#include <biotransport/core/build_info.hpp>
 #include <biotransport/core/dimensionless.hpp>
 #include <biotransport/core/utils.hpp>
 
@@ -29,10 +34,12 @@
 #include <biotransport/core/numerics/solvers/iterative.hpp>
 #include <biotransport/core/numerics/stability.hpp>
 #include <biotransport/core/numerics/time_integration/explicit_euler.hpp>
+#include <biotransport/core/numerics/time_integration/high_order.hpp>
 
 // Solver infrastructure
 #include <biotransport/solvers/explicit_fd.hpp>
 #include <biotransport/solvers/solver_base.hpp>
+#include <biotransport/solvers/transport_solver.hpp>
 
 // Diffusion and reaction-diffusion (consolidated)
 #include <biotransport/solvers/adi_solver.hpp>
@@ -40,6 +47,7 @@
 #include <biotransport/solvers/crank_nicolson.hpp>
 #include <biotransport/solvers/diffusion_solvers.hpp>
 #include <biotransport/solvers/implicit_diffusion.hpp>
+#include <biotransport/solvers/nonuniform_diffusion_1d.hpp>
 
 // Reactions library
 #include <biotransport/physics/reactions.hpp>
