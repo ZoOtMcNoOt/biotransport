@@ -20,6 +20,7 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    TYPE_CHECKING,
     Tuple,
     Union,
     cast,
@@ -28,9 +29,12 @@ from typing import (
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+if TYPE_CHECKING:
+    from typing_extensions import TypeAlias
 
-FloatArray = NDArray[np.float64]
-IntArray = NDArray[np.int64]
+
+FloatArray: TypeAlias = NDArray[np.float64]
+IntArray: TypeAlias = NDArray[np.int64]
 Model = Callable[[Mapping[str, float]], float]
 Distribution = Literal["uniform", "log_uniform"]
 Normalization = Literal["elasticity", "range"]

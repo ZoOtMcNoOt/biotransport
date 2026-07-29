@@ -4,6 +4,11 @@ Pytest fixtures for biotransport tests.
 Provides reusable test fixtures for common mesh and solver configurations.
 """
 
+import os
+
+# BioTransport imports Matplotlib eagerly, so select the test backend first.
+os.environ["MPLBACKEND"] = "Agg"
+
 import pytest
 import numpy as np
 import biotransport as bt
