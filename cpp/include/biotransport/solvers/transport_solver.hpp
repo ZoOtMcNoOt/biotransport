@@ -577,31 +577,49 @@ inline std::pair<double, double> minmax(const std::vector<double>& values) {
     return {*bounds.first, *bounds.second};
 }
 
+constexpr double maximum_exact_binary64_integer = 0x1p53;
+
+inline double roundedStepProduct(std::size_t count, double time_step) {
+    const double count_as_double = static_cast<double>(count);
+    if (count_as_double > maximum_exact_binary64_integer ||
+        static_cast<std::size_t>(count_as_double) != count) {
+        throw std::overflow_error(
+            "time-step count cannot be represented exactly by the binary64 schedule");
+    }
+    return std::fma(count_as_double, time_step, 0.0);
+}
+
 inline std::size_t plannedSteps(double final_time, double time_step) {
     if (final_time == 0.0) {
         return 0;
     }
-    const long double ratio =
-        static_cast<long double>(final_time) / static_cast<long double>(time_step);
-    const long double approximate_count = std::ceil(ratio);
-    if (!std::isfinite(approximate_count) ||
-        approximate_count > static_cast<long double>(std::numeric_limits<std::size_t>::max())) {
+    const double ratio = final_time / time_step;
+    const double approximate_count = std::ceil(ratio);
+    if (!std::isfinite(approximate_count) || approximate_count > maximum_exact_binary64_integer ||
+        approximate_count > static_cast<double>(std::numeric_limits<std::size_t>::max())) {
         throw std::overflow_error("requested solve requires too many time steps");
     }
     std::size_t count = std::max<std::size_t>(1, static_cast<std::size_t>(approximate_count));
-    const long double final_time_exact = static_cast<long double>(final_time);
-    const long double time_step_exact = static_cast<long double>(time_step);
     const auto final_remainder = [&]() {
-        return std::fma(-static_cast<long double>(count - 1), time_step_exact, final_time_exact);
+        return std::fma(-static_cast<double>(count - 1), time_step, final_time);
     };
+
+    // The public clock is binary64.  If the correctly rounded nominal
+    // endpoint is bitwise equal to final_time, treat it as the same endpoint.
+    // This is an exact rule, not an epsilon tolerance (for example,
+    // 10 * 0.01 rounds exactly to 0.1).
+    while (count > 1 && roundedStepProduct(count - 1, time_step) == final_time) {
+        --count;
+    }
     while (count > 1 && final_remainder() <= 0.0L) {
         --count;
     }
-    while (final_remainder() > time_step_exact) {
-        if (static_cast<double>(count) * time_step == final_time) {
+    while (final_remainder() > time_step) {
+        if (roundedStepProduct(count, time_step) == final_time) {
             break;
         }
-        if (count == std::numeric_limits<std::size_t>::max()) {
+        if (count == std::numeric_limits<std::size_t>::max() ||
+            static_cast<double>(count) >= maximum_exact_binary64_integer) {
             throw std::overflow_error("requested solve requires too many time steps");
         }
         ++count;
@@ -813,26 +831,29 @@ inline TransportResult solve(const TransportProblem& problem, const SolveOptions
     std::vector<double> y_flux(y_face_count, 0.0);
 
     diagnostics.minimum_time_step = std::numeric_limits<double>::infinity();
-    const long double final_time_schedule = static_cast<long double>(options.final_time);
-    const long double target_step_schedule = static_cast<long double>(target_step);
+    double previous_time = -1.0;
     for (std::size_t step = 0; step < step_count; ++step) {
-        const long double remaining_schedule =
-            std::fma(-static_cast<long double>(step), target_step_schedule, final_time_schedule);
-        const long double elapsed_schedule = final_time_schedule - remaining_schedule;
-        double time = static_cast<double>(elapsed_schedule);
-        if (step + 1 == step_count && remaining_schedule > 0.0L && time >= options.final_time) {
+        const double remaining_schedule =
+            std::fma(-static_cast<double>(step), target_step, options.final_time);
+        double time = step == 0 ? 0.0 : roundedStepProduct(step, target_step);
+        if (step + 1 == step_count && remaining_schedule > 0.0 && time >= options.final_time) {
             time = std::nextafter(options.final_time, -std::numeric_limits<double>::infinity());
         }
-        const double dt = step + 1 == step_count
-                              ? std::min(target_step, static_cast<double>(remaining_schedule))
-                              : target_step;
-        if (!(dt > 0.0) || !finite(dt)) {
+        if (!finite(time) || time < 0.0 || time >= options.final_time ||
+            (step > 0 && time <= previous_time)) {
+            throw std::runtime_error(
+                "floating-point time schedule cannot represent strictly increasing step clocks");
+        }
+        const double dt =
+            step + 1 == step_count ? std::min(target_step, remaining_schedule) : target_step;
+        if (!(dt > 0.0) || !finite(dt) || dt > target_step) {
             throw std::runtime_error("floating-point time schedule produced an invalid step");
         }
         takeStep(problem, essential_data, result.concentration, next, x_flux, y_flux, time, dt,
                  options.check_finite);
         diagnostics.minimum_time_step = std::min(diagnostics.minimum_time_step, dt);
         diagnostics.maximum_time_step = std::max(diagnostics.maximum_time_step, dt);
+        previous_time = time;
     }
 
     // Assigning the requested value avoids exposing harmless summation roundoff.

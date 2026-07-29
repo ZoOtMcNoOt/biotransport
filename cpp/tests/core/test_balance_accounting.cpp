@@ -64,8 +64,233 @@ void testCompatibleTransferUnitsCancelAcrossLedgers() {
                          "coupled external expected change");
     SCIENCE_REQUIRE_NEAR(total.internal_transfer_net, 0.0, 0.0, 0.0,
                          "validated internal transfers cancel");
+    SCIENCE_REQUIRE_NEAR(total.representation_adjustment, 0.0, 0.0, 0.0,
+                         "exact transfer conversion needs no representation adjustment");
     SCIENCE_REQUIRE_NEAR(total.closure_residual, 0.0, 0.0, 0.0, "coupled amount closure residual");
     SCIENCE_REQUIRE(result.isClosed(), "closed coupled ledgers must reconcile exactly");
+}
+
+void testDecimalSiPrefixTransfersCancelAcrossLedgers() {
+    BalanceLedger donor("decimal donor", BalanceUnit::Mole);
+    donor.setInitialInventory(0.1).setFinalInventory(0.0).addTransferOut(
+        "decimal handoff", "decimal receiver", 0.1, BalanceUnit::Mole);
+
+    BalanceLedger receiver("decimal receiver", BalanceUnit::Millimole);
+    receiver.setInitialInventory(0.0).setFinalInventory(100.0).addTransferIn(
+        "decimal handoff", "decimal donor", 100.0, BalanceUnit::Millimole);
+
+    const BalanceReconciliation result = reconcileBalances({donor, receiver});
+    SCIENCE_REQUIRE_NEAR(result.matched_transfers.front().magnitude_base, 0.1, 0.0, 0.0,
+                         "matched decimal transfer in moles");
+    SCIENCE_REQUIRE_NEAR(result.dimensions.front().observed_change, 0.0, 0.0, 0.0,
+                         "equivalent decimal inventories cancel in base units");
+    SCIENCE_REQUIRE_NEAR(result.dimensions.front().closure_residual, 0.0, 0.0, 0.0,
+                         "decimal SI-prefix reconciliation closes exactly");
+    SCIENCE_REQUIRE(result.isClosed(),
+                    "equivalent decimal SI-prefix ledgers must reconcile exactly");
+}
+
+void testExactSiPrefixConversions() {
+    struct Conversion {
+        double value;
+        BalanceUnit from;
+        BalanceUnit to;
+        double expected;
+        const char* quantity;
+    };
+    const std::vector<Conversion> conversions{
+        {2000.0, BalanceUnit::Millimole, BalanceUnit::Mole, 2.0, "millimoles to moles"},
+        {2.0, BalanceUnit::Mole, BalanceUnit::Millimole, 2000.0, "moles to millimoles"},
+        {2000000.0, BalanceUnit::Micromole, BalanceUnit::Mole, 2.0, "micromoles to moles"},
+        {2.0, BalanceUnit::Mole, BalanceUnit::Micromole, 2000000.0, "moles to micromoles"},
+        {2.0, BalanceUnit::Kilojoule, BalanceUnit::Joule, 2000.0, "kilojoules to joules"},
+        {2000.0, BalanceUnit::Joule, BalanceUnit::Kilojoule, 2.0, "joules to kilojoules"},
+        {2000.0, BalanceUnit::Liter, BalanceUnit::CubicMeter, 2.0, "liters to cubic metres"},
+        {2.0, BalanceUnit::CubicMeter, BalanceUnit::Liter, 2000.0, "cubic metres to liters"},
+        {2000000.0, BalanceUnit::Milliliter, BalanceUnit::CubicMeter, 2.0,
+         "milliliters to cubic metres"},
+        {2.0, BalanceUnit::CubicMeter, BalanceUnit::Milliliter, 2000000.0,
+         "cubic metres to milliliters"},
+        {0x1.3102644584d9ep-4, BalanceUnit::Micromole, BalanceUnit::Mole, 0x1.3fd3526af11d5p-24,
+         "micromoles use one binary64 rounding"},
+    };
+
+    for (const auto& conversion : conversions) {
+        SCIENCE_REQUIRE_NEAR(convertBalanceValue(conversion.value, conversion.from, conversion.to),
+                             conversion.expected, 0.0, 0.0, conversion.quantity);
+    }
+}
+
+void testAggregateUsesPortableCompensatedSummation() {
+    BalanceLedger large_gain("large gain", BalanceUnit::Mole);
+    large_gain.setInitialInventory(0.0).setFinalInventory(1.0e16);
+
+    BalanceLedger unit_gain("unit gain", BalanceUnit::Mole);
+    unit_gain.setInitialInventory(0.0).setFinalInventory(1.0);
+
+    BalanceLedger large_loss("large loss", BalanceUnit::Mole);
+    large_loss.setInitialInventory(1.0e16).setFinalInventory(0.0);
+
+    const BalanceReconciliation result = reconcileBalances({large_gain, unit_gain, large_loss});
+    const DimensionBalanceAudit& total = result.dimensions.front();
+    SCIENCE_REQUIRE_NEAR(total.observed_change, 1.0, 0.0, 0.0,
+                         "compensated aggregate preserves a unit-scale residual");
+    SCIENCE_REQUIRE_NEAR(total.external_expected_change, 0.0, 0.0, 0.0,
+                         "empty external budget remains zero");
+    SCIENCE_REQUIRE_NEAR(total.closure_residual, 1.0, 0.0, 0.0,
+                         "aggregate residual is independent of long-double width");
+    SCIENCE_REQUIRE(!result.isClosed(),
+                    "a resolved unit-scale aggregate residual must not report closed");
+}
+
+void testLedgerUsesPortableCompensatedBudget() {
+    BalanceLedger ledger("compensated ledger", BalanceUnit::Mole);
+    ledger.setInitialInventory(0.0)
+        .setFinalInventory(1.0)
+        .addBoundaryIn("large input", 1.0e16)
+        .addGenerated("unit generation", 1.0)
+        .addConsumed("large consumption", 1.0e16);
+
+    const BalanceAudit audit = ledger.audit();
+    SCIENCE_REQUIRE_NEAR(audit.expected_change, 1.0, 0.0, 0.0,
+                         "compensated ledger preserves a unit-scale budget");
+    SCIENCE_REQUIRE_NEAR(audit.closure_residual, 0.0, 0.0, 0.0,
+                         "compensated ledger closes exactly");
+    SCIENCE_REQUIRE(audit.isClosed(0.0), "the compensated per-ledger budget must report closed");
+
+    const BalanceReconciliation result = reconcileBalances({ledger});
+    SCIENCE_REQUIRE_NEAR(result.dimensions.front().external_expected_change, 1.0, 0.0, 0.0,
+                         "aggregate external budget preserves the ledger result");
+    SCIENCE_REQUIRE_NEAR(result.dimensions.front().closure_residual, 0.0, 0.0, 0.0,
+                         "aggregate compensated budget closes exactly");
+    SCIENCE_REQUIRE(result.isClosed(), "the compensated aggregate budget must report closed");
+}
+
+void testAggregateConvertsNativeSubtotalOnce() {
+    BalanceLedger ledger("native subtotal", BalanceUnit::Millimole);
+    ledger.setInitialInventory(0.0)
+        .setFinalInventory(1.125)
+        .addBoundaryIn("whole input", 1.0)
+        .addBoundaryIn("fractional input", 0.125);
+
+    const BalanceAudit audit = ledger.audit();
+    SCIENCE_REQUIRE(audit.isClosed(0.0), "the native-unit ledger must close exactly");
+
+    const BalanceReconciliation result = reconcileBalances({ledger});
+    const DimensionBalanceAudit& total = result.dimensions.front();
+    SCIENCE_REQUIRE_NEAR(total.observed_change, 0.001125, 0.0, 0.0,
+                         "observed subtotal converts once to base units");
+    SCIENCE_REQUIRE_NEAR(total.external_expected_change, 0.001125, 0.0, 0.0,
+                         "external subtotal converts once to base units");
+    SCIENCE_REQUIRE_NEAR(total.closure_residual, 0.0, 0.0, 0.0,
+                         "native subtotal reconciliation closes exactly");
+    SCIENCE_REQUIRE(result.isClosed(), "the native subtotal aggregate must report closed");
+}
+
+void testMixedUnitTransferRoundoffIsAccountedInternally() {
+    constexpr double transfer_micromoles = 1.125;
+    const double donor_change =
+        convertBalanceValue(transfer_micromoles, BalanceUnit::Micromole, BalanceUnit::Mole);
+    const double receiver_change =
+        convertBalanceValue(transfer_micromoles, BalanceUnit::Micromole, BalanceUnit::Millimole);
+
+    BalanceLedger donor("roundoff donor", BalanceUnit::Mole);
+    donor.setInitialInventory(donor_change)
+        .setFinalInventory(0.0)
+        .addTransferOut("roundoff handoff", "roundoff receiver", transfer_micromoles,
+                        BalanceUnit::Micromole);
+
+    BalanceLedger receiver("roundoff receiver", BalanceUnit::Millimole);
+    receiver.setInitialInventory(0.0)
+        .setFinalInventory(receiver_change)
+        .addTransferIn("roundoff handoff", "roundoff donor", transfer_micromoles,
+                       BalanceUnit::Micromole);
+
+    SCIENCE_REQUIRE(donor.audit().isClosed(0.0) && receiver.audit().isClosed(0.0),
+                    "both local-unit transfer ledgers must close exactly");
+
+    const BalanceReconciliation result = reconcileBalances({donor, receiver});
+    const DimensionBalanceAudit& total = result.dimensions.front();
+    SCIENCE_REQUIRE_NEAR(total.internal_transfer_net, -0x1p-72, 0.0, 0.0,
+                         "local-unit transfer roundoff is reported internally");
+    SCIENCE_REQUIRE_NEAR(total.observed_change, total.internal_transfer_net, 0.0, 0.0,
+                         "observed inventory net matches local transfer representation");
+    SCIENCE_REQUIRE_NEAR(total.external_expected_change, 0.0, 0.0, 0.0,
+                         "internal transfers remain excluded from the external budget");
+    SCIENCE_REQUIRE_NEAR(total.representation_adjustment, 0.0, 0.0, 0.0,
+                         "transfer-only roundoff needs no decomposition adjustment");
+    SCIENCE_REQUIRE_NEAR(total.closure_residual, 0.0, 0.0, 0.0,
+                         "mixed-unit transfer representation reconciles exactly");
+    SCIENCE_REQUIRE(result.isClosed(), "the mixed-unit transfer aggregate must report closed");
+}
+
+void testExternalAndInternalRoundingPreservesClosure() {
+    BalanceLedger donor("combined donor", BalanceUnit::Millimole);
+    donor.setInitialInventory(0.2).setFinalInventory(0.0).addTransferOut(
+        "combined handoff", "combined receiver", 0.2, BalanceUnit::Millimole);
+
+    BalanceLedger receiver("combined receiver", BalanceUnit::Millimole);
+    receiver.setInitialInventory(0.0)
+        .setFinalInventory(1.2)
+        .addBoundaryIn("external input", 1.0)
+        .addTransferIn("combined handoff", "combined donor", 0.2, BalanceUnit::Millimole);
+
+    SCIENCE_REQUIRE(donor.audit().isClosed(0.0) && receiver.audit().isClosed(0.0),
+                    "combined external and transfer ledgers must close exactly");
+
+    const BalanceReconciliation result = reconcileBalances({donor, receiver});
+    const DimensionBalanceAudit& total = result.dimensions.front();
+    SCIENCE_REQUIRE_NEAR(total.internal_transfer_net, 0.0, 0.0, 0.0,
+                         "matched same-unit internal transfers cancel exactly");
+    SCIENCE_REQUIRE_NEAR(total.representation_adjustment, -0x1p-62, 0.0, 0.0,
+                         "decomposition roundoff is reported separately");
+    SCIENCE_REQUIRE_NEAR(total.closure_residual, 0.0, 0.0, 0.0,
+                         "converted complete expectations preserve aggregate closure");
+    SCIENCE_REQUIRE(result.isClosed(),
+                    "combined external and transfer aggregate must report closed");
+}
+
+void testRepresentationAdjustmentPreservesBookkeepingLabels() {
+    BalanceLedger donor("hierarchical donor", BalanceUnit::Mole);
+    donor.setInitialInventory(0.0)
+        .setFinalInventory(1.0)
+        .addBoundaryIn("large input", 1.0e16)
+        .addGenerated("unit generation", 1.0)
+        .addTransferOut("large handoff", "hierarchical receiver", 1.0e16);
+
+    BalanceLedger receiver("hierarchical receiver", BalanceUnit::Mole);
+    receiver.setInitialInventory(0.0).setFinalInventory(1.0e16).addTransferIn(
+        "large handoff", "hierarchical donor", 1.0e16);
+
+    BalanceLedger sink("external sink", BalanceUnit::Mole);
+    sink.setInitialInventory(1.0e16).setFinalInventory(0.0).addBoundaryOut("large output", 1.0e16);
+
+    SCIENCE_REQUIRE(
+        donor.audit().isClosed(0.0) && receiver.audit().isClosed(0.0) && sink.audit().isClosed(0.0),
+        "all hierarchical bookkeeping ledgers must close exactly");
+
+    const BalanceReconciliation result = reconcileBalances({donor, receiver, sink});
+    const DimensionBalanceAudit& total = result.dimensions.front();
+    SCIENCE_REQUIRE_NEAR(total.observed_change, 1.0, 0.0, 0.0,
+                         "complete converted observation preserves the unit term");
+    SCIENCE_REQUIRE_NEAR(total.external_expected_change, 0.0, 0.0, 0.0,
+                         "external rounded subtotals retain their physical label");
+    SCIENCE_REQUIRE_NEAR(total.internal_transfer_net, 0.0, 0.0, 0.0,
+                         "matched internal transfers retain a zero net");
+    SCIENCE_REQUIRE_NEAR(total.representation_adjustment, 1.0, 0.0, 0.0,
+                         "hierarchical rounding is exposed as representation adjustment");
+    SCIENCE_REQUIRE_NEAR(total.closure_residual, 0.0, 0.0, 0.0,
+                         "complete expected bookkeeping remains exactly closed");
+    SCIENCE_REQUIRE(result.isClosed(), "hierarchical bookkeeping aggregate must report closed");
+}
+
+void testDimensionAuditAggregateInitializationRemainsCompatible() {
+    const DimensionBalanceAudit legacy{
+        BalanceDimension::Amount, BalanceUnit::Mole, 1.0, 2.0, 3.0, 4.0};
+    SCIENCE_REQUIRE_NEAR(legacy.closure_residual, 4.0, 0.0, 0.0,
+                         "legacy sixth aggregate field remains closure residual");
+    SCIENCE_REQUIRE_NEAR(legacy.representation_adjustment, 0.0, 0.0, 0.0,
+                         "new aggregate field defaults when omitted");
 }
 
 void testMixedDimensionsRemainSeparate() {
@@ -198,6 +423,21 @@ int main() {
           testSignedBudgetClosesWithDocumentedConvention},
          {"compatible transfer units cancel across ledgers",
           testCompatibleTransferUnitsCancelAcrossLedgers},
+         {"decimal SI-prefix transfers cancel across ledgers",
+          testDecimalSiPrefixTransfersCancelAcrossLedgers},
+         {"SI prefix conversions use exact integer factors", testExactSiPrefixConversions},
+         {"aggregate uses portable compensated summation",
+          testAggregateUsesPortableCompensatedSummation},
+         {"ledger uses portable compensated budget", testLedgerUsesPortableCompensatedBudget},
+         {"aggregate converts native subtotal once", testAggregateConvertsNativeSubtotalOnce},
+         {"mixed-unit transfer roundoff is accounted internally",
+          testMixedUnitTransferRoundoffIsAccountedInternally},
+         {"external and internal rounding preserves closure",
+          testExternalAndInternalRoundingPreservesClosure},
+         {"representation adjustment preserves bookkeeping labels",
+          testRepresentationAdjustmentPreservesBookkeepingLabels},
+         {"dimension audit aggregate initialization remains compatible",
+          testDimensionAuditAggregateInitializationRemainsCompatible},
          {"mixed dimensions remain separate", testMixedDimensionsRemainSeparate},
          {"unmatched and unknown transfers fail loudly",
           testUnmatchedAndUnknownTransfersFailLoudly},

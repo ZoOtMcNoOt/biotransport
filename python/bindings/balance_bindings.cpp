@@ -124,7 +124,9 @@ void register_balance_bindings(py::module_& module) {
         .def_readonly("observed_change", &DimensionBalanceAudit::observed_change)
         .def_readonly("external_expected_change", &DimensionBalanceAudit::external_expected_change)
         .def_readonly("internal_transfer_net", &DimensionBalanceAudit::internal_transfer_net)
-        .def_readonly("closure_residual", &DimensionBalanceAudit::closure_residual);
+        .def_readonly("closure_residual", &DimensionBalanceAudit::closure_residual)
+        .def_readonly("representation_adjustment",
+                      &DimensionBalanceAudit::representation_adjustment);
 
     py::class_<BalanceReconciliation>(module, "BalanceReconciliation")
         .def_readonly("ledgers", &BalanceReconciliation::ledgers)

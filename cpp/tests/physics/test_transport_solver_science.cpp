@@ -366,6 +366,41 @@ void plannedScheduleNeverExceedsRequestedStep() {
     TransportProblem problem(mesh);
     problem.diffusivity(0.0).constantSource(1.0).initialCondition(0.0);
 
+    SolveOptions snapped_endpoint;
+    snapped_endpoint.final_time = 0.1;
+    snapped_endpoint.time_step = 0.01;
+    snapped_endpoint.max_steps = 10;
+    const auto snapped_result = solve(problem, snapped_endpoint);
+    require(snapped_result.time == snapped_endpoint.final_time &&
+                snapped_result.diagnostics.steps == 10,
+            "a correctly rounded binary64 endpoint did not use ten nominal steps");
+    require(snapped_result.diagnostics.minimum_time_step == snapped_endpoint.time_step &&
+                snapped_result.diagnostics.maximum_time_step == snapped_endpoint.time_step,
+            "the snapped binary64 endpoint changed a nominal step");
+    requireNear(snapped_result.concentration[1], snapped_endpoint.final_time, 2.0e-16,
+                "the snapped binary64 schedule did not cover the requested interval");
+
+    SolveOptions endpoint_below = snapped_endpoint;
+    endpoint_below.final_time = std::nextafter(0.1, 0.0);
+    const auto below_result = solve(problem, endpoint_below);
+    require(below_result.diagnostics.steps == 10,
+            "the endpoint immediately below 0.1 did not use ten steps");
+    require(below_result.diagnostics.maximum_time_step <= endpoint_below.time_step,
+            "the schedule below the snapped endpoint exceeded the requested step");
+
+    SolveOptions endpoint_above = snapped_endpoint;
+    endpoint_above.final_time = std::nextafter(0.1, std::numeric_limits<double>::infinity());
+    requireThrows<std::runtime_error>(
+        [&] { (void)solve(problem, endpoint_above); },
+        "the endpoint immediately above 0.1 did not honor max_steps=10");
+    endpoint_above.max_steps = 11;
+    const auto above_result = solve(problem, endpoint_above);
+    require(above_result.diagnostics.steps == 11,
+            "the endpoint immediately above 0.1 was incorrectly snapped down");
+    require(above_result.diagnostics.minimum_time_step > 0.0 &&
+                above_result.diagnostics.maximum_time_step <= endpoint_above.time_step,
+            "the schedule above the snapped endpoint emitted an invalid step");
+
     SolveOptions ordinary;
     ordinary.final_time = 1.0;
     ordinary.time_step = 0.1;
@@ -401,6 +436,20 @@ void plannedScheduleNeverExceedsRequestedStep() {
         "canonical transport rounded an exact-float step ratio down");
     require(rounded_result.diagnostics.maximum_time_step <= rounded_ratio.time_step,
             "canonical transport exact-float remainder exceeded the requested ceiling");
+    rounded_ratio.max_steps = 10;
+    requireThrows<std::runtime_error>(
+        [&] { (void)solve(problem, rounded_ratio); },
+        "canonical transport ignored max_steps for an exact-float endpoint residue");
+
+    if (std::numeric_limits<std::size_t>::digits > 53) {
+        SolveOptions unrepresentable_count;
+        unrepresentable_count.final_time = 1.0;
+        unrepresentable_count.time_step = std::ldexp(1.0, -54);
+        unrepresentable_count.max_steps = std::numeric_limits<std::size_t>::max();
+        requireThrows<std::overflow_error>(
+            [&] { (void)solve(problem, unrepresentable_count); },
+            "a step count above the exact binary64 integer range was accepted");
+    }
 }
 
 void boundaryIsAppliedBeforeFirstStencilAndCornersAreDeterministic() {

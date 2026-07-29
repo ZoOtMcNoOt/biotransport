@@ -22,6 +22,7 @@
 #include <biotransport/physics/reactions.hpp>
 #include <biotransport/solvers/solver_base.hpp>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <stdexcept>
 #include <string>

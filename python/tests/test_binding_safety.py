@@ -13,7 +13,12 @@ import pytest
 from biotransport import _core as core
 
 
-def _assert_keeps_mesh_alive(mesh: object, factory: Callable[[object], object]) -> None:
+def _assert_keeps_mesh_alive(
+    mesh_factory: Callable[[], object], factory: Callable[[object], object]
+) -> None:
+    # Construct here so CPython 3.9's caller evaluation stack cannot retain the
+    # temporary mesh while this helper verifies its lifetime.
+    mesh = mesh_factory()
     mesh_reference = weakref.ref(mesh)
     owner = factory(mesh)
 
@@ -62,7 +67,9 @@ def _assert_keeps_mesh_alive(mesh: object, factory: Callable[[object], object]) 
 def test_2d_native_objects_keep_their_mesh_alive(
     factory: Callable[[object], object],
 ) -> None:
-    _assert_keeps_mesh_alive(core.StructuredMesh(4, 4, 0.0, 1.0, 0.0, 1.0), factory)
+    _assert_keeps_mesh_alive(
+        lambda: core.StructuredMesh(4, 4, 0.0, 1.0, 0.0, 1.0), factory
+    )
 
 
 @pytest.mark.parametrize(
@@ -83,7 +90,7 @@ def test_2d_native_objects_keep_their_mesh_alive(
 def test_3d_native_objects_keep_their_mesh_alive(
     factory: Callable[[object], object],
 ) -> None:
-    _assert_keeps_mesh_alive(core.StructuredMesh3D(2, 1.0), factory)
+    _assert_keeps_mesh_alive(lambda: core.StructuredMesh3D(2, 1.0), factory)
 
 
 def test_invalid_2d_integer_boundaries_raise_value_error() -> None:

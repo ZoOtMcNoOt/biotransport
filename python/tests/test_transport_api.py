@@ -60,6 +60,66 @@ def test_custom_reaction_requires_step_or_derivative_bound() -> None:
     assert not result.diagnostics.reaction_stability_bound_known
 
 
+def test_requested_step_planning_uses_portable_binary64_endpoints() -> None:
+    problem = (
+        bt.Problem(bt.mesh_1d(3))
+        .diffusivity(0.0)
+        .constant_source(1.0)
+        .initial_condition(0.0)
+    )
+
+    snapped = bt.solve(problem, end_time=0.1, time_step=0.01, max_steps=10)
+    assert snapped.diagnostics.steps == 10
+    assert snapped.diagnostics.minimum_time_step == 0.01
+    assert snapped.diagnostics.maximum_time_step == 0.01
+
+    below = bt.solve(
+        problem,
+        end_time=np.nextafter(0.1, 0.0),
+        time_step=0.01,
+        max_steps=10,
+    )
+    assert below.diagnostics.steps == 10
+    assert below.diagnostics.maximum_time_step <= 0.01
+
+    endpoint_above = np.nextafter(0.1, np.inf)
+    with pytest.raises(RuntimeError, match="max_steps"):
+        bt.solve(
+            problem,
+            end_time=endpoint_above,
+            time_step=0.01,
+            max_steps=10,
+        )
+    above = bt.solve(
+        problem,
+        end_time=endpoint_above,
+        time_step=0.01,
+        max_steps=11,
+    )
+    assert above.diagnostics.steps == 11
+    assert 0.0 < above.diagnostics.minimum_time_step <= 0.01
+    assert above.diagnostics.maximum_time_step <= 0.01
+
+    adversarial_end = 0.9375291778124752
+    adversarial_step = 0.09375291778124752
+    with pytest.raises(RuntimeError, match="max_steps"):
+        bt.solve(
+            problem,
+            end_time=adversarial_end,
+            time_step=adversarial_step,
+            max_steps=10,
+        )
+    adversarial = bt.solve(
+        problem,
+        end_time=adversarial_end,
+        time_step=adversarial_step,
+        max_steps=11,
+    )
+    assert adversarial.diagnostics.steps == 11
+    assert 0.0 < adversarial.diagnostics.minimum_time_step <= adversarial_step
+    assert adversarial.diagnostics.maximum_time_step <= adversarial_step
+
+
 def test_unverified_method_is_rejected_instead_of_substituted() -> None:
     mesh = bt.mesh_1d(10)
     problem = bt.Problem(mesh).diffusivity(0.01)

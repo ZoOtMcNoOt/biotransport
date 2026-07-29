@@ -45,12 +45,218 @@ class TestBalanceAccounting(unittest.TestCase):
         self.assertAlmostEqual(result.matched_transfers[0].magnitude_base, 2.0)
         self.assertEqual(len(result.dimensions), 1)
         self.assertEqual(result.dimensions[0].dimension, bt.BalanceDimension.AMOUNT)
+        self.assertEqual(result.dimensions[0].observed_change, 0.0)
         self.assertEqual(result.dimensions[0].internal_transfer_net, 0.0)
-        self.assertAlmostEqual(result.dimensions[0].closure_residual, 0.0)
+        self.assertEqual(result.dimensions[0].representation_adjustment, 0.0)
+        self.assertEqual(result.dimensions[0].closure_residual, 0.0)
 
         # Reconciliation results own their audit records; later ledger edits do not alias them.
         donor.set_final_inventory(9.0)
         self.assertEqual(result.ledgers[0].final_inventory, 8.0)
+
+    def test_si_prefix_conversions_use_exact_integer_factors(self):
+        conversions = (
+            (2000.0, bt.BalanceUnit.MILLIMOLE, bt.BalanceUnit.MOLE, 2.0),
+            (2.0, bt.BalanceUnit.MOLE, bt.BalanceUnit.MILLIMOLE, 2000.0),
+            (2000000.0, bt.BalanceUnit.MICROMOLE, bt.BalanceUnit.MOLE, 2.0),
+            (2.0, bt.BalanceUnit.MOLE, bt.BalanceUnit.MICROMOLE, 2000000.0),
+            (2.0, bt.BalanceUnit.KILOJOULE, bt.BalanceUnit.JOULE, 2000.0),
+            (2000.0, bt.BalanceUnit.JOULE, bt.BalanceUnit.KILOJOULE, 2.0),
+            (2000.0, bt.BalanceUnit.LITER, bt.BalanceUnit.CUBIC_METER, 2.0),
+            (2.0, bt.BalanceUnit.CUBIC_METER, bt.BalanceUnit.LITER, 2000.0),
+            (2000000.0, bt.BalanceUnit.MILLILITER, bt.BalanceUnit.CUBIC_METER, 2.0),
+            (2.0, bt.BalanceUnit.CUBIC_METER, bt.BalanceUnit.MILLILITER, 2000000.0),
+            (
+                float.fromhex("0x1.3102644584d9ep-4"),
+                bt.BalanceUnit.MICROMOLE,
+                bt.BalanceUnit.MOLE,
+                float.fromhex("0x1.3fd3526af11d5p-24"),
+            ),
+        )
+        for value, from_unit, to_unit, expected in conversions:
+            with self.subTest(value=value, from_unit=from_unit, to_unit=to_unit):
+                self.assertEqual(
+                    bt.convert_balance_value(value, from_unit, to_unit), expected
+                )
+
+    def test_decimal_si_prefix_transfers_cancel_exactly(self):
+        donor = bt.BalanceLedger("decimal donor", bt.BalanceUnit.MOLE)
+        donor.set_initial_inventory(0.1).set_final_inventory(0.0).add_transfer_out(
+            "decimal handoff",
+            "decimal receiver",
+            0.1,
+            bt.BalanceUnit.MOLE,
+        )
+        receiver = bt.BalanceLedger("decimal receiver", bt.BalanceUnit.MILLIMOLE)
+        receiver.set_initial_inventory(0.0).set_final_inventory(100.0).add_transfer_in(
+            "decimal handoff",
+            "decimal donor",
+            100.0,
+            bt.BalanceUnit.MILLIMOLE,
+        )
+
+        result = bt.reconcile_balances([donor, receiver])
+
+        self.assertEqual(result.matched_transfers[0].magnitude_base, 0.1)
+        self.assertEqual(result.dimensions[0].observed_change, 0.0)
+        self.assertEqual(result.dimensions[0].closure_residual, 0.0)
+        self.assertTrue(result.is_closed())
+
+    def test_aggregate_uses_portable_compensated_summation(self):
+        large_gain = bt.BalanceLedger("large gain", bt.BalanceUnit.MOLE)
+        large_gain.set_initial_inventory(0.0).set_final_inventory(1.0e16)
+
+        unit_gain = bt.BalanceLedger("unit gain", bt.BalanceUnit.MOLE)
+        unit_gain.set_initial_inventory(0.0).set_final_inventory(1.0)
+
+        large_loss = bt.BalanceLedger("large loss", bt.BalanceUnit.MOLE)
+        large_loss.set_initial_inventory(1.0e16).set_final_inventory(0.0)
+
+        result = bt.reconcile_balances([large_gain, unit_gain, large_loss])
+
+        self.assertEqual(result.dimensions[0].observed_change, 1.0)
+        self.assertEqual(result.dimensions[0].external_expected_change, 0.0)
+        self.assertEqual(result.dimensions[0].closure_residual, 1.0)
+        self.assertFalse(result.is_closed())
+
+    def test_ledger_uses_portable_compensated_budget(self):
+        ledger = bt.BalanceLedger("compensated ledger", bt.BalanceUnit.MOLE)
+        ledger.set_initial_inventory(0.0).set_final_inventory(1.0).add_boundary_in(
+            "large input", 1.0e16
+        ).add_generated("unit generation", 1.0).add_consumed(
+            "large consumption", 1.0e16
+        )
+
+        audit = ledger.audit()
+        self.assertEqual(audit.expected_change, 1.0)
+        self.assertEqual(audit.closure_residual, 0.0)
+        self.assertTrue(audit.is_closed(0.0))
+
+        result = bt.reconcile_balances([ledger])
+        self.assertEqual(result.dimensions[0].external_expected_change, 1.0)
+        self.assertEqual(result.dimensions[0].closure_residual, 0.0)
+        self.assertTrue(result.is_closed())
+
+    def test_aggregate_converts_native_subtotal_once(self):
+        ledger = bt.BalanceLedger("native subtotal", bt.BalanceUnit.MILLIMOLE)
+        ledger.set_initial_inventory(0.0).set_final_inventory(1.125).add_boundary_in(
+            "whole input", 1.0
+        ).add_boundary_in("fractional input", 0.125)
+
+        audit = ledger.audit()
+        self.assertTrue(audit.is_closed(0.0))
+
+        result = bt.reconcile_balances([ledger])
+        self.assertEqual(result.dimensions[0].observed_change, 0.001125)
+        self.assertEqual(result.dimensions[0].external_expected_change, 0.001125)
+        self.assertEqual(result.dimensions[0].closure_residual, 0.0)
+        self.assertTrue(result.is_closed())
+
+    def test_mixed_unit_transfer_roundoff_is_accounted_internally(self):
+        transfer_micromoles = 1.125
+        donor_change = bt.convert_balance_value(
+            transfer_micromoles,
+            bt.BalanceUnit.MICROMOLE,
+            bt.BalanceUnit.MOLE,
+        )
+        receiver_change = bt.convert_balance_value(
+            transfer_micromoles,
+            bt.BalanceUnit.MICROMOLE,
+            bt.BalanceUnit.MILLIMOLE,
+        )
+
+        donor = bt.BalanceLedger("roundoff donor", bt.BalanceUnit.MOLE)
+        donor.set_initial_inventory(donor_change).set_final_inventory(
+            0.0
+        ).add_transfer_out(
+            "roundoff handoff",
+            "roundoff receiver",
+            transfer_micromoles,
+            bt.BalanceUnit.MICROMOLE,
+        )
+        receiver = bt.BalanceLedger("roundoff receiver", bt.BalanceUnit.MILLIMOLE)
+        receiver.set_initial_inventory(0.0).set_final_inventory(
+            receiver_change
+        ).add_transfer_in(
+            "roundoff handoff",
+            "roundoff donor",
+            transfer_micromoles,
+            bt.BalanceUnit.MICROMOLE,
+        )
+
+        self.assertTrue(donor.audit().is_closed(0.0))
+        self.assertTrue(receiver.audit().is_closed(0.0))
+
+        result = bt.reconcile_balances([donor, receiver])
+        total = result.dimensions[0]
+        self.assertEqual(
+            total.internal_transfer_net, -float.fromhex("0x1.0000000000000p-72")
+        )
+        self.assertEqual(total.observed_change, total.internal_transfer_net)
+        self.assertEqual(total.external_expected_change, 0.0)
+        self.assertEqual(total.representation_adjustment, 0.0)
+        self.assertEqual(total.closure_residual, 0.0)
+        self.assertTrue(result.is_closed())
+
+    def test_external_and_internal_rounding_preserves_closure(self):
+        donor = bt.BalanceLedger("combined donor", bt.BalanceUnit.MILLIMOLE)
+        donor.set_initial_inventory(0.2).set_final_inventory(0.0).add_transfer_out(
+            "combined handoff",
+            "combined receiver",
+            0.2,
+            bt.BalanceUnit.MILLIMOLE,
+        )
+        receiver = bt.BalanceLedger("combined receiver", bt.BalanceUnit.MILLIMOLE)
+        receiver.set_initial_inventory(0.0).set_final_inventory(1.2).add_boundary_in(
+            "external input", 1.0
+        ).add_transfer_in(
+            "combined handoff",
+            "combined donor",
+            0.2,
+            bt.BalanceUnit.MILLIMOLE,
+        )
+
+        self.assertTrue(donor.audit().is_closed(0.0))
+        self.assertTrue(receiver.audit().is_closed(0.0))
+
+        result = bt.reconcile_balances([donor, receiver])
+        total = result.dimensions[0]
+        self.assertEqual(total.internal_transfer_net, 0.0)
+        self.assertEqual(
+            total.representation_adjustment,
+            -float.fromhex("0x1.0000000000000p-62"),
+        )
+        self.assertEqual(total.closure_residual, 0.0)
+        self.assertTrue(result.is_closed())
+
+    def test_representation_adjustment_preserves_bookkeeping_labels(self):
+        donor = bt.BalanceLedger("hierarchical donor", bt.BalanceUnit.MOLE)
+        donor.set_initial_inventory(0.0).set_final_inventory(1.0).add_boundary_in(
+            "large input", 1.0e16
+        ).add_generated("unit generation", 1.0).add_transfer_out(
+            "large handoff", "hierarchical receiver", 1.0e16
+        )
+        receiver = bt.BalanceLedger("hierarchical receiver", bt.BalanceUnit.MOLE)
+        receiver.set_initial_inventory(0.0).set_final_inventory(1.0e16).add_transfer_in(
+            "large handoff", "hierarchical donor", 1.0e16
+        )
+        sink = bt.BalanceLedger("external sink", bt.BalanceUnit.MOLE)
+        sink.set_initial_inventory(1.0e16).set_final_inventory(0.0).add_boundary_out(
+            "large output", 1.0e16
+        )
+
+        self.assertTrue(donor.audit().is_closed(0.0))
+        self.assertTrue(receiver.audit().is_closed(0.0))
+        self.assertTrue(sink.audit().is_closed(0.0))
+
+        result = bt.reconcile_balances([donor, receiver, sink])
+        total = result.dimensions[0]
+        self.assertEqual(total.observed_change, 1.0)
+        self.assertEqual(total.external_expected_change, 0.0)
+        self.assertEqual(total.internal_transfer_net, 0.0)
+        self.assertEqual(total.representation_adjustment, 1.0)
+        self.assertEqual(total.closure_residual, 0.0)
+        self.assertTrue(result.is_closed())
 
     def test_mixed_dimensions_are_audited_separately(self):
         amount = bt.BalanceLedger("amount", bt.BalanceUnit.MICROMOLE)

@@ -96,16 +96,18 @@ void testCombinedExplicitStabilityBounds() {
 
     StructuredMesh mesh(10, 0.0, 1.0);
     AdvectionDiffusionSolver solver(mesh, diffusivity, velocity, 0.0, AdvectionScheme::UPWIND);
-    SCIENCE_REQUIRE_NEAR(solver.maxTimeStep(1.0), expected, 2.0e-17, 2.0e-15,
+    const double stability_limit = solver.maxTimeStep(1.0);
+    SCIENCE_REQUIRE_NEAR(stability_limit, expected, 2.0e-17, 2.0e-15,
                          "specialized-solver combined depletion bound");
     solver.setInitialCondition(std::vector<double>(mesh.numNodes(), 0.0));
-    solver.solve(expected, 1);
+    solver.solve(stability_limit, 1);
     AdvectionDiffusionSolver excessive(mesh, diffusivity, velocity, 0.0, AdvectionScheme::UPWIND);
-    SCIENCE_REQUIRE(throws<std::runtime_error>([&] {
-                        excessive.solve(
-                            std::nextafter(expected, std::numeric_limits<double>::infinity()), 1);
-                    }),
-                    "a step above the combined bound must be rejected");
+    SCIENCE_REQUIRE(
+        throws<std::runtime_error>([&] {
+            excessive.solve(
+                std::nextafter(stability_limit, std::numeric_limits<double>::infinity()), 1);
+        }),
+        "a step above the combined bound must be rejected");
 
     constexpr double dy = 0.2;
     constexpr double vy = 0.5;

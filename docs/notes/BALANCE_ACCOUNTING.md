@@ -103,7 +103,16 @@ disagreements, and cross-dimension pairs.
 
 After validation, each dimension is aggregated separately in its base unit. Internal transfers are
 excluded from the aggregate external expected change, so they cancel once and cannot masquerade as
-external production or loss. Boundary exchanges, generation, and consumption remain external terms.
+external production or loss. `internal_transfer_net` reports the converted local transfer totals.
+`representation_adjustment` reports any remaining binary64 difference between the converted complete
+expected change and its external/internal decomposition:
+
+```text
+complete expected = external expected + internal transfer net + representation adjustment
+```
+
+Aggregate closure compares the converted complete observed and expected changes directly. Boundary
+exchanges, generation, and consumption remain external terms.
 
 The optional transfer tolerances compare the two recorded transfer magnitudes after conversion:
 
@@ -117,7 +126,13 @@ bt.reconcile_balances(
 
 The absolute transfer tolerance is in mol, J, or m^3 according to the transfer dimension. Closure
 tolerances passed to `BalanceReconciliation.is_closed` are likewise separate base-unit tolerances
-for amount, energy, and volume.
+for amount, energy, and volume. Calling `is_closed()` without arguments intentionally requests
+strict algebraic closure with zero tolerance. Exact SI-prefix relationships are applied with integer
+factors, so conversions such as 2000 mmol to 2 mol do not consume that tolerance. Balances are
+accumulated with compensated binary64 summation so results do not depend on the platform's `long
+double` width. For balances assembled from numerical integration or measurements, pass explicit,
+problem-appropriate absolute tolerances; the library does not infer physical or discretization
+uncertainty.
 
 ## Scientific scope
 

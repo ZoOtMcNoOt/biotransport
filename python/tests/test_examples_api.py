@@ -8,10 +8,10 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TypeGuard
 
 import biotransport as bt
 import pytest
+from typing_extensions import TypeGuard
 
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"

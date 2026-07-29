@@ -183,6 +183,7 @@ class DimensionBalanceAudit:
     external_expected_change: float
     internal_transfer_net: float
     closure_residual: float
+    representation_adjustment: float
 
 class BalanceReconciliation:
     ledgers: list[BalanceAudit]

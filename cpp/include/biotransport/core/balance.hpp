@@ -5,7 +5,6 @@
 #include <cctype>
 #include <cmath>
 #include <cstddef>
-#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -138,12 +137,11 @@ inline void requireTolerance(double value, const char* quantity) {
     }
 }
 
-inline double narrowFinite(long double value, const char* quantity) {
-    if (!std::isfinite(value) ||
-        std::abs(value) > static_cast<long double>(std::numeric_limits<double>::max())) {
+inline double finiteResult(double value, const char* quantity) {
+    if (!std::isfinite(value)) {
         throw std::overflow_error(std::string(quantity) + " is not representable as a double");
     }
-    return static_cast<double>(value);
+    return value;
 }
 
 inline std::size_t dimensionIndex(BalanceDimension dimension) {
@@ -158,6 +156,80 @@ inline std::size_t dimensionIndex(BalanceDimension dimension) {
     throw std::invalid_argument("unknown balance dimension");
 }
 
+inline int decimalExponentToBase(BalanceUnit unit) {
+    switch (unit) {
+        case BalanceUnit::Mole:
+        case BalanceUnit::Joule:
+        case BalanceUnit::CubicMeter:
+            return 0;
+        case BalanceUnit::Millimole:
+        case BalanceUnit::Liter:
+            return -3;
+        case BalanceUnit::Micromole:
+        case BalanceUnit::Milliliter:
+            return -6;
+        case BalanceUnit::Kilojoule:
+            return 3;
+    }
+    throw std::invalid_argument("unknown balance unit");
+}
+
+inline double convertCompatibleValue(double value, BalanceUnit from, BalanceUnit to) {
+    if (balanceDimension(from) != balanceDimension(to)) {
+        throw std::invalid_argument("cannot convert between incompatible balance dimensions");
+    }
+
+    // SI prefixes are exact decimal ratios. Apply their integer numerator or
+    // denominator directly at the public binary64 precision. This avoids both
+    // promoting a rounded approximation to 10^-3/10^-6 and double-rounding a
+    // wider intermediate when returning the public double result.
+    switch (decimalExponentToBase(from) - decimalExponentToBase(to)) {
+        case -6:
+            return value / 1000000.0;
+        case -3:
+            return value / 1000.0;
+        case 0:
+            return value;
+        case 3:
+            return value * 1000.0;
+        case 6:
+            return value * 1000000.0;
+    }
+    throw std::logic_error("unsupported balance-unit conversion ratio");
+}
+
+class CompensatedSum {
+public:
+    void add(double value) {
+        if (!std::isfinite(value)) {
+            throw std::overflow_error("balance accumulation received a non-finite value");
+        }
+        const double updated = sum_ + value;
+        if (!std::isfinite(updated)) {
+            throw std::overflow_error("balance accumulation is not representable as a double");
+        }
+        const double adjustment =
+            std::abs(sum_) >= std::abs(value) ? (sum_ - updated) + value : (value - updated) + sum_;
+        correction_ += adjustment;
+        if (!std::isfinite(correction_)) {
+            throw std::overflow_error("balance accumulation correction is not representable");
+        }
+        sum_ = updated;
+    }
+
+    double value(const char* quantity) const {
+        const double result = sum_ + correction_;
+        if (!std::isfinite(result)) {
+            throw std::overflow_error(std::string(quantity) + " is not representable as a double");
+        }
+        return result;
+    }
+
+private:
+    double sum_ = 0.0;
+    double correction_ = 0.0;
+};
+
 }  // namespace balance_detail
 
 /** Convert a finite signed value between compatible balance units. */
@@ -165,12 +237,11 @@ inline double convertBalanceValue(double value, BalanceUnit from, BalanceUnit to
     if (!std::isfinite(value)) {
         throw std::invalid_argument("balance value must be finite");
     }
-    if (balanceDimension(from) != balanceDimension(to)) {
-        throw std::invalid_argument("cannot convert between incompatible balance dimensions");
+    const double converted = balance_detail::convertCompatibleValue(value, from, to);
+    if (!std::isfinite(converted)) {
+        throw std::overflow_error("converted balance value is not representable as a double");
     }
-    const long double converted =
-        static_cast<long double>(value) * balanceUnitScaleToBase(from) / balanceUnitScaleToBase(to);
-    return balance_detail::narrowFinite(converted, "converted balance value");
+    return converted;
 }
 
 struct BalanceTerm {
@@ -314,14 +385,29 @@ public:
         const double generated = sumTerms(generated_, "generation total");
         const double consumed = sumTerms(consumed_, "consumption total");
 
-        long double transfer_in = 0.0L;
-        long double transfer_out = 0.0L;
+        balance_detail::CompensatedSum transfer_in;
+        balance_detail::CompensatedSum transfer_out;
+        balance_detail::CompensatedSum expected_change;
+        for (const auto& term : boundary_in_) {
+            expected_change.add(term.magnitude);
+        }
+        for (const auto& term : boundary_out_) {
+            expected_change.add(-term.magnitude);
+        }
+        for (const auto& term : generated_) {
+            expected_change.add(term.magnitude);
+        }
+        for (const auto& term : consumed_) {
+            expected_change.add(-term.magnitude);
+        }
         for (const auto& transfer : transfers_) {
             const double local = convertBalanceValue(transfer.magnitude, transfer.unit, unit_);
             if (transfer.direction == BalanceTransferDirection::Incoming) {
-                transfer_in += local;
+                transfer_in.add(local);
+                expected_change.add(local);
             } else {
-                transfer_out += local;
+                transfer_out.add(local);
+                expected_change.add(-local);
             }
         }
 
@@ -331,21 +417,17 @@ public:
         result.unit = unit_;
         result.initial_inventory = initial;
         result.final_inventory = final;
-        result.observed_change = balance_detail::narrowFinite(
-            static_cast<long double>(final) - initial, "observed inventory change");
+        result.observed_change =
+            balance_detail::finiteResult(final - initial, "observed inventory change");
         result.boundary_in = boundary_in;
         result.boundary_out = boundary_out;
         result.generated = generated;
         result.consumed = consumed;
-        result.transfer_in = balance_detail::narrowFinite(transfer_in, "incoming-transfer total");
-        result.transfer_out = balance_detail::narrowFinite(transfer_out, "outgoing-transfer total");
-        result.expected_change =
-            balance_detail::narrowFinite(static_cast<long double>(boundary_in) - boundary_out +
-                                             generated - consumed + transfer_in - transfer_out,
-                                         "expected inventory change");
-        result.closure_residual = balance_detail::narrowFinite(
-            static_cast<long double>(result.observed_change) - result.expected_change,
-            "balance closure residual");
+        result.transfer_in = transfer_in.value("incoming-transfer total");
+        result.transfer_out = transfer_out.value("outgoing-transfer total");
+        result.expected_change = expected_change.value("expected inventory change");
+        result.closure_residual = balance_detail::finiteResult(
+            result.observed_change - result.expected_change, "balance closure residual");
         return result;
     }
 
@@ -391,11 +473,11 @@ private:
     }
 
     static double sumTerms(const std::vector<BalanceTerm>& terms, const char* quantity) {
-        long double sum = 0.0L;
+        balance_detail::CompensatedSum sum;
         for (const auto& term : terms) {
-            sum += term.magnitude;
+            sum.add(term.magnitude);
         }
-        return balance_detail::narrowFinite(sum, quantity);
+        return sum.value(quantity);
     }
 
     std::string name_;
@@ -426,6 +508,7 @@ struct DimensionBalanceAudit {
     double external_expected_change = 0.0;
     double internal_transfer_net = 0.0;
     double closure_residual = 0.0;
+    double representation_adjustment = 0.0;
 };
 
 struct BalanceReconciliation {
@@ -451,9 +534,11 @@ struct BalanceReconciliation {
  * Validate and reconcile multiple model ledgers.
  *
  * Every transfer ID must occur exactly once as outgoing and exactly once as incoming, with the
- * same sender, receiver, dimension, and physical magnitude. The aggregate expected change omits
- * validated internal transfers, so a transfer cannot be double-counted as an external source.
- * Absolute transfer tolerance is expressed in the SI base unit for the transfer's dimension.
+ * same sender, receiver, dimension, and physical magnitude. Validated internal transfers are
+ * omitted from the aggregate external expected change; their net after local-unit binary64
+ * conversion is reported separately. Any difference between the converted complete expectation and
+ * its external/internal decomposition is reported as a representation adjustment. Absolute transfer
+ * tolerance is expressed in the SI base unit for the transfer's dimension.
  */
 inline BalanceReconciliation reconcileBalances(const std::vector<BalanceLedger>& ledgers,
                                                double relative_transfer_tolerance = 1.0e-12,
@@ -567,18 +652,44 @@ inline BalanceReconciliation reconcileBalances(const std::vector<BalanceLedger>&
 
     struct DimensionAccumulator {
         bool present = false;
-        long double observed = 0.0L;
-        long double external_expected = 0.0L;
+        balance_detail::CompensatedSum observed;
+        balance_detail::CompensatedSum expected;
+        balance_detail::CompensatedSum external_expected;
+        balance_detail::CompensatedSum internal_transfer_net;
     };
     std::array<DimensionAccumulator, 3> accumulators{};
-    for (const auto& audit : result.ledgers) {
+    for (std::size_t index = 0; index < result.ledgers.size(); ++index) {
+        const auto& ledger = ledgers[index];
+        const auto& audit = result.ledgers[index];
         auto& accumulator = accumulators[balance_detail::dimensionIndex(audit.dimension)];
         accumulator.present = true;
-        const long double scale = balanceUnitScaleToBase(audit.unit);
-        accumulator.observed += static_cast<long double>(audit.observed_change) * scale;
-        accumulator.external_expected += (static_cast<long double>(audit.boundary_in) -
-                                          audit.boundary_out + audit.generated - audit.consumed) *
-                                         scale;
+        const BalanceUnit base_unit = baseBalanceUnit(audit.dimension);
+        // Every public balance value is binary64. Round each unit conversion
+        // through that same boundary before compensated accumulation so
+        // equivalent values (for example, 0.1 mol and 100 mmol) cancel on
+        // every platform.
+        accumulator.observed.add(convertBalanceValue(audit.observed_change, audit.unit, base_unit));
+        accumulator.expected.add(convertBalanceValue(audit.expected_change, audit.unit, base_unit));
+        balance_detail::CompensatedSum ledger_external_expected;
+        for (const auto& term : ledger.boundaryInTerms()) {
+            ledger_external_expected.add(term.magnitude);
+        }
+        for (const auto& term : ledger.boundaryOutTerms()) {
+            ledger_external_expected.add(-term.magnitude);
+        }
+        for (const auto& term : ledger.generatedTerms()) {
+            ledger_external_expected.add(term.magnitude);
+        }
+        for (const auto& term : ledger.consumedTerms()) {
+            ledger_external_expected.add(-term.magnitude);
+        }
+        accumulator.external_expected.add(
+            convertBalanceValue(ledger_external_expected.value("ledger external expected change"),
+                                audit.unit, base_unit));
+        accumulator.internal_transfer_net.add(
+            convertBalanceValue(audit.transfer_in, audit.unit, base_unit));
+        accumulator.internal_transfer_net.add(
+            -convertBalanceValue(audit.transfer_out, audit.unit, base_unit));
     }
 
     const std::array<BalanceDimension, 3> dimensions{
@@ -591,14 +702,22 @@ inline BalanceReconciliation reconcileBalances(const std::vector<BalanceLedger>&
         DimensionBalanceAudit audit;
         audit.dimension = dimension;
         audit.base_unit = baseBalanceUnit(dimension);
-        audit.observed_change =
-            balance_detail::narrowFinite(accumulator.observed, "aggregate observed change");
-        audit.external_expected_change = balance_detail::narrowFinite(
-            accumulator.external_expected, "aggregate external expected change");
-        audit.internal_transfer_net = 0.0;
-        audit.closure_residual =
-            balance_detail::narrowFinite(accumulator.observed - accumulator.external_expected,
-                                         "aggregate balance closure residual");
+        audit.observed_change = accumulator.observed.value("aggregate observed change");
+        const double expected_change = accumulator.expected.value("aggregate expected change");
+        audit.external_expected_change =
+            accumulator.external_expected.value("aggregate external expected change");
+        audit.internal_transfer_net =
+            accumulator.internal_transfer_net.value("aggregate internal transfer net");
+        balance_detail::CompensatedSum representation_adjustment;
+        representation_adjustment.add(expected_change);
+        representation_adjustment.add(-audit.external_expected_change);
+        representation_adjustment.add(-audit.internal_transfer_net);
+        audit.representation_adjustment =
+            representation_adjustment.value("aggregate representation adjustment");
+        balance_detail::CompensatedSum closure_residual;
+        closure_residual.add(audit.observed_change);
+        closure_residual.add(-expected_change);
+        audit.closure_residual = closure_residual.value("aggregate balance closure residual");
         result.dimensions.push_back(audit);
     }
 
