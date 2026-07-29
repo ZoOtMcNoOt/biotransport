@@ -1,5 +1,13 @@
 # BMEN 341 Biotransport Course Analysis for BioTransport Library
 
+> **Historical course-analysis record — not the current implementation
+> status.** Labels such as “needed,” “current status,” and “long-term goals”
+> below preserve the planning context in which this analysis was written; some
+> of those items have since been implemented or deliberately scoped
+> differently. Use [`FOOTPRINT.md`](FOOTPRINT.md) for the maintained API map,
+> [`SOLVER_CONTRACTS.md`](SOLVER_CONTRACTS.md) for current numerical evidence,
+> and [`GAP_ANALYSIS.md`](GAP_ANALYSIS.md) for active gaps.
+
 ## Document Purpose
 
 This document provides a comprehensive analysis of Texas A&M University's BMEN 341 (Biotransport) course materials to inform the development and enhancement of the BioTransport computational library. The analysis covers:

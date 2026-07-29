@@ -68,7 +68,7 @@ print(
 # =============================================================================
 
 solver = bt.DiffusionSolver3D(mesh, D)
-solver.set_initial_condition(u0.tolist())
+solver.set_initial_condition(u0)
 
 # Dirichlet BCs: zero temperature on all boundaries
 for boundary_id in range(6):  # XMin=0, XMax=1, YMin=2, YMax=3, ZMin=4, ZMax=5
@@ -76,7 +76,10 @@ for boundary_id in range(6):  # XMin=0, XMax=1, YMin=2, YMax=3, ZMin=4, ZMax=5
 
 # Time stepping
 dt_max = solver.max_stable_time_step()
-dt = 0.8 * dt_max  # Use 80% of max stable step for safety
+t_end = 0.01  # seconds
+nominal_dt = 0.8 * dt_max
+num_steps = int(np.ceil(t_end / nominal_dt))
+dt = t_end / num_steps  # Land exactly on t_end without exceeding the ceiling.
 
 print("\nSolver configuration:")
 print(f"  Diffusivity: D = {D:.2e} m²/s")
@@ -87,9 +90,6 @@ print(f"  CFL stability check: {solver.check_stability(dt)}")
 # =============================================================================
 # Time Integration
 # =============================================================================
-
-t_end = 0.01  # seconds
-num_steps = int(t_end / dt)
 
 print("\nRunning simulation:")
 print(f"  Total time: {t_end * 1000:.1f} ms")
@@ -143,8 +143,8 @@ print(f"{'z (mm)':<10} {'T (°C)':<10}")
 print("-" * 20)
 for k in range(0, nz + 1, max(1, nz // 5)):
     idx = mesh.index(nx // 2, ny // 2, k)
-    z_mm = mesh.z(k) * 1000
-    print(f"{z_mm:<10.2f} {solution[idx]:<10.2f}")
+    z_position_mm = mesh.z(k) * 1000
+    print(f"{z_position_mm:<10.2f} {solution[idx]:<10.2f}")
 
 # =============================================================================
 # Visualization: Slice Plots
@@ -249,17 +249,20 @@ plt.show()
 fig_3d = plt.figure(figsize=(12, 5))
 
 # Prepare 3D coordinates and values
-X, Y, Z, T = [], [], [], []
+x_points, y_points, z_points, temperatures = [], [], [], []
 for k in range(nz + 1):
     for j in range(ny + 1):
         for i in range(nx + 1):
             idx = mesh.index(i, j, k)
-            X.append(mesh.x(i) * 1000)
-            Y.append(mesh.y(j) * 1000)
-            Z.append(mesh.z(k) * 1000)
-            T.append(solution[idx])
+            x_points.append(mesh.x(i) * 1000)
+            y_points.append(mesh.y(j) * 1000)
+            z_points.append(mesh.z(k) * 1000)
+            temperatures.append(solution[idx])
 
-X, Y, Z, T = np.array(X), np.array(Y), np.array(Z), np.array(T)
+X = np.asarray(x_points)
+Y = np.asarray(y_points)
+Z = np.asarray(z_points)
+T = np.asarray(temperatures)
 
 # Left plot: 3D scatter of hot region only (T > threshold)
 ax3d_1 = fig_3d.add_subplot(121, projection="3d")
@@ -310,7 +313,7 @@ plt.tight_layout()
 plt.savefig(bt.get_result_path("3d_diffusion_volume.png", "3d_diffusion"), dpi=150)
 plt.show()
 
-print("\n✅ 3D diffusion example completed successfully!")
+print("\n[OK] 3D diffusion example completed successfully!")
 print(
     f"   Slice plots: {bt.get_result_path('3d_diffusion_slices.png', '3d_diffusion')}"
 )

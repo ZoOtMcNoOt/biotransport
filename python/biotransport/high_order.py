@@ -14,7 +14,8 @@ callbacks; callback execution still crosses the Python GIL at every stage, so
 it is a correctness convenience rather than a callback-acceleration claim.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import math
 from numbers import Integral
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, cast
 
@@ -69,6 +70,8 @@ def _field_array(
     name: str = "field",
     allowed_dimensions: Optional[Tuple[int, ...]] = (1, 2),
 ) -> np.ndarray:
+    if np.ma.isMaskedArray(value):
+        raise ValueError(f"{name} must not be a masked array")
     raw = np.asarray(value)
     if raw.dtype.kind not in _NUMERIC_KINDS:
         raise TypeError(f"{name} must contain real numeric values")
@@ -92,7 +95,9 @@ def _validate_mesh(mesh: object) -> StructuredMesh:
 
 
 def _spacing_matches(actual: float, supplied: float, name: str) -> None:
-    tolerance = 64.0 * np.finfo(float).eps * max(1.0, abs(actual), abs(supplied))
+    # Spacing has physical units, so a unit-scale absolute epsilon floor can
+    # silently accept gross relative mismatches on microscopic domains.
+    tolerance = 64.0 * max(math.ulp(actual), math.ulp(supplied))
     if abs(actual - supplied) > tolerance:
         raise ValueError(
             f"{name}={supplied!r} does not match the mesh spacing {actual!r}"
@@ -293,6 +298,27 @@ class HighOrderResult:
         return self.order
 
 
+@dataclass(frozen=True)
+class _HighOrderDiffusionConfig:
+    mesh: StructuredMesh
+    diffusivity: float
+    order: int
+    safety_factor: float
+    nx: int
+    ny: int
+    dx: float
+    dy: float
+    is_1d: bool
+
+
+@dataclass(frozen=True)
+class _HighOrderBoundaries:
+    left: float = 0.0
+    right: float = 0.0
+    bottom: float = 0.0
+    top: float = 0.0
+
+
 class HighOrderDiffusionSolver:
     """Native explicit solver for ``du/dt = D * Laplacian(u)``.
 
@@ -312,34 +338,168 @@ class HighOrderDiffusionSolver:
         order: int = 4,
         safety_factor: float = 0.4,
     ) -> None:
-        self.mesh = _validate_mesh(mesh)
-        self.D = _positive_scalar(D, "D")
-        self.order = _order(order, (2, 4, 6))
-        self.safety_factor = _finite_scalar(safety_factor, "safety_factor")
-        if not 0.0 < self.safety_factor <= 1.0:
+        resolved_mesh = _validate_mesh(mesh)
+        diffusivity = _positive_scalar(D, "D")
+        resolved_order = _order(order, (2, 4, 6))
+        resolved_safety_factor = _finite_scalar(safety_factor, "safety_factor")
+        if not 0.0 < resolved_safety_factor <= 1.0:
             raise ValueError("safety_factor must be in (0, 1]")
 
-        self.nx = int(self.mesh.nx())
-        self.dx = _positive_scalar(self.mesh.dx(), "mesh.dx()")
-        self.is_1d = bool(self.mesh.is_1d())
-        if self.is_1d:
-            self.ny = 0
-            self.dy = self.dx
+        nx = int(resolved_mesh.nx())
+        dx = _positive_scalar(resolved_mesh.dx(), "mesh.dx()")
+        is_1d = bool(resolved_mesh.is_1d())
+        if is_1d:
+            ny = 0
+            dy = dx
         else:
-            self.ny = int(self.mesh.ny())
-            self.dy = _positive_scalar(self.mesh.dy(), "mesh.dy()")
-            if self.order == 6:
+            ny = int(resolved_mesh.ny())
+            dy = _positive_scalar(resolved_mesh.dy(), "mesh.dy()")
+            if resolved_order == 6:
                 raise ValueError(
                     "sixth-order diffusion is available for 1D meshes only"
                 )
 
-        if self.nx < self.order or (not self.is_1d and self.ny < self.order):
+        if nx < resolved_order or (not is_1d and ny < resolved_order):
             raise ValueError("mesh is too small for the requested centered stencil")
 
-        self.bc_left = 0.0
-        self.bc_right = 0.0
-        self.bc_bottom = 0.0
-        self.bc_top = 0.0
+        self._config = _HighOrderDiffusionConfig(
+            mesh=resolved_mesh,
+            diffusivity=diffusivity,
+            order=resolved_order,
+            safety_factor=resolved_safety_factor,
+            nx=nx,
+            ny=ny,
+            dx=dx,
+            dy=dy,
+            is_1d=is_1d,
+        )
+        self._boundaries = _HighOrderBoundaries()
+
+    @property
+    def mesh(self) -> StructuredMesh:
+        """Mesh captured when the solver was constructed."""
+        return self._config.mesh
+
+    @property
+    def D(self) -> float:
+        """Positive diffusivity captured when the solver was constructed."""
+        return self._config.diffusivity
+
+    @property
+    def order(self) -> int:
+        """Formal centered-stencil interior order."""
+        return self._config.order
+
+    @property
+    def safety_factor(self) -> float:
+        """Safety multiplier applied to the Forward-Euler stability limit."""
+        return self._config.safety_factor
+
+    @property
+    def nx(self) -> int:
+        """Number of cells in the x direction."""
+        return self._config.nx
+
+    @property
+    def ny(self) -> int:
+        """Number of cells in the y direction, or zero for 1D."""
+        return self._config.ny
+
+    @property
+    def dx(self) -> float:
+        """Mesh spacing in the x direction."""
+        return self._config.dx
+
+    @property
+    def dy(self) -> float:
+        """Mesh spacing in the y direction, equal to dx for 1D."""
+        return self._config.dy
+
+    @property
+    def is_1d(self) -> bool:
+        """Whether this solver owns a one-dimensional configuration."""
+        return self._config.is_1d
+
+    @property
+    def bc_left(self) -> float:
+        """Current left Dirichlet value."""
+        return self._boundaries.left
+
+    @property
+    def bc_right(self) -> float:
+        """Current right Dirichlet value."""
+        return self._boundaries.right
+
+    @property
+    def bc_bottom(self) -> float:
+        """Current bottom Dirichlet value."""
+        return self._boundaries.bottom
+
+    @property
+    def bc_top(self) -> float:
+        """Current top Dirichlet value."""
+        return self._boundaries.top
+
+    def _validated_state(
+        self,
+    ) -> Tuple[_HighOrderDiffusionConfig, _HighOrderBoundaries]:
+        config = self._config
+        boundaries = self._boundaries
+        if not isinstance(config, _HighOrderDiffusionConfig):
+            raise RuntimeError("high-order solver configuration is corrupted")
+        if not isinstance(boundaries, _HighOrderBoundaries):
+            raise RuntimeError("high-order solver boundary configuration is corrupted")
+
+        mesh = _validate_mesh(config.mesh)
+        diffusivity = _positive_scalar(config.diffusivity, "D")
+        order = _order(config.order, (2, 4, 6))
+        safety_factor = _finite_scalar(config.safety_factor, "safety_factor")
+        if not 0.0 < safety_factor <= 1.0:
+            raise RuntimeError("high-order solver safety_factor is no longer in (0, 1]")
+
+        nx = int(mesh.nx())
+        dx = _positive_scalar(mesh.dx(), "mesh.dx()")
+        is_1d = bool(mesh.is_1d())
+        ny = 0 if is_1d else int(mesh.ny())
+        dy = dx if is_1d else _positive_scalar(mesh.dy(), "mesh.dy()")
+        expected = (diffusivity, order, safety_factor, nx, ny, dx, dy, is_1d)
+        cached = (
+            config.diffusivity,
+            config.order,
+            config.safety_factor,
+            config.nx,
+            config.ny,
+            config.dx,
+            config.dy,
+            config.is_1d,
+        )
+        if cached != expected:
+            raise RuntimeError(
+                "high-order solver numerical configuration no longer matches its mesh"
+            )
+        if order == 6 and not is_1d:
+            raise RuntimeError("sixth-order diffusion requires a one-dimensional mesh")
+        if nx < order or (not is_1d and ny < order):
+            raise RuntimeError("mesh is too small for the configured centered stencil")
+
+        boundary_values = (
+            _finite_scalar(boundaries.left, "left boundary"),
+            _finite_scalar(boundaries.right, "right boundary"),
+            _finite_scalar(boundaries.bottom, "bottom boundary"),
+            _finite_scalar(boundaries.top, "top boundary"),
+        )
+        if boundary_values != (
+            boundaries.left,
+            boundaries.right,
+            boundaries.bottom,
+            boundaries.top,
+        ):
+            raise RuntimeError("high-order solver boundary configuration is corrupted")
+        if is_1d and (boundaries.bottom != 0.0 or boundaries.top != 0.0):
+            raise RuntimeError(
+                "a 1D high-order solver cannot contain y-boundary values"
+            )
+        return config, boundaries
 
     def set_boundary(
         self, boundary: Boundary, value: float
@@ -349,19 +509,20 @@ class HighOrderDiffusionSolver:
         In 2D, bottom/top values own the four corners when adjacent boundary
         values disagree.  Bottom and top are invalid for a 1D mesh.
         """
+        config, boundaries = self._validated_state()
         resolved = _finite_scalar(value, "boundary value")
         if boundary == Boundary.Left:
-            self.bc_left = resolved
+            self._boundaries = replace(boundaries, left=resolved)
         elif boundary == Boundary.Right:
-            self.bc_right = resolved
+            self._boundaries = replace(boundaries, right=resolved)
         elif boundary == Boundary.Bottom:
-            if self.is_1d:
+            if config.is_1d:
                 raise ValueError("Bottom is not a boundary of a 1D mesh")
-            self.bc_bottom = resolved
+            self._boundaries = replace(boundaries, bottom=resolved)
         elif boundary == Boundary.Top:
-            if self.is_1d:
+            if config.is_1d:
                 raise ValueError("Top is not a boundary of a 1D mesh")
-            self.bc_top = resolved
+            self._boundaries = replace(boundaries, top=resolved)
         else:
             raise ValueError("boundary must be Left, Right, Bottom, or Top")
         return self
@@ -372,14 +533,15 @@ class HighOrderDiffusionSolver:
         The exact centered-stencil spectral radii are used: 4, 16/3, and
         272/45 for spatial orders 2, 4, and 6 respectively.
         """
+        config, _ = self._validated_state()
         return float(
             _high_order_stable_dt(
-                self.D,
-                self.dx,
-                self.dy,
-                self.order,
-                self.safety_factor,
-                not self.is_1d,
+                config.diffusivity,
+                config.dx,
+                config.dy,
+                config.order,
+                config.safety_factor,
+                not config.is_1d,
             )
         )
 
@@ -398,6 +560,7 @@ class HighOrderDiffusionSolver:
         alter the native solution.  Because a Python callback reacquires the
         GIL once per step, omit it for maximum throughput.
         """
+        config, boundaries = self._validated_state()
         end_time = _finite_scalar(t_end, "t_end")
         if end_time < 0.0:
             raise ValueError("t_end must be nonnegative")
@@ -409,14 +572,14 @@ class HighOrderDiffusionSolver:
         expected_shape: Tuple[int, ...]
         output_shape: Tuple[int, ...]
         callback_shape: Tuple[int, ...]
-        if self.is_1d:
-            expected_shape = (self.nx + 1,)
+        if config.is_1d:
+            expected_shape = (config.nx + 1,)
             if field.shape != expected_shape:
                 raise ValueError(f"initial must have shape {expected_shape}")
             output_shape = expected_shape
             callback_shape = expected_shape
         else:
-            expected_shape = (self.ny + 1, self.nx + 1)
+            expected_shape = (config.ny + 1, config.nx + 1)
             expected_size = expected_shape[0] * expected_shape[1]
             if field.ndim == 2 and field.shape != expected_shape:
                 raise ValueError(f"initial must have shape {expected_shape}")
@@ -435,19 +598,19 @@ class HighOrderDiffusionSolver:
 
         native_result = _solve_high_order_diffusion(
             field.reshape(-1),
-            self.nx,
-            self.ny,
-            self.dx,
-            self.dy,
-            self.D,
-            self.order,
-            self.safety_factor,
+            config.nx,
+            config.ny,
+            config.dx,
+            config.dy,
+            config.diffusivity,
+            config.order,
+            config.safety_factor,
             end_time,
             requested_dt,
-            self.bc_left,
-            self.bc_right,
-            self.bc_bottom,
-            self.bc_top,
+            boundaries.left,
+            boundaries.right,
+            boundaries.bottom,
+            boundaries.top,
             native_callback,
         )
         solution = np.asarray(native_result["solution"], dtype=np.float64).reshape(
@@ -552,10 +715,12 @@ def integrate_explicit_runge_kutta(
 
     With the default ``autonomous=False``, ``rhs(state, time)`` is called at
     the mathematically correct stage times.  Set ``autonomous=True`` to call
-    ``rhs(state)`` explicitly.  The callback must return the same shape as the
-    initial state and finite values.  Stage arrays never alias the accepted
-    state, the caller's initial array is not mutated, and the final step is
-    shortened to end exactly at ``t_end``.
+    ``rhs(state)`` explicitly; autonomous integration shifts the native clock
+    to a zero origin so large absolute timestamps cannot collapse stage times.
+    The callback must return the same shape as the initial state and finite
+    values.  Stage arrays never alias the accepted state, the caller's initial
+    array is not mutated, and the final step is shortened to end exactly at
+    ``t_end``.
 
     The stages and vector updates are orchestrated in C++, but a Python
     callback still executes under the GIL two times per Heun step or four times
@@ -579,6 +744,9 @@ def integrate_explicit_runge_kutta(
     end_time = _finite_scalar(t_end, "t_end")
     if end_time < initial_time:
         raise ValueError("t_end must not precede t_start")
+    duration = end_time - initial_time
+    if not math.isfinite(duration):
+        raise OverflowError("integration interval is not finite")
     step = _positive_scalar(dt, "dt")
     canonical_method = _canonical_runge_kutta_method(method)
 
@@ -592,11 +760,13 @@ def integrate_explicit_runge_kutta(
             )
         return derivative.reshape(-1).copy()
 
+    native_initial_time = 0.0 if autonomous else initial_time
+    native_end_time = duration if autonomous else end_time
     native_result = _integrate_explicit_runge_kutta(
         state.reshape(-1),
         checked_rhs,
-        initial_time,
-        end_time,
+        native_initial_time,
+        native_end_time,
         step,
         canonical_method,
         autonomous,
@@ -604,8 +774,8 @@ def integrate_explicit_runge_kutta(
     )
     return RungeKuttaResult(
         solution=np.asarray(native_result["solution"], dtype=np.float64).reshape(shape),
-        initial_time=float(native_result["initial_time"]),
-        time=float(native_result["time"]),
+        initial_time=initial_time,
+        time=end_time if autonomous else float(native_result["time"]),
         steps=int(native_result["steps"]),
         dt=float(native_result["dt"]),
         last_dt=float(native_result["last_dt"]),
@@ -628,7 +798,9 @@ def verify_order_of_accuracy(
     ``exact_derivative(x)`` supplies the exact quantity returned by the
     operator.  Requiring the exact derivative avoids circular verification by
     a second finite-difference approximation.  The infinity norm is measured
-    after excluding ``interior_margin`` nodes at each boundary.
+    after excluding ``interior_margin`` nodes at each boundary.  Exact-zero
+    errors are reported as indeterminate rather than converted to infinite or
+    NaN orders, and arithmetic overflow in the error calculation fails loudly.
     """
     if not callable(operator_factory):
         raise TypeError("operator_factory must be callable")
@@ -685,23 +857,32 @@ def verify_order_of_accuracy(
             raise ValueError("operator result must preserve the grid shape")
 
         interior = slice(margin, -margin) if margin else slice(None)
-        errors.append(float(np.max(np.abs(numerical[interior] - exact[interior]))))
+        with np.errstate(over="ignore", invalid="ignore"):
+            difference = numerical[interior] - exact[interior]
+        if not np.all(np.isfinite(difference)):
+            raise OverflowError(
+                "finite numerical and exact values produced a non-finite error difference"
+            )
+        error = float(np.max(np.abs(difference)))
+        if not math.isfinite(error):
+            raise OverflowError("the error norm is not finite")
+        errors.append(error)
         spacings.append(float(spacing))
 
     observed_orders = []
     for coarse_error, fine_error, coarse_dx, fine_dx in zip(
         errors[:-1], errors[1:], spacings[:-1], spacings[1:]
     ):
-        if coarse_error == 0.0 and fine_error == 0.0:
-            observed_orders.append(float("nan"))
-        elif fine_error == 0.0:
-            observed_orders.append(float("inf"))
-        elif coarse_error == 0.0:
-            observed_orders.append(float("-inf"))
-        else:
-            observed_orders.append(
-                float(np.log(coarse_error / fine_error) / np.log(coarse_dx / fine_dx))
+        if coarse_error == 0.0 or fine_error == 0.0:
+            raise ValueError(
+                "observed order is indeterminate when a coarse or fine error is zero"
             )
+        log_error_ratio = math.log(coarse_error) - math.log(fine_error)
+        log_spacing_ratio = math.log(coarse_dx) - math.log(fine_dx)
+        observed_order = log_error_ratio / log_spacing_ratio
+        if not math.isfinite(observed_order):
+            raise ValueError("observed order is not finite")
+        observed_orders.append(observed_order)
 
     return {
         "grid_sizes": validated_sizes,

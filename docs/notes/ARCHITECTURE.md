@@ -1,5 +1,13 @@
 # Biotransport Library Architecture
 
+> **Historical design snapshot — not the current architecture reference.**
+> This note records an earlier consolidation pass, so its directory tree,
+> source list, and implementation-status comments are intentionally archival
+> and may not describe the current library. For the maintained package map use
+> [`FOOTPRINT.md`](FOOTPRINT.md); for current numerical ownership and evidence
+> use [`SCIENCE_FIRST_ARCHITECTURE.md`](SCIENCE_FIRST_ARCHITECTURE.md) and
+> [`SOLVER_CONTRACTS.md`](SOLVER_CONTRACTS.md).
+
 ## Overview
 
 The biotransport library is a C++ scientific computing library for mass transport simulations including diffusion, reaction-diffusion, advection-diffusion, and fluid dynamics (Darcy flow, Stokes flow).

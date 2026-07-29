@@ -65,7 +65,7 @@ solver = bt.MaskedMichaelisMentenReactionDiffusionSolver(
 initial_condition_2d = np.zeros((ny + 1, nx + 1), dtype=np.float64)
 initial_condition_2d[vessel_mask] = C_blood
 initial_condition = initial_condition_2d.ravel(order="C")
-solver.set_initial_condition(initial_condition.tolist())
+solver.set_initial_condition(initial_condition)
 
 # Set boundary conditions (no oxygen flux at boundaries)
 solver.set_boundary(bt.Boundary.Left, bt.BoundaryCondition.neumann(0.0))
@@ -102,12 +102,12 @@ time_points = [0.2, 1.0, 5.0, 10.0, 30.0, 60.0]  # seconds
 current_time = 0.0
 
 for target_time in time_points:
-    steps_needed = int((target_time - current_time) / dt)
-    if steps_needed <= 0:
-        continue
+    duration = target_time - current_time
+    steps_needed = int(np.ceil(duration / dt))
+    segment_dt = duration / steps_needed
 
     print(f"Simulating from t={current_time:.1f}s to t={target_time:.1f}s...")
-    solver.solve(dt, steps_needed)
+    solver.solve(segment_dt, steps_needed)
     current_time = target_time
 
     if target_time in (5.0, 60.0):

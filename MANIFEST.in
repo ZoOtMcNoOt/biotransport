@@ -3,6 +3,7 @@ include LICENSE
 include readme.md
 include pyproject.toml
 include pytest.ini
+include run_examples.py
 include setup.py
 
 graft cpp
@@ -16,6 +17,7 @@ graft python/tests
 prune docs/_build
 prune docs/doxygen/html
 prune docs/generated
+prune docs/sphinx/_build
 
 global-exclude *.py[cod]
 global-exclude *.a

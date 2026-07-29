@@ -25,6 +25,7 @@ set(SOURCES
 add_library(biotransport ${SOURCES})
 add_library(biotransport::biotransport ALIAS biotransport)
 set_target_properties(biotransport PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(biotransport PUBLIC cxx_std_17)
 
 # Public headers and compiled sources both throw typed exceptions. MSVC needs
 # /EHsc for correct C++ stack unwinding; propagate it to native consumers and

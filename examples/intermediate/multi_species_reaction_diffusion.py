@@ -72,7 +72,8 @@ def example_lotka_volterra():
     reaction_model = bt.LotkaVolterraReaction(alpha, beta, gamma, delta, K)
     solver.set_reaction_model(reaction_model)
     print(
-        f"Lotka-Volterra parameters: α={alpha}, β={beta}, γ={gamma}, δ={delta}, K={K}"
+        f"Lotka-Volterra parameters: alpha={alpha}, beta={beta}, "
+        f"gamma={gamma}, delta={delta}, K={K}"
     )
 
     # Initial conditions: prey everywhere, predator in center
@@ -150,8 +151,7 @@ def example_lotka_volterra():
     plt.tight_layout()
 
     # Save figure
-    output_dir = Path(__file__).parent.parent.parent / "results" / "multi_species"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(bt.get_results_dir("multi_species"))
     plt.savefig(output_dir / "lotka_volterra.png", dpi=150, bbox_inches="tight")
     print(f"\nSaved: {output_dir / 'lotka_volterra.png'}")
     plt.close()
@@ -203,8 +203,8 @@ def example_sir_epidemic():
 
     reaction_model = bt.SIRReaction(beta, gamma, N)
     solver.set_reaction_model(reaction_model)
-    print(f"SIR parameters: β={beta}, γ={gamma}, N={N}")
-    print(f"Basic reproduction number R₀ = {reaction_model.R0:.2f}")
+    print(f"SIR parameters: beta={beta}, gamma={gamma}, N={N}")
+    print(f"Basic reproduction number R0 = {reaction_model.R0:.2f}")
 
     # Initial conditions: susceptible population everywhere
     # Small infected cluster in center (patient zero)
@@ -280,7 +280,7 @@ def example_sir_epidemic():
     ax1.plot(t_history, R_total, "g-", label="Recovered", linewidth=2)
     ax1.set_xlabel("Time")
     ax1.set_ylabel("Total Population")
-    ax1.set_title(f"SIR Dynamics (R₀ = {reaction_model.R0:.2f})")
+    ax1.set_title(f"SIR Dynamics (R0 = {reaction_model.R0:.2f})")
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
@@ -296,8 +296,7 @@ def example_sir_epidemic():
 
     plt.tight_layout()
 
-    output_dir = Path(__file__).parent.parent.parent / "results" / "multi_species"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(bt.get_results_dir("multi_species"))
     plt.savefig(output_dir / "sir_epidemic.png", dpi=150, bbox_inches="tight")
     print(f"\nSaved: {output_dir / 'sir_epidemic.png'}")
     plt.close()
@@ -370,7 +369,11 @@ def example_brusselator():
         solver.set_all_species_neumann(boundary, 0.0)
 
     # Time integration
-    dt = 0.8 * solver.max_stable_time_step()  # Smaller for stability
+    # max_stable_time_step() is the solver-certified diffusion ceiling.
+    # Reactions impose a separate state-dependent positivity constraint, so
+    # retain 50% of the diffusion ceiling as reaction headroom.
+    diffusion_dt_ceiling = solver.max_stable_time_step()
+    dt = 0.5 * diffusion_dt_ceiling
     T_final = 50.0  # Reduced for faster demo
     num_steps = int(np.ceil(T_final / dt))
 
@@ -405,8 +408,7 @@ def example_brusselator():
     plt.suptitle(f"Brusselator: A={A}, B={B}, D_X={D_X}, D_Y={D_Y}", fontsize=14)
     plt.tight_layout()
 
-    output_dir = Path(__file__).parent.parent.parent / "results" / "multi_species"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(bt.get_results_dir("multi_species"))
     plt.savefig(output_dir / "brusselator.png", dpi=150, bbox_inches="tight")
     print(f"\nSaved: {output_dir / 'brusselator.png'}")
     plt.close()
@@ -515,8 +517,7 @@ def example_signaling_cascade():
     plt.suptitle("Enzyme Signaling Activation Cascade", fontsize=14)
     plt.tight_layout()
 
-    output_dir = Path(__file__).parent.parent.parent / "results" / "multi_species"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(bt.get_results_dir("multi_species"))
     plt.savefig(output_dir / "signaling_cascade.png", dpi=150, bbox_inches="tight")
     print(f"\nSaved: {output_dir / 'signaling_cascade.png'}")
     plt.close()

@@ -829,10 +829,16 @@ void register_diffusion_bindings(py::module_& m) {
         .def("velocity", &TransportProblem::velocity, py::arg("vx"), py::arg("vy") = 0.0,
              py::return_value_policy::reference_internal)
         .def("velocity_field",
+             static_cast<TransportProblem& (TransportProblem::*)(const std::vector<double>&)>(
+                 &TransportProblem::velocityField),
+             py::arg("vx"), py::return_value_policy::reference_internal,
+             "Set a node-centred x velocity field for a 1D mesh")
+        .def("velocity_field",
              static_cast<TransportProblem& (TransportProblem::*)(const std::vector<double>&,
                                                                  const std::vector<double>&)>(
                  &TransportProblem::velocityField),
-             py::arg("vx"), py::arg("vy"), py::return_value_policy::reference_internal)
+             py::arg("vx"), py::arg("vy"), py::return_value_policy::reference_internal,
+             "Set node-centred x and y velocity fields")
         .def("advection_scheme",
              static_cast<TransportProblem& (TransportProblem::*)(AdvectionScheme)>(
                  &TransportProblem::advectionScheme),

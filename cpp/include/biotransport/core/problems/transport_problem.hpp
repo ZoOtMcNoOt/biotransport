@@ -270,18 +270,20 @@ public:
     /** @brief Use node-centred velocity components. */
     TransportProblem& velocityField(const std::vector<double>& vx, const std::vector<double>& vy) {
         validateNodeField(vx, "x velocity field");
+        std::vector<double> validated_vy;
         if (mesh_.is1D() && vy.empty()) {
-            vy_field_.assign(vx.size(), 0.0);
+            validated_vy.assign(vx.size(), 0.0);
         } else {
             validateNodeField(vy, "y velocity field");
-            vy_field_ = vy;
+            validated_vy = vy;
         }
-        if (mesh_.is1D() && std::any_of(vy_field_.begin(), vy_field_.end(),
+        if (mesh_.is1D() && std::any_of(validated_vy.begin(), validated_vy.end(),
                                         [](double value) { return value != 0.0; })) {
             throw std::invalid_argument("y velocity field must be zero for a 1D mesh");
         }
 
         vx_field_ = vx;
+        vy_field_ = std::move(validated_vy);
         uniform_velocity_ = false;
         has_advection_ = std::any_of(vx_field_.begin(), vx_field_.end(),
                                      [](double value) { return value != 0.0; }) ||

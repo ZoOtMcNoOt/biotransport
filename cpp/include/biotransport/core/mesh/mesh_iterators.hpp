@@ -13,8 +13,12 @@
  * of the iterators use OpenMP for multi-threaded execution.
  */
 
+#include <algorithm>
+#include <array>
 #include <biotransport/core/mesh/structured_mesh.hpp>
+#include <cmath>
 #include <functional>
+#include <limits>
 #include <vector>
 
 #ifdef BIOTRANSPORT_ENABLE_OPENMP
@@ -334,7 +338,83 @@ public:
      * @return Diffusion contribution to update
      */
     double diffusionTerm(const std::vector<double>& u, int idx, double D, double dt) const {
-        return D * dt * laplacian(u, idx);
+        const double x_contribution =
+            scaledStencilContribution(std::array<double, 3>{u[idx - 1], u[idx], u[idx + 1]},
+                                      std::array<double, 3>{1.0, -2.0, 1.0}, D, dt, mesh_.dx());
+        if (mesh_.is1D()) {
+            return x_contribution;
+        }
+        const double y_contribution = scaledStencilContribution(
+            std::array<double, 3>{u[idx - stride_], u[idx], u[idx + stride_]},
+            std::array<double, 3>{1.0, -2.0, 1.0}, D, dt, mesh_.dy());
+        return x_contribution + y_contribution;
+    }
+
+    /**
+     * @brief Apply one Forward Euler diffusion update without false overflow.
+     *
+     * The usual center-plus-increment form is retained on ordinary scales.
+     * If its intermediate increment overflows even though the CFL-stable
+     * weighted state is representable, the equivalent convex stencil is
+     * evaluated after normalizing the state.
+     */
+    double diffusionStep(const std::vector<double>& u, int idx, double D, double dt) const {
+        const double candidate = u[idx] + diffusionTerm(u, idx, D, dt);
+        if (std::isfinite(candidate)) {
+            return candidate;
+        }
+
+        const double lambda_x = diffusionNumber(D, dt, mesh_.dx());
+        const double lambda_y = mesh_.is1D() ? 0.0 : diffusionNumber(D, dt, mesh_.dy());
+        const double total_lambda = lambda_x + lambda_y;
+        if (!std::isfinite(total_lambda) || total_lambda < 0.0 || total_lambda > 0.5) {
+            return candidate;
+        }
+
+        double value_scale =
+            std::max({std::abs(u[idx - 1]), std::abs(u[idx]), std::abs(u[idx + 1])});
+        if (!mesh_.is1D()) {
+            value_scale =
+                std::max({value_scale, std::abs(u[idx - stride_]), std::abs(u[idx + stride_])});
+        }
+        if (value_scale == 0.0) {
+            return 0.0;
+        }
+
+        double normalized = (1.0 - 2.0 * total_lambda) * (u[idx] / value_scale);
+        normalized = std::fma(lambda_x, u[idx - 1] / value_scale, normalized);
+        normalized = std::fma(lambda_x, u[idx + 1] / value_scale, normalized);
+        if (!mesh_.is1D()) {
+            normalized = std::fma(lambda_y, u[idx - stride_] / value_scale, normalized);
+            normalized = std::fma(lambda_y, u[idx + stride_] / value_scale, normalized);
+        }
+        return scaledProduct(value_scale, normalized);
+    }
+
+    /**
+     * @brief Compute the dimensionless diffusion number D*dt/h² safely.
+     *
+     * Binary exponent decomposition avoids overflowing h² or underflowing
+     * D*dt when the final ratio is representable.
+     */
+    static double diffusionNumber(double D, double dt, double spacing) {
+        if (!std::isfinite(D) || !std::isfinite(dt) || !std::isfinite(spacing) || D < 0.0 ||
+            dt < 0.0 || spacing <= 0.0) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        if (D == 0.0 || dt == 0.0) {
+            return 0.0;
+        }
+
+        int diffusivity_exponent = 0;
+        int time_exponent = 0;
+        int spacing_exponent = 0;
+        const double diffusivity_mantissa = std::frexp(D, &diffusivity_exponent);
+        const double time_mantissa = std::frexp(dt, &time_exponent);
+        const double spacing_mantissa = std::frexp(spacing, &spacing_exponent);
+        const double mantissa =
+            diffusivity_mantissa * time_mantissa / (spacing_mantissa * spacing_mantissa);
+        return std::scalbn(mantissa, diffusivity_exponent + time_exponent - 2 * spacing_exponent);
     }
 
     /**
@@ -623,6 +703,56 @@ public:
     int stride() const { return stride_; }
 
 private:
+    static double scaledProduct(double first, double second) {
+        if (first == 0.0 || second == 0.0) {
+            return 0.0;
+        }
+        int first_exponent = 0;
+        int second_exponent = 0;
+        const double mantissa =
+            std::frexp(first, &first_exponent) * std::frexp(second, &second_exponent);
+        return std::scalbn(mantissa, first_exponent + second_exponent);
+    }
+
+    template <std::size_t N>
+    static double scaledStencilContribution(const std::array<double, N>& values,
+                                            const std::array<double, N>& coefficients, double D,
+                                            double dt, double spacing) {
+        double value_scale = 0.0;
+        for (double value : values) {
+            value_scale = std::max(value_scale, std::abs(value));
+        }
+        if (value_scale == 0.0 || std::all_of(values.begin() + 1, values.end(), [&](double value) {
+                return value == values.front();
+            })) {
+            return 0.0;
+        }
+
+        int scale_exponent = 0;
+        (void)std::frexp(value_scale, &scale_exponent);
+        double normalized_sum = 0.0;
+        for (std::size_t index = 0; index < N; ++index) {
+            normalized_sum = std::fma(coefficients[index],
+                                      std::scalbn(values[index], -scale_exponent), normalized_sum);
+        }
+        if (normalized_sum == 0.0 || D == 0.0 || dt == 0.0) {
+            return 0.0;
+        }
+
+        int sum_exponent = 0;
+        int diffusivity_exponent = 0;
+        int time_exponent = 0;
+        int spacing_exponent = 0;
+        const double sum_mantissa = std::frexp(normalized_sum, &sum_exponent);
+        const double diffusivity_mantissa = std::frexp(D, &diffusivity_exponent);
+        const double time_mantissa = std::frexp(dt, &time_exponent);
+        const double spacing_mantissa = std::frexp(spacing, &spacing_exponent);
+        const double mantissa = sum_mantissa * diffusivity_mantissa * time_mantissa /
+                                (spacing_mantissa * spacing_mantissa);
+        return std::scalbn(mantissa, sum_exponent + scale_exponent + diffusivity_exponent +
+                                         time_exponent - 2 * spacing_exponent);
+    }
+
     const StructuredMesh& mesh_;
     double inv_dx2_;
     double inv_dy2_;

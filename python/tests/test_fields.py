@@ -1,10 +1,12 @@
 """Tests for fields module (SpatialField builder)."""
 
+import math
+
 import numpy as np
 import pytest
 
 import biotransport as bt
-from biotransport.fields import SpatialField
+from biotransport.fields import SpatialField, layered_1d
 
 
 class TestSpatialFieldInit:
@@ -27,6 +29,22 @@ class TestSpatialFieldInit:
         assert field.mesh is mesh
         assert field._field.shape == (11 * 11,)
 
+    def test_rejects_unknown_mesh(self):
+        """Unsupported duck-typed objects fail before array allocation."""
+        with pytest.raises(TypeError, match="StructuredMesh"):
+            SpatialField(object())
+
+    def test_rejects_non_finite_mesh_geometry(self):
+        mesh = bt.StructuredMesh(4, 0.0, np.nan)
+        with pytest.raises(ValueError, match="coordinates must be finite"):
+            SpatialField(mesh)
+
+    def test_rejects_full_3d_cylindrical_mesh(self):
+        """A 2D region builder must not silently ignore theta in full 3D."""
+        mesh = bt.CylindricalMesh(2, 8, 2, 0.1, 1.0, 0.0, 2 * math.pi, -1.0, 1.0)
+        with pytest.raises(ValueError, match="full 3D cylindrical"):
+            SpatialField(mesh)
+
 
 class TestSpatialFieldDefault:
     """Tests for SpatialField.default() method."""
@@ -46,6 +64,18 @@ class TestSpatialFieldDefault:
         result = field.default(1.0)
 
         assert result is field
+
+    @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+    def test_default_rejects_non_finite_values(self, value):
+        mesh = bt.mesh_1d(5)
+        with pytest.raises(ValueError, match="must be finite"):
+            SpatialField(mesh).default(value)
+
+    @pytest.mark.parametrize("value", [1.0 + 2.0j, np.complex128(2.0 + 3.0j)])
+    def test_default_rejects_complex_values_without_casting(self, value):
+        mesh = bt.mesh_1d(5)
+        with pytest.raises(TypeError, match="real number"):
+            SpatialField(mesh).default(value)
 
 
 class TestSpatialFieldRegionBox1D:
@@ -117,6 +147,28 @@ class TestSpatialFieldRegionBox1D:
         with pytest.raises(ValueError, match="y_min and y_max should not be provided"):
             field.region_box(0.2, 0.4, 0.0, 0.5, value=2.0)
 
+    def test_region_box_rejects_reversed_or_empty_interval(self):
+        mesh = bt.mesh_1d(10)
+        field = SpatialField(mesh)
+
+        with pytest.raises(ValueError, match="x_min"):
+            field.region_box(0.7, 0.3, value=1.0)
+        with pytest.raises(ValueError, match="does not select"):
+            field.region_box(2.0, 3.0, value=1.0)
+
+    @pytest.mark.parametrize(
+        ("argument", "kwargs"),
+        [
+            ("x_min", {"x_min": np.nan, "x_max": 0.5, "value": 1.0}),
+            ("x_max", {"x_min": 0.2, "x_max": np.inf, "value": 1.0}),
+            ("value", {"x_min": 0.2, "x_max": 0.5, "value": np.nan}),
+        ],
+    )
+    def test_region_box_rejects_non_finite_inputs(self, argument, kwargs):
+        mesh = bt.mesh_1d(10)
+        with pytest.raises(ValueError, match=argument):
+            SpatialField(mesh).region_box(**kwargs)
+
 
 class TestSpatialFieldRegionBox2D:
     """Tests for region_box on 2D meshes."""
@@ -164,6 +216,72 @@ class TestSpatialFieldRegionBox2D:
         # Center should be default
         center_idx = 5 * 11 + 5
         assert field[center_idx] == pytest.approx(0.0)
+
+    def test_region_box_2d_rejects_reversed_y_bounds(self):
+        mesh = bt.mesh_2d(10, 10)
+        with pytest.raises(ValueError, match="y_min"):
+            SpatialField(mesh).region_box(0.2, 0.4, 0.8, 0.3, value=1.0)
+
+
+class TestSpatialFieldCurvedRegions:
+    def test_circle_and_annulus_assign_expected_nodes(self):
+        mesh = bt.mesh_2d(10, 10)
+        field = (
+            SpatialField(mesh)
+            .default(0.0)
+            .region_circle(0.5, 0.5, 0.2, value=1.0)
+            .region_annulus(0.5, 0.5, 0.3, 0.4, value=2.0)
+            .build_array()
+        )
+
+        assert field[5 * 11 + 5] == pytest.approx(1.0)
+        assert np.any(field == 2.0)
+
+    @pytest.mark.parametrize("radius", [-0.1, np.nan, np.inf])
+    def test_circle_rejects_invalid_radius(self, radius):
+        mesh = bt.mesh_2d(10, 10)
+        with pytest.raises(ValueError, match="radius"):
+            SpatialField(mesh).region_circle(0.5, 0.5, radius, value=1.0)
+
+    def test_circle_rejects_region_with_no_nodes(self):
+        mesh = bt.mesh_2d(10, 10)
+        with pytest.raises(ValueError, match="does not select"):
+            SpatialField(mesh).region_circle(10.0, 10.0, 0.1, value=1.0)
+
+    @pytest.mark.parametrize(
+        ("inner", "outer", "message"),
+        [
+            (-0.1, 0.2, "r_inner"),
+            (0.4, 0.2, "r_outer"),
+            (0.1, np.inf, "r_outer"),
+        ],
+    )
+    def test_annulus_rejects_invalid_radii(self, inner, outer, message):
+        mesh = bt.mesh_2d(10, 10)
+        with pytest.raises(ValueError, match=message):
+            SpatialField(mesh).region_annulus(0.5, 0.5, inner, outer, value=1.0)
+
+
+class TestSpatialFieldCylindrical:
+    def test_radial_mesh_uses_radial_coordinate(self):
+        mesh = bt.CylindricalMesh(10, 0.0, 1.0)
+        field = SpatialField(mesh).region_box(0.4, 0.6, value=3.0).build_array()
+
+        assert field.shape == (11,)
+        assert field[5] == pytest.approx(3.0)
+        assert field[0] == pytest.approx(0.0)
+
+    def test_axisymmetric_mesh_uses_r_z_coordinates(self):
+        mesh = bt.CylindricalMesh(4, 6, 0.0, 1.0, -1.0, 2.0)
+        field = (
+            SpatialField(mesh)
+            .region_box(0.25, 0.75, -0.5, 0.5, value=2.0)
+            .build_array()
+            .reshape((7, 5))
+        )
+
+        assert field[2, 2] == pytest.approx(2.0)
+        assert field[-1, -1] == pytest.approx(0.0)
 
 
 class TestSpatialFieldBuild:
@@ -234,3 +352,23 @@ class TestSpatialFieldIntegration:
 
         # Check field was set (build returns list, not numpy array)
         assert len(D) == 51
+
+
+class TestLayered1dValidation:
+    def test_rejects_non_1d_mesh(self):
+        with pytest.raises(ValueError, match="only works with 1D"):
+            layered_1d(bt.mesh_2d(2, 2), [(0.0, 1.0, 1.0)])
+
+    def test_delegates_invalid_layer_validation(self):
+        mesh = bt.mesh_1d(10)
+        with pytest.raises(ValueError, match="x_min"):
+            layered_1d(mesh, [(0.8, 0.2, 1.0)])
+        with pytest.raises(ValueError, match="value"):
+            layered_1d(mesh, [(0.2, 0.8, np.nan)])
+
+    def test_supports_radial_cylindrical_mesh(self):
+        mesh = bt.CylindricalMesh(10, 0.0, 1.0)
+        field = layered_1d(mesh, [(0.4, 0.6, 2.0)], default=1.0)
+
+        assert field[0] == pytest.approx(1.0)
+        assert field[5] == pytest.approx(2.0)

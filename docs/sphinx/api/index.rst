@@ -21,9 +21,9 @@ The ``biotransport`` package provides:
 - **Core classes**: :class:`StructuredMesh`, :class:`StructuredMesh3D`,
   :class:`CylindricalMesh`, :class:`NonuniformMesh1D`, and
   :class:`TransportProblem`.
-- **Native solvers**: Physics-specific C++ classes for scalar, multi-species,
-  electrochemical, membrane, flow, and application models.  Exact scope and
-  evidence are available from :mod:`biotransport.contracts`.
+- **Numerical contracts**: Physics-specific C++ solvers have native contracts,
+  while governed Python adapters/reference/workflow modules have a separate
+  backend/disposition registry in :mod:`biotransport.contracts`.
 - **Config and provenance**: Validated application configurations plus
   :mod:`biotransport.provenance` records.  Bundled defaults remain
   illustrative unless a project supplies defensible provenance.

@@ -24,15 +24,22 @@ Example:
 """
 
 from dataclasses import dataclass, field
+from numbers import Integral
 from typing import Callable, Optional
 
 import numpy as np
 
 from ._core import (
+    BoundaryCondition,
     DiffusionSolver,
     TransportProblem,
 )
-from .time_integrators import _validate_legacy_diffusion_problem
+from .time_integrators import (
+    _LegacyDiffusionSnapshot,
+    _capture_legacy_diffusion_problem,
+    _finite_real_scalar,
+    _scaled_positive_ratio,
+)
 
 
 @dataclass
@@ -49,9 +56,14 @@ class AdaptiveResult:
     """Statistics including steps, rejections, dt history."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class AdaptiveTimeStepperConfig:
-    """Configuration for adaptive time-stepping."""
+    """Immutable configuration that owns every adaptive-controller contract.
+
+    Every field is normalized and validated during construction.  A solver
+    keeps a private instance and exposes it read-only, so controller behavior
+    cannot be changed silently between construction and :meth:`solve`.
+    """
 
     tol: float = 1e-4
     """Relative error tolerance for step acceptance."""
@@ -63,7 +75,7 @@ class AdaptiveTimeStepperConfig:
     """Safety factor for step size adjustment."""
 
     dt_min: float = 1e-12
-    """Minimum allowed time step."""
+    """Controller floor; an exact final remainder may be smaller."""
 
     dt_max: Optional[float] = None
     """Maximum allowed time step (None = CFL limit)."""
@@ -77,14 +89,76 @@ class AdaptiveTimeStepperConfig:
     max_rejections: int = 100
     """Maximum consecutive rejections before error."""
 
+    maximum_steps: int = 10_000_000
+    """Maximum accepted steps before the Python controller stops."""
+
+    def __post_init__(self) -> None:
+        """Normalize and validate every value owned by the controller."""
+        tol = _finite_real_scalar(self.tol, "tol")
+        if tol <= 0.0:
+            raise ValueError("tol must be finite and positive")
+        atol = _finite_real_scalar(self.atol, "atol")
+        if atol <= 0.0:
+            raise ValueError("atol must be finite and positive")
+        safety = _finite_real_scalar(self.safety, "safety")
+        if not 0.0 < safety <= 1.0:
+            raise ValueError("safety must be in (0, 1]")
+        dt_min = _finite_real_scalar(self.dt_min, "dt_min")
+        if dt_min <= 0.0:
+            raise ValueError("dt_min must be finite and positive")
+        dt_max = (
+            None if self.dt_max is None else _finite_real_scalar(self.dt_max, "dt_max")
+        )
+        if dt_max is not None:
+            if dt_max <= 0.0:
+                raise ValueError("dt_max must be finite and positive when provided")
+            if dt_max < dt_min:
+                raise ValueError("dt_max must be greater than or equal to dt_min")
+
+        max_factor = _finite_real_scalar(self.max_factor, "max_factor")
+        if max_factor < 1.0:
+            raise ValueError("max_factor must be greater than or equal to 1")
+        min_factor = _finite_real_scalar(self.min_factor, "min_factor")
+        if not 0.0 < min_factor < 1.0:
+            raise ValueError("min_factor must be in (0, 1)")
+
+        if (
+            isinstance(self.max_rejections, bool)
+            or not isinstance(self.max_rejections, Integral)
+            or int(self.max_rejections) <= 0
+        ):
+            raise ValueError("max_rejections must be a positive integer")
+        if (
+            isinstance(self.maximum_steps, bool)
+            or not isinstance(self.maximum_steps, Integral)
+            or int(self.maximum_steps) <= 0
+        ):
+            raise ValueError("maximum_steps must be a positive integer")
+
+        object.__setattr__(self, "tol", tol)
+        object.__setattr__(self, "atol", atol)
+        object.__setattr__(self, "safety", safety)
+        object.__setattr__(self, "dt_min", dt_min)
+        object.__setattr__(self, "dt_max", dt_max)
+        object.__setattr__(self, "max_factor", max_factor)
+        object.__setattr__(self, "min_factor", min_factor)
+        object.__setattr__(self, "max_rejections", int(self.max_rejections))
+        object.__setattr__(self, "maximum_steps", int(self.maximum_steps))
+
 
 class AdaptiveTimeStepper:
     """
     Legacy adaptive controller for supported 1D uniform diffusion.
 
+    .. warning::
+       This is a legacy compatibility wrapper that orchestrates native
+       diffusion steps from Python.  Prefer :func:`biotransport.solve` for the
+       complete transport operator and a fully native solve loop.
+
     Uses local error estimation via step doubling to automatically adjust the
     time step.  It does not compose the complete :class:`TransportProblem`
-    operator; unsupported configurations raise during construction.
+    operator; unsupported configurations raise during construction and are
+    rechecked at every solve.
 
     The error is estimated by comparing:
     - One step of size dt
@@ -106,6 +180,10 @@ class AdaptiveTimeStepper:
         safety: float = 0.9,
         dt_min: float = 1e-12,
         dt_max: Optional[float] = None,
+        max_factor: float = 2.0,
+        min_factor: float = 0.1,
+        max_rejections: int = 100,
+        maximum_steps: int = 10_000_000,
         verbose: bool = False,
     ):
         """
@@ -122,88 +200,128 @@ class AdaptiveTimeStepper:
         safety : float
             Safety factor for step size adjustment (< 1).
         dt_min : float
-            Minimum allowed time step.
+            Controller floor for ordinary proposals.  A shorter exact-final
+            remainder is permitted so the result can land exactly on t_end.
         dt_max : float, optional
             Maximum allowed time step. Defaults to CFL limit.
+        max_factor : float
+            Largest factor by which an accepted step may grow (at least 1).
+        min_factor : float
+            Smallest rejection reduction factor, strictly between 0 and 1.
+        max_rejections : int
+            Maximum consecutive rejected attempts before raising.
+        maximum_steps : int
+            Maximum accepted steps before raising instead of running
+            indefinitely.
         verbose : bool
             Print step information during solve.
         """
-        self.problem = problem
-        self._validate_config(tol, atol, safety, dt_min, dt_max)
-        self.config = AdaptiveTimeStepperConfig(
+        self._problem = problem
+        self._config = AdaptiveTimeStepperConfig(
             tol=tol,
             atol=atol,
             safety=safety,
             dt_min=dt_min,
             dt_max=dt_max,
+            max_factor=max_factor,
+            min_factor=min_factor,
+            max_rejections=max_rejections,
+            maximum_steps=maximum_steps,
         )
+        if not isinstance(verbose, bool):
+            raise TypeError("verbose must be bool")
         self.verbose = verbose
 
-        # Validate before extracting the intentionally narrow solver state.
-        self._mesh, self._D, self._left_bc, self._right_bc = (
-            _validate_legacy_diffusion_problem(problem, "AdaptiveTimeStepper")
+        # Validate and own every value used by the initial solve.
+        self._last_snapshot = _capture_legacy_diffusion_problem(
+            problem,
+            "AdaptiveTimeStepper",
         )
-        self._initial = np.asarray(problem.initial(), dtype=float).copy()
-        self._initial[0] = self._left_bc.value
-        self._initial[-1] = self._right_bc.value
 
         # Compute CFL limit
-        self._cfl_limit = self._compute_cfl_limit()
+        self._cfl_limit = self._compute_cfl_limit(self._last_snapshot)
 
-        if dt_max is None:
-            self.config.dt_max = self._cfl_limit
+        effective_dt_max = (
+            self._cfl_limit
+            if self.config.dt_max is None
+            else min(self.config.dt_max, self._cfl_limit)
+        )
+        if effective_dt_max < self.config.dt_min:
+            raise ValueError(
+                "dt_min exceeds every stable permitted time step; decrease dt_min"
+            )
+
+    @property
+    def config(self) -> AdaptiveTimeStepperConfig:
+        """Return the immutable, validated controller configuration."""
+        return self._config
+
+    @property
+    def problem(self) -> TransportProblem:
+        """The live problem revalidated at the beginning of every solve."""
+        return self._problem
 
     @staticmethod
-    def _validate_config(
-        tol: float,
-        atol: float,
-        safety: float,
-        dt_min: float,
-        dt_max: Optional[float],
-    ) -> None:
-        """Reject invalid controller parameters before entering the solve loop."""
-        if not np.isfinite(tol) or tol <= 0.0:
-            raise ValueError("tol must be finite and positive")
-        if not np.isfinite(atol) or atol <= 0.0:
-            raise ValueError("atol must be finite and positive")
-        if not np.isfinite(safety) or not 0.0 < safety <= 1.0:
-            raise ValueError("safety must be in (0, 1]")
-        if not np.isfinite(dt_min) or dt_min <= 0.0:
-            raise ValueError("dt_min must be finite and positive")
-        if dt_max is not None:
-            if not np.isfinite(dt_max) or dt_max <= 0.0:
-                raise ValueError("dt_max must be finite and positive when provided")
-            if dt_max < dt_min:
-                raise ValueError("dt_max must be greater than or equal to dt_min")
-
-    def _compute_cfl_limit(self) -> float:
+    def _compute_cfl_limit(snapshot: _LegacyDiffusionSnapshot) -> float:
         """Compute the maximum stable time step based on CFL condition."""
-        mesh = self._mesh
-        D = self._D
+        mesh = snapshot.mesh
+        D = snapshot.diffusivity
         if D == 0.0:
             return float("inf")
-        dx2 = mesh.dx() ** 2
-        return dx2 / (2.0 * D)
+        dx = mesh.dx()
+        cfl_limit = _scaled_positive_ratio(
+            (dx, dx),
+            (2.0, D),
+            conservative=True,
+        )
+        if cfl_limit == 0.0:
+            raise FloatingPointError(
+                "adaptive diffusion stability limit is below binary64 range"
+            )
+        return cfl_limit
 
-    def _create_solver(self, initial: np.ndarray):
+    @staticmethod
+    def _create_solver(
+        initial: np.ndarray,
+        snapshot: _LegacyDiffusionSnapshot,
+    ) -> DiffusionSolver:
         """Create a fresh solver with the given initial condition."""
         # Configuration was restricted to pure diffusion during construction.
-        solver = DiffusionSolver(self._mesh, self._D)
+        solver = DiffusionSolver(snapshot.mesh, snapshot.diffusivity)
         solver.set_initial_condition(initial.tolist())
 
-        solver.set_boundary_condition(0, self._left_bc)
-        solver.set_boundary_condition(1, self._right_bc)
+        solver.set_boundary_condition(
+            0,
+            BoundaryCondition.dirichlet(snapshot.left_value),
+        )
+        solver.set_boundary_condition(
+            1,
+            BoundaryCondition.dirichlet(snapshot.right_value),
+        )
 
         return solver
 
-    def _step(self, u: np.ndarray, dt: float) -> np.ndarray:
+    def _step(
+        self,
+        u: np.ndarray,
+        dt: float,
+        snapshot: _LegacyDiffusionSnapshot,
+    ) -> np.ndarray:
         """Take a single time step from state u with step size dt."""
-        solver = self._create_solver(u)
+        if snapshot.diffusivity == 0.0:
+            unchanged = u.copy()
+            unchanged[0] = snapshot.left_value
+            unchanged[-1] = snapshot.right_value
+            return unchanged
+        solver = self._create_solver(u, snapshot)
         solver.solve(dt, 1)
         return np.array(solver.solution())
 
     def _estimate_error(
-        self, u: np.ndarray, dt: float
+        self,
+        u: np.ndarray,
+        dt: float,
+        snapshot: _LegacyDiffusionSnapshot,
     ) -> tuple[np.ndarray, np.ndarray, float]:
         """
         Estimate local error using step-doubling.
@@ -214,12 +332,19 @@ class AdaptiveTimeStepper:
             - u_half: Solution after two steps of dt/2 (more accurate)
             - error: Maximum relative error estimate
         """
+        half_dt = dt / 2.0
+        if half_dt <= 0.0 or half_dt + half_dt != dt:
+            raise FloatingPointError(
+                "adaptive step doubling cannot represent two equal half steps "
+                "for the proposed dt"
+            )
+
         # One step of size dt
-        u_full = self._step(u, dt)
+        u_full = self._step(u, dt, snapshot)
 
         # Two steps of size dt/2
-        u_mid = self._step(u, dt / 2)
-        u_half = self._step(u_mid, dt / 2)
+        u_mid = self._step(u, half_dt, snapshot)
+        u_half = self._step(u_mid, half_dt, snapshot)
 
         # Error estimate: |u_half - u_full| / (atol + rtol * |u_half|)
         diff = np.abs(u_half - u_full)
@@ -244,33 +369,57 @@ class AdaptiveTimeStepper:
         dt_initial : float, optional
             Initial time step guess. Defaults to CFL limit.
         callback : callable, optional
-            Function called after each accepted step: callback(t, u)
+            Function called after each accepted step as ``callback(t, u)``.
+            The array is an isolated copy and cannot alter the accepted state.
 
         Returns
         -------
         AdaptiveResult
             Solution and statistics.
         """
-        t_end = float(t_end)
-        if not np.isfinite(t_end) or t_end <= 0.0:
+        t_end = _finite_real_scalar(t_end, "t_end")
+        if t_end <= 0.0:
             raise ValueError("t_end must be finite and positive")
         if dt_initial is not None:
-            dt_initial = float(dt_initial)
-            if not np.isfinite(dt_initial) or dt_initial <= 0.0:
+            dt_initial = _finite_real_scalar(dt_initial, "dt_initial")
+            if dt_initial <= 0.0:
                 raise ValueError("dt_initial must be finite and positive")
+            if dt_initial < self.config.dt_min:
+                raise ValueError("dt_initial must be greater than or equal to dt_min")
+        if callback is not None and not callable(callback):
+            raise TypeError("callback must be callable or None")
 
-        # Initialize
-        u = self._initial.copy()
+        # The problem is mutable.  Revalidate and own a complete supported
+        # snapshot at every solve so no post-construction physics is omitted.
+        snapshot = _capture_legacy_diffusion_problem(
+            self._problem,
+            "AdaptiveTimeStepper",
+        )
+        cfl_limit = self._compute_cfl_limit(snapshot)
+        configured_dt_max = (
+            cfl_limit if self.config.dt_max is None else self.config.dt_max
+        )
+        if min(configured_dt_max, cfl_limit) < self.config.dt_min:
+            raise ValueError(
+                "dt_min exceeds every stable permitted time step; decrease dt_min"
+            )
+        self._last_snapshot = snapshot
+        self._cfl_limit = cfl_limit
+
+        # Initialize from the fresh owned snapshot.
+        u = snapshot.initial.copy()
+        u[0] = snapshot.left_value
+        u[-1] = snapshot.right_value
         t = 0.0
         if dt_initial is not None:
             dt = dt_initial
-        elif np.isfinite(self._cfl_limit):
-            dt = self.config.safety * self._cfl_limit
+        elif np.isfinite(cfl_limit):
+            dt = self.config.safety * cfl_limit
         else:
             dt = t_end
 
         # Respect both the user ceiling and the exact diffusion stability limit.
-        dt = min(dt, self.config.dt_max, self._cfl_limit, t_end)
+        dt = min(dt, configured_dt_max, cfl_limit, t_end)
 
         # Statistics tracking
         steps = 0
@@ -279,12 +428,23 @@ class AdaptiveTimeStepper:
         dt_history = []
 
         while t < t_end:
-            # Don't overshoot
-            if t + dt > t_end:
-                dt = t_end - t
+            if steps >= self.config.maximum_steps:
+                raise RuntimeError(
+                    "adaptive solve exceeded maximum_steps before reaching t_end"
+                )
+
+            # Don't overshoot, and retain the exact remaining interval so the
+            # accepted final step can land on t_end without roundoff drift.
+            remaining = t_end - t
+            dt = min(dt, remaining)
+            exact_final_below_minimum = dt == remaining and dt < self.config.dt_min
+            if not np.isfinite(dt) or dt <= 0.0:
+                raise FloatingPointError(
+                    "adaptive time step became non-finite or non-positive"
+                )
 
             # Estimate error
-            u_full, u_half, error = self._estimate_error(u, dt)
+            u_full, u_half, error = self._estimate_error(u, dt, snapshot)
             if not np.isfinite(error):
                 raise FloatingPointError(
                     "adaptive error estimate became non-finite; reduce the time step "
@@ -294,13 +454,21 @@ class AdaptiveTimeStepper:
             if error <= 1.0:
                 # Accept step (use the more accurate u_half)
                 u = u_half
-                t += dt
+                if dt == remaining:
+                    t = t_end
+                else:
+                    next_time = t + dt
+                    if not np.isfinite(next_time) or next_time <= t:
+                        raise FloatingPointError(
+                            "adaptive time step is too small to advance time"
+                        )
+                    t = next_time
                 steps += 1
                 consecutive_rejections = 0
                 dt_history.append(dt)
 
-                if callback:
-                    callback(t, u)
+                if callback is not None:
+                    callback(t, u.copy())
 
                 if self.verbose:
                     print(f"  t={t:.6e}, dt={dt:.6e}, error={error:.2e} (accepted)")
@@ -312,13 +480,18 @@ class AdaptiveTimeStepper:
                 else:
                     factor = self.config.max_factor
 
-                dt = min(dt * factor, self.config.dt_max, self._cfl_limit)
+                dt = min(dt * factor, configured_dt_max, cfl_limit)
 
             else:
                 # Reject step
                 rejections += 1
                 consecutive_rejections += 1
 
+                if exact_final_below_minimum:
+                    raise RuntimeError(
+                        "adaptive tolerance cannot be satisfied by the exact "
+                        "final remainder below dt_min"
+                    )
                 if consecutive_rejections > self.config.max_rejections:
                     raise RuntimeError(
                         f"Too many consecutive step rejections ({consecutive_rejections}). "
@@ -332,7 +505,14 @@ class AdaptiveTimeStepper:
                 factor = max(
                     self.config.safety * (1.0 / error) ** 0.5, self.config.min_factor
                 )
-                dt = max(dt * factor, self.config.dt_min)
+                proposed_dt = dt * factor
+                if dt <= self.config.dt_min:
+                    raise RuntimeError(
+                        "adaptive tolerance cannot be satisfied at dt_min"
+                    )
+                # The minimum is a permitted step, not merely a lower bound
+                # for the proposal.  Try it once before declaring failure.
+                dt = max(proposed_dt, self.config.dt_min)
 
         # Build statistics
         stats = {
@@ -342,7 +522,7 @@ class AdaptiveTimeStepper:
             "dt_max_used": max(dt_history) if dt_history else 0,
             "dt_avg": np.mean(dt_history) if dt_history else 0,
             "dt_history": dt_history,
-            "cfl_limit": self._cfl_limit,
+            "cfl_limit": cfl_limit,
             "final_error": error,
         }
 

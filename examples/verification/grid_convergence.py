@@ -132,7 +132,12 @@ def solve_temporal(dt: float) -> tuple[float, float]:
     )
 
     # Use bt.solve with explicit method and specified dt
-    result = bt.solve(problem, t=t_end, dt=dt, method="explicit")
+    result = bt.solve(
+        problem,
+        end_time=t_end,
+        time_step=dt,
+        method="explicit",
+    )
     u_numerical = np.asarray(result.concentration)
     error = np.sqrt(np.mean((u_numerical - u_semidiscrete_fine) ** 2))
     return u_numerical[n_fine // 2], error
@@ -238,7 +243,9 @@ fig, axes = plt.subplots(2, 2, figsize=(14, 12))
 # Plot 1: coupled grid/timestep refinement
 ax1 = axes[0, 0]
 h_spatial = 1.0 / np.array(n_values)
-errors_spatial = spatial_result.errors
+if spatial_result.errors is None:
+    raise RuntimeError("spatial convergence study did not return an error sequence")
+errors_spatial = np.asarray(spatial_result.errors)
 
 ax1.loglog(
     h_spatial, errors_spatial, "bo-", markersize=10, linewidth=2, label="Computed"
@@ -267,7 +274,9 @@ ax1.grid(True, which="both", alpha=0.3)
 # Plot 2: Temporal convergence (Explicit)
 ax2 = axes[0, 1]
 dt_arr = np.array(dt_values)
-errors_temporal = temporal_result.errors
+if temporal_result.errors is None:
+    raise RuntimeError("temporal convergence study did not return an error sequence")
+errors_temporal = np.asarray(temporal_result.errors)
 
 ax2.loglog(
     dt_arr, errors_temporal, "rs-", markersize=10, linewidth=2, label="Explicit FD"

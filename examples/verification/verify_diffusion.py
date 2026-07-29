@@ -50,8 +50,8 @@ def verify_semi_infinite_diffusion():
 
     # Solve numerically using simplified API
     print("\nRunning numerical solver...")
-    result = bt.solve(problem, t=t_final)
-    C_numerical = result.solution()
+    result = bt.solve(problem, end_time=t_final)
+    C_numerical = result.concentration
 
     # Analytical solution: C(x,t) = C_surface * erfc(x / (2*sqrt(D*t)))
     C_analytical = np.array(

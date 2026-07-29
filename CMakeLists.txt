@@ -87,6 +87,7 @@ install(
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 install(DIRECTORY cpp/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES LICENSE readme.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
 configure_package_config_file(
   cmake/biotransportConfig.cmake.in
@@ -96,7 +97,7 @@ configure_package_config_file(
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/biotransportConfigVersion.cmake"
   VERSION ${PROJECT_VERSION}
-  COMPATIBILITY SameMajorVersion)
+  COMPATIBILITY SameMinorVersion)
 
 install(
   EXPORT biotransportTargets

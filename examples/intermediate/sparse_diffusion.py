@@ -46,7 +46,7 @@ def solve_implicit(
     dt: float,
     steps: int,
     solver_type: bt.SparseSolverType,
-) -> tuple[np.ndarray, object, float]:
+) -> tuple[np.ndarray, bt.ImplicitSolveResult, float]:
     solver = bt.ImplicitDiffusion2D(mesh, diffusivity)
     solver.set_initial_condition(initial.ravel())
     set_zero_dirichlet(solver)
@@ -61,6 +61,7 @@ def solve_implicit(
 
 def implicit_solver_comparison() -> tuple[
     bool,
+    np.ndarray,
     np.ndarray,
     np.ndarray,
     np.ndarray,
@@ -86,7 +87,7 @@ def implicit_solver_comparison() -> tuple[
         2.0 * diffusivity * (1.0 / mesh.dx() ** 2 + 1.0 / mesh.dy() ** 2)
     )
     solutions: dict[str, np.ndarray] = {}
-    results: dict[str, object] = {}
+    results: dict[str, bt.ImplicitSolveResult] = {}
 
     print("\nConservative Backward Euler diffusion")
     print(f"  dt / explicit diffusion limit       {dt / explicit_limit:.1f}")
@@ -162,10 +163,10 @@ def sparse_poisson_check() -> bool:
         bt.SparseSolverType.SparseLU,
         bt.SparseSolverType.BiCGSTAB,
     ):
-        solution = np.asarray(matrix.solve(rhs.ravel(), solver_type)).reshape(
+        solution = np.asarray(matrix.solve(rhs.ravel().tolist(), solver_type)).reshape(
             exact.shape
         )
-        residual = np.asarray(matrix.multiply(solution.ravel())) - rhs.ravel()
+        residual = np.asarray(matrix.multiply(solution.ravel().tolist())) - rhs.ravel()
         errors[solver_type.name] = relative_l2(solution, exact)
         residuals[solver_type.name] = float(
             np.linalg.norm(residual) / np.linalg.norm(rhs)

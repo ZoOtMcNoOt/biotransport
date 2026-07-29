@@ -80,6 +80,38 @@ class TestGaussian:
         edge_idx = 0
         assert ic_arr[center_idx] > ic_arr[edge_idx]
 
+    @pytest.mark.parametrize("width", [0.0, -0.1])
+    def test_gaussian_rejects_non_positive_width(self, width):
+        with pytest.raises(ValueError, match="width"):
+            gaussian(bt.mesh_1d(10), width=width)
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"width": np.nan}, "width"),
+            ({"amplitude": np.inf}, "amplitude"),
+            ({"center": np.nan}, "center"),
+        ],
+    )
+    def test_gaussian_rejects_non_finite_parameters(self, kwargs, message):
+        with pytest.raises(ValueError, match=message):
+            gaussian(bt.mesh_1d(10), **kwargs)
+
+    @pytest.mark.parametrize("width", [0.1 + 0.2j, np.complex128(0.1 + 0.2j)])
+    def test_gaussian_rejects_complex_width_without_casting(self, width):
+        with pytest.raises(TypeError, match="real number"):
+            gaussian(bt.mesh_1d(10), width=width)
+
+    def test_gaussian_rejects_2d_center_keywords_for_1d(self):
+        mesh = bt.mesh_1d(10)
+        with pytest.raises(ValueError, match="only valid for 2D"):
+            gaussian(mesh, center_x=0.5)
+
+    def test_gaussian_rejects_unsupported_mesh_geometry(self):
+        mesh = bt.CylindricalMesh(10, 0.0, 1.0)
+        with pytest.raises(TypeError, match="StructuredMesh"):
+            gaussian(mesh)
+
 
 class TestStep:
     """Tests for step initial condition."""
@@ -121,6 +153,22 @@ class TestStep:
         assert ic_arr[0] == pytest.approx(0.0)
         assert ic_arr[100] == pytest.approx(5.0)
 
+    def test_step_rejects_2d_mesh(self):
+        with pytest.raises(ValueError, match="only valid for 1D"):
+            step(bt.mesh_2d(2, 2))
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"position": np.nan}, "position"),
+            ({"left": np.inf}, "left"),
+            ({"right": -np.inf}, "right"),
+        ],
+    )
+    def test_step_rejects_non_finite_parameters(self, kwargs, message):
+        with pytest.raises(ValueError, match=message):
+            step(bt.mesh_1d(4), **kwargs)
+
 
 class TestUniform:
     """Tests for uniform initial condition."""
@@ -150,6 +198,22 @@ class TestUniform:
         assert len(ic) == 11 * 11
         assert np.all(ic_arr == pytest.approx(2.718))
 
+    @pytest.mark.parametrize(
+        "mesh",
+        [
+            bt.CylindricalMesh(4, 0.0, 1.0),
+            bt.CylindricalMesh(2, 3, 0.0, 1.0, -1.0, 1.0),
+            bt.CylindricalMesh(1, 4, 1, 0.1, 1.0, 0.0, 2 * np.pi, -1.0, 1.0),
+            bt.StructuredMesh3D(1, 1, 1, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0),
+            bt.NonuniformMesh1D([0.0, 0.2, 1.0]),
+        ],
+    )
+    def test_uniform_supports_all_mesh_geometries(self, mesh):
+        ic = uniform(mesh, value=2.5)
+
+        assert len(ic) == mesh.num_nodes()
+        assert ic == pytest.approx([2.5] * mesh.num_nodes())
+
     def test_uniform_zero(self):
         """Test uniform zero IC."""
         mesh = bt.mesh_1d(100, -1.0, 1.0)
@@ -165,6 +229,15 @@ class TestUniform:
         ic_arr = np.array(ic)
 
         assert np.all(ic_arr == pytest.approx(-1.5))
+
+    @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+    def test_uniform_rejects_non_finite_values(self, value):
+        with pytest.raises(ValueError, match="value"):
+            uniform(bt.mesh_1d(4), value)
+
+    def test_uniform_rejects_unsupported_mesh(self):
+        with pytest.raises(TypeError, match="mesh must be"):
+            uniform(object(), 1.0)
 
 
 class TestCircle:
@@ -214,6 +287,28 @@ class TestCircle:
         # All nodes should be inside
         assert np.all(ic_arr == pytest.approx(10.0))
 
+    def test_circle_rejects_1d_mesh(self):
+        with pytest.raises(ValueError, match="only valid for 2D"):
+            circle(bt.mesh_1d(4))
+
+    @pytest.mark.parametrize("radius", [-0.1, np.nan, np.inf])
+    def test_circle_rejects_invalid_radius(self, radius):
+        with pytest.raises(ValueError, match="radius"):
+            circle(bt.mesh_2d(4, 4), radius=radius)
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"center_x": np.nan}, "center_x"),
+            ({"center_y": np.inf}, "center_y"),
+            ({"inside": np.nan}, "inside"),
+            ({"outside": np.inf}, "outside"),
+        ],
+    )
+    def test_circle_rejects_non_finite_values(self, kwargs, message):
+        with pytest.raises(ValueError, match=message):
+            circle(bt.mesh_2d(4, 4), **kwargs)
+
 
 class TestSinusoidal:
     """Tests for sinusoidal initial condition (1D only)."""
@@ -256,3 +351,19 @@ class TestSinusoidal:
 
         # Values should oscillate around 2.0
         assert np.mean(ic_arr) == pytest.approx(2.0, rel=0.1)
+
+    def test_sinusoidal_rejects_2d_mesh(self):
+        with pytest.raises(ValueError, match="only valid for 1D"):
+            sinusoidal(bt.mesh_2d(2, 2))
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"periods": np.nan}, "periods"),
+            ({"amplitude": np.inf}, "amplitude"),
+            ({"offset": -np.inf}, "offset"),
+        ],
+    )
+    def test_sinusoidal_rejects_non_finite_parameters(self, kwargs, message):
+        with pytest.raises(ValueError, match=message):
+            sinusoidal(bt.mesh_1d(4), **kwargs)

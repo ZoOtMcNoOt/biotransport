@@ -43,6 +43,175 @@ double packedDivergence(const StructuredMesh& mesh, const std::vector<double>& u
     return maximum;
 }
 
+struct ManufacturedVelocityMetrics {
+    double h = 0.0;
+    double l2_velocity_error = 0.0;
+    double maximum_velocity_error = 0.0;
+    double divergence = 0.0;
+    double pressure_residual = 0.0;
+    bool stable = false;
+};
+
+ManufacturedVelocityMetrics runManufacturedVelocityBenchmark(int cells) {
+    // A smooth, steady, divergence-free solution on [0, 1]^2:
+    //
+    //   u = A sin^2(pi x) sin(2 pi y)
+    //   v = -A sin(2 pi x) sin^2(pi y),  p = 0.
+    //
+    // Both velocity components vanish on every wall.  Supplying
+    // f = rho (u . grad)u - mu laplacian(u) makes this an exact solution of
+    // rho (u . grad)u = -grad(p) + mu laplacian(u) + f.  The expressions below
+    // are derived analytically rather than from the implementation's discrete
+    // operators.
+    constexpr double density = 1.3;
+    constexpr double viscosity = 0.07;
+    constexpr double amplitude = 0.05;
+    constexpr double duration = 0.01;
+    const double pi = std::acos(-1.0);
+    const StructuredMesh mesh(cells, cells, 0.0, 1.0, 0.0, 1.0);
+    const int stride = cells + 1;
+
+    const auto exact_u = [=](double x, double y) {
+        const double sin_x = std::sin(pi * x);
+        return amplitude * sin_x * sin_x * std::sin(2.0 * pi * y);
+    };
+    const auto exact_v = [=](double x, double y) {
+        const double sin_y = std::sin(pi * y);
+        return -amplitude * std::sin(2.0 * pi * x) * sin_y * sin_y;
+    };
+    const auto force_x = [=](double x, double y) {
+        const double sin_x = std::sin(pi * x);
+        const double sin_2x = std::sin(2.0 * pi * x);
+        const double cos_2x = std::cos(2.0 * pi * x);
+        const double sin_y = std::sin(pi * y);
+        const double sin_2y = std::sin(2.0 * pi * y);
+        const double cos_2y = std::cos(2.0 * pi * y);
+        const double u = amplitude * sin_x * sin_x * sin_2y;
+        const double v = -amplitude * sin_2x * sin_y * sin_y;
+        const double du_dx = amplitude * pi * sin_2x * sin_2y;
+        const double du_dy = 2.0 * amplitude * pi * sin_x * sin_x * cos_2y;
+        const double laplacian_u =
+            2.0 * amplitude * pi * pi * sin_2y * (cos_2x - 2.0 * sin_x * sin_x);
+        return density * (u * du_dx + v * du_dy) - viscosity * laplacian_u;
+    };
+    const auto force_y = [=](double x, double y) {
+        const double sin_x = std::sin(pi * x);
+        const double sin_2x = std::sin(2.0 * pi * x);
+        const double cos_2x = std::cos(2.0 * pi * x);
+        const double sin_y = std::sin(pi * y);
+        const double sin_2y = std::sin(2.0 * pi * y);
+        const double cos_2y = std::cos(2.0 * pi * y);
+        const double u = amplitude * sin_x * sin_x * sin_2y;
+        const double v = -amplitude * sin_2x * sin_y * sin_y;
+        const double dv_dx = -2.0 * amplitude * pi * cos_2x * sin_y * sin_y;
+        const double dv_dy = -amplitude * pi * sin_2x * sin_2y;
+        const double laplacian_v =
+            2.0 * amplitude * pi * pi * sin_2x * (2.0 * sin_y * sin_y - cos_2y);
+        return density * (u * dv_dx + v * dv_dy) - viscosity * laplacian_v;
+    };
+
+    auto u0 = zeroField(mesh);
+    auto v0 = zeroField(mesh);
+    for (int j = 0; j < cells; ++j) {
+        const double y = (static_cast<double>(j) + 0.5) * mesh.dy();
+        for (int i = 0; i <= cells; ++i) {
+            u0[j * stride + i] = exact_u(static_cast<double>(i) * mesh.dx(), y);
+        }
+    }
+    for (int j = 0; j <= cells; ++j) {
+        const double y = static_cast<double>(j) * mesh.dy();
+        for (int i = 0; i < cells; ++i) {
+            v0[j * stride + i] = exact_v((static_cast<double>(i) + 0.5) * mesh.dx(), y);
+        }
+    }
+    SCIENCE_REQUIRE(packedDivergence(mesh, u0, v0) < 1e-13,
+                    "manufactured initial velocity must be discretely solenoidal");
+
+    const double kinematic_viscosity = viscosity / density;
+    // The explicit viscous ceiling scales as h^2.  Multiplying by h/L makes
+    // dt=O(h^3), so first-order time error is asymptotically smaller than the
+    // second-order spatial error measured by this refinement study.
+    const double domain_length = 1.0;
+    const double dt =
+        0.02 * mesh.dx() * mesh.dx() / kinematic_viscosity * (mesh.dx() / domain_length);
+    NavierStokesSolver solver(mesh, density, viscosity);
+    solver.setInitialVelocity(u0, v0)
+        .setBodyForce(force_x, force_y)
+        .setConvectionScheme(ConvectionScheme::CENTRAL)
+        .setTimeStep(dt)
+        .setPressureTolerance(1e-11)
+        .setMaxPressureIterations(20000);
+    const auto result = solver.solve(duration);
+
+    long double squared_error = 0.0L;
+    std::size_t value_count = 0;
+    double maximum_error = 0.0;
+    for (int j = 0; j < cells; ++j) {
+        const double y = (static_cast<double>(j) + 0.5) * mesh.dy();
+        for (int i = 0; i <= cells; ++i) {
+            const int index = j * stride + i;
+            const double error = result.u[index] - exact_u(static_cast<double>(i) * mesh.dx(), y);
+            squared_error += static_cast<long double>(error) * error;
+            maximum_error = std::max(maximum_error, std::abs(error));
+            ++value_count;
+        }
+    }
+    for (int j = 0; j <= cells; ++j) {
+        const double y = static_cast<double>(j) * mesh.dy();
+        for (int i = 0; i < cells; ++i) {
+            const int index = j * stride + i;
+            const double error =
+                result.v[index] - exact_v((static_cast<double>(i) + 0.5) * mesh.dx(), y);
+            squared_error += static_cast<long double>(error) * error;
+            maximum_error = std::max(maximum_error, std::abs(error));
+            ++value_count;
+        }
+    }
+
+    return ManufacturedVelocityMetrics{
+        mesh.dx(),
+        std::sqrt(static_cast<double>(squared_error / static_cast<long double>(value_count))),
+        maximum_error,
+        result.divergence,
+        result.pressure_residual,
+        result.stable,
+    };
+}
+
+void manufacturedSteadyVelocityConverges() {
+    const auto coarse = runManufacturedVelocityBenchmark(8);
+    const auto medium = runManufacturedVelocityBenchmark(12);
+    const auto fine = runManufacturedVelocityBenchmark(16);
+    const double coarse_order = std::log(coarse.l2_velocity_error / medium.l2_velocity_error) /
+                                std::log(coarse.h / medium.h);
+    const double fine_order =
+        std::log(medium.l2_velocity_error / fine.l2_velocity_error) / std::log(medium.h / fine.h);
+
+    science_test::report("manufactured coarse L2 velocity error", coarse.l2_velocity_error, "m/s");
+    science_test::report("manufactured medium L2 velocity error", medium.l2_velocity_error, "m/s");
+    science_test::report("manufactured fine L2 velocity error", fine.l2_velocity_error, "m/s");
+    science_test::report("manufactured coarse-to-medium order", coarse_order);
+    science_test::report("manufactured medium-to-fine order", fine_order);
+    science_test::report("manufactured fine max velocity error", fine.maximum_velocity_error,
+                         "m/s");
+    science_test::report("manufactured fine divergence", fine.divergence, "1/s");
+    science_test::report("manufactured fine pressure residual", fine.pressure_residual);
+
+    SCIENCE_REQUIRE(coarse.stable && medium.stable && fine.stable,
+                    "all manufactured-flow refinements must report projection-stable");
+    SCIENCE_REQUIRE(medium.l2_velocity_error < coarse.l2_velocity_error &&
+                        fine.l2_velocity_error < medium.l2_velocity_error,
+                    "manufactured velocity error must decrease on every refinement");
+    SCIENCE_REQUIRE(coarse_order > 1.5 && fine_order > 1.5,
+                    "central manufactured velocity must demonstrate at least 1.5 order");
+    SCIENCE_REQUIRE(fine.maximum_velocity_error < 2e-4,
+                    "fine-grid manufactured velocity must be accurate to 0.2 mm/s");
+    SCIENCE_REQUIRE(fine.divergence < 1e-9,
+                    "manufactured velocity must satisfy the compatible continuity constraint");
+    SCIENCE_REQUIRE(fine.pressure_residual <= 1e-11,
+                    "manufactured pressure projection must meet its configured residual");
+}
+
 void constructionAndOwnedMesh() {
     NavierStokesSolver solver(StructuredMesh(8, 6, 0.0, 1.0, 0.0, 1.0), 1.0, 0.02);
     const auto result = solver.solve(0.0);
@@ -98,6 +267,25 @@ void configurationContracts() {
     solver.setTimeStep(0.0);
 }
 
+void invalidBodyForceFailsLoudly() {
+    const StructuredMesh mesh(6, 6, 0.0, 1.0, 0.0, 1.0);
+    NavierStokesSolver missing_callback(mesh, 1.0, 0.01);
+    requireThrows<std::invalid_argument>(
+        [&] {
+            missing_callback.setBodyForce(std::function<double(double, double)>{},
+                                          [](double, double) { return 0.0; });
+        },
+        "missing body-force callbacks must be rejected at configuration time");
+
+    NavierStokesSolver nonfinite_force(mesh, 1.0, 0.01);
+    nonfinite_force.setBodyForce(
+        [](double, double) { return std::numeric_limits<double>::quiet_NaN(); },
+        [](double, double) { return 0.0; });
+    requireThrows<std::domain_error>(
+        [&] { (void)nonfinite_force.solveSteps(1); },
+        "a non-finite manufactured-force value must fail before state is returned");
+}
+
 void initialFieldContracts() {
     const StructuredMesh mesh(6, 5, 0.0, 1.0, 0.0, 1.0);
     NavierStokesSolver solver(mesh, 1.0, 0.01);
@@ -138,6 +326,26 @@ void exactTimeAndStepSemantics() {
                                          "unimplemented snapshot interval must be rejected");
     requireThrows<std::invalid_argument>([&] { (void)solver.solveSteps(-1); },
                                          "negative step count must be rejected");
+}
+
+void tinyPhysicalScalesPreserveStabilityAndTimeContracts() {
+    const StructuredMesh microscopic_mesh(6, 6, 0.0, 1.0e-8, 0.0, 1.0e-8);
+    NavierStokesSolver unstable(microscopic_mesh, 1.0, 1.0);
+    unstable.setTimeStep(1.0e-15);
+    requireThrows<std::domain_error>(
+        [&] { (void)unstable.solveSteps(1); },
+        "a unit-scale epsilon allowance must not admit a grossly unstable microscopic step");
+
+    const StructuredMesh ordinary_mesh(6, 6, 0.0, 1.0, 0.0, 1.0);
+    NavierStokesSolver exact_clock(ordinary_mesh, 1.0, 0.01);
+    const double step = std::ldexp(1.0, -60);
+    const double duration = 8.0 * step;
+    exact_clock.setTimeStep(step);
+    const auto result = exact_clock.solve(duration);
+    SCIENCE_REQUIRE(result.time == duration,
+                    "tiny-duration solve must report the exact requested endpoint");
+    SCIENCE_REQUIRE(result.time_steps == 8,
+                    "tiny-duration solve must not be snapped complete after one step");
 }
 
 void compatibleProjectionReducesDivergence() {
@@ -263,8 +471,12 @@ int main() {
         "Navier-Stokes compatible projection",
         {{"construction owns mesh and validates parameters", constructionAndOwnedMesh},
          {"configuration rejects unsupported numerics", configurationContracts},
+         {"invalid body-force callbacks fail loudly", invalidBodyForceFailsLoudly},
          {"initial fields have exact finite layout", initialFieldContracts},
          {"duration and solveSteps are exact", exactTimeAndStepSemantics},
+         {"tiny physical scales preserve stability and time contracts",
+          tinyPhysicalScalesPreserveStabilityAndTimeContracts},
+         {"manufactured steady velocity converges", manufacturedSteadyVelocityConverges},
          {"projection quantitatively removes divergence", compatibleProjectionReducesDivergence},
          {"divergent zero-duration state is not stable", divergentZeroDurationIsNotStable},
          {"lid-driven cavity remains solenoidal", lidDrivenCavityRemainsSolenoidal},

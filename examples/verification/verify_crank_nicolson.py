@@ -72,8 +72,8 @@ reference_sine = semidiscrete_sine_reference(x, t_end, D, L, dx)
 
 # Coarse-to-fine steps; each divides t_end and all satisfy the 1D explicit limit.
 dt_values = np.array([0.005, 0.0025, 0.00125, 0.000625, 0.0003125])
-errors_explicit = []
-errors_cn = []
+errors_explicit: list[float] = []
+errors_cn: list[float] = []
 
 print(f"\n{'dt':>10} {'Explicit Error':>18} {'CN Error':>18} {'Ratio':>10}")
 print("-" * 70)
@@ -113,14 +113,14 @@ for dt in dt_values:
     ratio = error_explicit / error_cn if error_cn > 0 else np.inf
     print(f"{dt:>10.5f} {error_explicit:>18.10f} {error_cn:>18.10f} {ratio:>10.2f}")
 
-errors_explicit = np.array(errors_explicit)
-errors_cn = np.array(errors_cn)
+errors_explicit_array = np.asarray(errors_explicit)
+errors_cn_array = np.asarray(errors_cn)
 
 if (
-    np.any(~np.isfinite(errors_explicit))
-    or np.any(~np.isfinite(errors_cn))
-    or np.any(errors_explicit <= 0.0)
-    or np.any(errors_cn <= 0.0)
+    np.any(~np.isfinite(errors_explicit_array))
+    or np.any(~np.isfinite(errors_cn_array))
+    or np.any(errors_explicit_array <= 0.0)
+    or np.any(errors_cn_array <= 0.0)
 ):
     raise RuntimeError("Temporal-order fit requires finite, positive RMS errors")
 
@@ -133,8 +133,8 @@ print(f"{'=' * 70}")
 
 # Compute slopes in a log-log least-squares fit over the stated sequence.
 log_dt = np.log(dt_values)
-log_error_explicit = np.log(errors_explicit)
-log_error_cn = np.log(errors_cn)
+log_error_explicit = np.log(errors_explicit_array)
+log_error_cn = np.log(errors_cn_array)
 
 # Linear fit: log(error) = slope * log(dt) + intercept
 slope_explicit = np.polyfit(log_dt, log_error_explicit, 1)[0]
@@ -219,7 +219,7 @@ print(f"{'=' * 70}")
 fig1, ax1 = plt.subplots(figsize=(10, 7))
 ax1.loglog(
     dt_values,
-    errors_explicit,
+    errors_explicit_array,
     "bo-",
     linewidth=2,
     markersize=8,
@@ -227,7 +227,7 @@ ax1.loglog(
 )
 ax1.loglog(
     dt_values,
-    errors_cn,
+    errors_cn_array,
     "rs-",
     linewidth=2,
     markersize=8,
@@ -236,8 +236,8 @@ ax1.loglog(
 
 # Add reference lines
 dt_ref = dt_values[2]
-error_ref_explicit = errors_explicit[2]
-error_ref_cn = errors_cn[2]
+error_ref_explicit = errors_explicit_array[2]
+error_ref_cn = errors_cn_array[2]
 
 # First-order reference line
 first_order_line = error_ref_explicit * (dt_values / dt_ref) ** 1.0
@@ -310,14 +310,14 @@ ax_bottom.plot(
     error_plot_explicit,
     "b--",
     linewidth=2,
-    label=f"Explicit Error (RMS={errors_explicit[-1]:.3e})",
+    label=f"Explicit Error (RMS={errors_explicit_array[-1]:.3e})",
 )
 ax_bottom.plot(
     x,
     error_plot_cn,
     "r:",
     linewidth=2,
-    label=f"CN Error (RMS={errors_cn[-1]:.3e})",
+    label=f"CN Error (RMS={errors_cn_array[-1]:.3e})",
 )
 ax_bottom.axhline(0, color="k", linestyle="-", alpha=0.3)
 ax_bottom.set_xlabel("Position x", fontsize=12)
@@ -396,7 +396,7 @@ print("\nDescriptive comparisons (not additional acceptance checks):")
 print(f"  Explicit out-of-limit request: {explicit_large_status}")
 print(
     f"  At dt={dt_values[-1]:.7f}, explicit/CN RMS-error ratio="
-    f"{errors_explicit[-1] / errors_cn[-1]:.3e}"
+    f"{errors_explicit_array[-1] / errors_cn_array[-1]:.3e}"
 )
 print("  No conclusion is claimed outside the configured problem and sequences.")
 

@@ -1,13 +1,15 @@
-"""Machine-readable scientific contracts for the compiled solver API.
+"""Machine-readable scientific contracts for native and Python numerical APIs.
 
-The registry describes equations, numerical scope, units, and the automated
-evidence that actually exists in this repository.  It is intentionally more
-conservative than marketing documentation: an evidence record applies only to
-the claim it states, and numerical verification is not biological validation.
+The native registry describes compiled solver equations, numerical scope,
+units, and the automated evidence that actually exists in this repository. A
+separate Python registry describes governed adapter, reference, and workflow
+modules together with their backend and retain/port/deprecate disposition.
+Both are intentionally more conservative than marketing documentation: an
+evidence record applies only to the claim it states, and numerical
+verification is not biological validation.
 
-Only public solver entry points implemented by the native extension are in
-scope.  Python-only reference solvers and analysis helpers have their own
-documentation and are not silently treated as native implementations here.
+Python-only reference solvers are never silently treated as native
+implementations or allowed to inherit a compiled solver's evidence.
 """
 
 from __future__ import annotations
@@ -32,6 +34,15 @@ class EvidenceLevel(str, Enum):
     INVARIANT = "invariant"
     ANALYTICAL = "analytical"
     CONVERGENCE = "convergence"
+
+
+class PythonBackend(str, Enum):
+    """Where a public Python numerical surface performs its substantive work."""
+
+    NATIVE_ADAPTER = "native-adapter"
+    MIXED = "mixed-python-native"
+    PYTHON_REFERENCE = "python-reference"
+    WORKFLOW = "python-workflow"
 
 
 _EVIDENCE_RANK: Final[Mapping[EvidenceLevel, int]] = MappingProxyType(
@@ -202,6 +213,85 @@ class SolverContract:
         }
 
 
+@dataclass(frozen=True)
+class PythonNumericalContract:
+    """Immutable contract for one public Python numerical/workflow module.
+
+    These records are deliberately separate from :class:`SolverContract`.
+    They disclose Python orchestration and reference implementations without
+    pretending that they are compiled native solver entry points or inherit a
+    native solver's verification evidence.
+    """
+
+    contract_id: str
+    title: str
+    module: str
+    public_symbols: tuple[str, ...]
+    category: str
+    backend: PythonBackend
+    mathematical_scope: str
+    numerical_method: str
+    failure_policy: str
+    evidence: tuple[EvidenceRecord, ...]
+    disposition: str
+    exclusions: tuple[str, ...]
+    warnings: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for field_name in ("public_symbols", "evidence", "exclusions", "warnings"):
+            object.__setattr__(self, field_name, tuple(getattr(self, field_name)))
+        if not isinstance(self.backend, PythonBackend):
+            object.__setattr__(self, "backend", PythonBackend(self.backend))
+        required_text = (
+            self.contract_id,
+            self.title,
+            self.module,
+            self.category,
+            self.mathematical_scope,
+            self.numerical_method,
+            self.failure_policy,
+            self.disposition,
+        )
+        if any(not value.strip() for value in required_text):
+            raise ValueError("Python numerical contract text fields must not be empty")
+        if not self.module.startswith("biotransport."):
+            raise ValueError(
+                "Python numerical contract module must be package-qualified"
+            )
+        if not self.public_symbols:
+            raise ValueError("Python numerical contract requires public symbols")
+        if len(self.public_symbols) != len(set(self.public_symbols)):
+            raise ValueError("Python numerical contract symbols must be unique")
+        if not self.evidence:
+            raise ValueError("Python numerical contract requires an evidence record")
+
+    @property
+    def evidence_level(self) -> EvidenceLevel:
+        """Return the strongest scoped evidence represented by the record."""
+
+        return max(self.evidence, key=lambda item: _EVIDENCE_RANK[item.level]).level
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a detached JSON-serializable representation."""
+
+        return {
+            "contract_id": self.contract_id,
+            "title": self.title,
+            "module": self.module,
+            "public_symbols": list(self.public_symbols),
+            "category": self.category,
+            "backend": self.backend.value,
+            "mathematical_scope": self.mathematical_scope,
+            "numerical_method": self.numerical_method,
+            "failure_policy": self.failure_policy,
+            "evidence_level": self.evidence_level.value,
+            "evidence": [record.to_dict() for record in self.evidence],
+            "disposition": self.disposition,
+            "exclusions": list(self.exclusions),
+            "warnings": list(self.warnings),
+        }
+
+
 EVIDENCE_DISCLAIMER: Final[str] = (
     "Evidence levels summarize repository tests for scoped numerical claims. "
     "They are not experimental or biological validation, an uncertainty "
@@ -279,23 +369,31 @@ _CONTRACTS: Final[tuple[SolverContract, ...]] = (
             "to land exactly on final_time."
         ),
         convergence_policy=(
-            "First-order reaction-time convergence is measured for one composed "
-            "reaction case. No blanket order claim is made for every coefficient, "
-            "boundary, or advection configuration."
+            "A smooth diffusion eigenmode measures second-order spatial convergence "
+            "when temporal error is suppressed. A heterogeneous diffusion/advection "
+            "manufactured case measures the expected first-order upwind behavior, and "
+            "one composed reaction case measures first-order temporal convergence. "
+            "No blanket order claim is made outside those configurations."
         ),
         evidence=(
             EvidenceRecord(
                 EvidenceLevel.CONVERGENCE,
-                "A composed uniform reaction exhibits measured first-order temporal "
-                "convergence, while separate manufactured and conservation cases "
-                "exercise diffusion, advection, interfaces, boundaries, and exact time.",
+                "Independent continuum/manufactured references measure second-order "
+                "diffusion space, first-order heterogeneous upwind space, and first-order "
+                "reaction time while separate cases exercise conservation and exact time.",
                 (
+                    "cpp/tests/physics/test_transport_solver_science.cpp::"
+                    "canonicalSolveHasSecondOrderSpatialGridConvergence",
+                    "cpp/tests/physics/test_transport_solver_science.cpp::"
+                    "heterogeneousCoefficientsAndMixedBoundariesConverge",
                     "cpp/tests/physics/test_transport_solver_science.cpp::"
                     "reactionsComposeAndConvergeInTime",
                     "cpp/tests/physics/test_transport_solver_science.cpp::"
                     "manufacturedQuadraticIsStationaryIn2D",
                     "cpp/tests/physics/test_transport_solver_science.cpp::"
                     "conservativeFluxesPreserveMassWithVariableFields",
+                    "cpp/tests/physics/test_transport_solver_science.cpp::"
+                    "finalTimeIsExactAndLastStepIsShortened",
                 ),
             ),
         ),
@@ -1400,7 +1498,7 @@ _CONTRACTS: Final[tuple[SolverContract, ...]] = (
             "inertia",
             "pressure projection",
             "viscosity",
-            "uniform body force",
+            "uniform or prescribed finite spatial body-force callbacks",
             "UPWIND or CENTRAL convection",
         ),
         supported_boundary_conditions=(
@@ -1417,22 +1515,25 @@ _CONTRACTS: Final[tuple[SolverContract, ...]] = (
             "flux fail loudly."
         ),
         convergence_policy=(
-            "Projection divergence, exact-time semantics, bounded-flow invariants, and "
-            "failure modes are tested. No analytical velocity benchmark or measured order "
-            "is registered for this implementation."
+            "A smooth, wall-compatible manufactured central-convection velocity field "
+            "measures approximately second-order spatial convergence over three square "
+            "MAC grids with first-order time error suppressed by dt=O(h^3). Projection "
+            "divergence, exact-time semantics, uniform flow, and failure modes are tested "
+            "separately."
         ),
         evidence=(
             EvidenceRecord(
-                EvidenceLevel.INVARIANT,
-                "The compatible projection reduces divergence below a quantitative bound, "
-                "closed-domain forcing is pressure-balanced, and exact step/time semantics hold.",
+                EvidenceLevel.CONVERGENCE,
+                "An independently forced incompressible manufactured velocity field "
+                "converges over three grids; exact uniform flow and compatible projection "
+                "invariants exercise separate paths.",
                 (
                     "cpp/tests/physics/test_navier_stokes.cpp::"
-                    "compatibleProjectionReducesDivergence",
+                    "manufacturedSteadyVelocityConverges",
                     "cpp/tests/physics/test_navier_stokes.cpp::"
-                    "closedDomainForceIsBalancedByPressure",
+                    "compatibleProjectionReducesDivergence",
                     "python/tests/test_navier_stokes.py::"
-                    "test_projection_reports_quantitatively_small_divergence",
+                    "test_uniform_velocity_is_an_exact_navier_stokes_solution",
                 ),
             ),
         ),
@@ -1683,16 +1784,23 @@ _CONTRACTS: Final[tuple[SolverContract, ...]] = (
             "nonfinite, or nonphysical configurations fail before mutation."
         ),
         convergence_policy=(
-            "Latent-heat units/integral, uniform Pennes equilibrium, source scaling, exact "
-            "save times, and stability rejection are tested. No measured grid/time order "
-            "or experimental validation is registered."
+            "A linear zero-perfusion heat eigenmode measures second-order spatial "
+            "convergence with Forward-Euler error suppressed by dt=O(h^3), and measures "
+            "first-order Forward-Euler time convergence against its exact semi-discrete "
+            "mode. Latent heat, Pennes equilibrium, save times, and stability rejection "
+            "are tested separately."
         ),
         evidence=(
             EvidenceRecord(
-                EvidenceLevel.INVARIANT,
-                "Uniform Pennes equilibrium is preserved, apparent-capacity latent heat "
-                "integrates correctly, and metabolic/perfusion units and signs are checked.",
+                EvidenceLevel.CONVERGENCE,
+                "Independent heat eigenmodes measure scoped spatial and temporal order; "
+                "uniform Pennes equilibrium, latent heat, and source signs remain invariant "
+                "checks.",
                 (
+                    "cpp/tests/physics/test_bioheat_science.cpp::"
+                    "smoothHeatEigenmodeHasSecondOrderSpatialConvergence",
+                    "cpp/tests/physics/test_bioheat_science.cpp::"
+                    "explicitEulerTimeIntegrationConvergesAtFirstOrder",
                     "cpp/tests/physics/test_bioheat_science.cpp::"
                     "apparentCapacityHasCorrectUnitsAndLatentIntegral",
                     "cpp/tests/physics/test_bioheat_science.cpp::"
@@ -1752,16 +1860,22 @@ _CONTRACTS: Final[tuple[SolverContract, ...]] = (
             "recommended_time_step applies a user-selected safety factor."
         ),
         convergence_policy=(
-            "Discrete Boltzmann equilibrium, sealed-domain conservation, flux mass balance, "
-            "migration direction, and limiting potentials are tested. No measured spatial "
-            "or temporal order is registered."
+            "The zero-potential diffusion limit measures second-order spatial convergence "
+            "against an independent Neumann cosine mode with first-order time error "
+            "suppressed by dt=O(h^3). Discrete Boltzmann equilibrium, conservation, flux "
+            "balance, migration direction, and limiting potentials are tested separately; "
+            "no temporal-order claim is registered."
         ),
         evidence=(
             EvidenceRecord(
-                EvidenceLevel.ANALYTICAL,
-                "Boltzmann equilibrium has zero fitted flux, prescribed outward flux closes "
-                "the amount balance, and valence controls migration direction.",
+                EvidenceLevel.CONVERGENCE,
+                "A Neumann diffusion eigenmode measures scoped second-order spatial "
+                "convergence with time error suppressed; Boltzmann equilibrium, prescribed "
+                "flux balance, and migration direction supply independent "
+                "analytical/invariant evidence.",
                 (
+                    "cpp/tests/physics/test_electrochem_nernst_planck.cpp::"
+                    "testDiffusionLimitConvergesAgainstNeumannEigenmode",
                     "cpp/tests/physics/test_electrochem_nernst_planck.cpp::"
                     "testBoltzmannEquilibriumHasZeroFlux",
                     "cpp/tests/physics/test_electrochem_nernst_planck.cpp::"
@@ -1852,6 +1966,510 @@ _CONTRACTS: Final[tuple[SolverContract, ...]] = (
 )
 
 
+_PYTHON_NUMERICAL_CONTRACTS: Final[tuple[PythonNumericalContract, ...]] = (
+    PythonNumericalContract(
+        contract_id="python.canonical.adapters",
+        title="Friendly canonical transport adapters and checkpoint orchestration",
+        module="biotransport.run",
+        public_symbols=("solve", "run", "run_checkpoints", "CheckpointResult"),
+        category="native solver adapter",
+        backend=PythonBackend.NATIVE_ADAPTER,
+        mathematical_scope=(
+            "solve/run configure the native canonical conservative scalar transport "
+            "solver; run_checkpoints repeats uniform-diffusion native solves over "
+            "explicitly partitioned time intervals."
+        ),
+        numerical_method=(
+            "Argument normalization followed by solve_transport. Checkpoints carry "
+            "the final field into the next native segment and retain per-segment "
+            "diagnostics."
+        ),
+        failure_policy=(
+            "Ambiguous aliases, non-real/non-finite controls, invalid counts, malformed "
+            "checkpoint fields, and cumulative step exhaustion raise before misleading "
+            "results are returned."
+        ),
+        evidence=(
+            EvidenceRecord(
+                EvidenceLevel.INVARIANT,
+                "The adapters preserve exact final-time/native diagnostics, and "
+                "checkpoint partitioning matches a one-shot run when the requested "
+                "step divides every segment.",
+                (
+                    "python/tests/test_transport_api.py::"
+                    "test_requested_step_is_honored_and_last_step_lands_exactly",
+                    "python/tests/test_run_api.py::"
+                    "test_run_checkpoints_matches_one_shot_when_dt_divides_every_segment",
+                    "python/tests/test_run_api.py::"
+                    "test_solve_rejects_ambiguous_or_nonfinite_options",
+                ),
+            ),
+        ),
+        disposition=(
+            "Retain. The canonical solve is a thin native adapter. Replace segmented "
+            "checkpoint orchestration with a native solve-at-times API when that API "
+            "exists."
+        ),
+        exclusions=(
+            "run_checkpoints with reactions, advection, or variable diffusivity",
+            "bitwise equivalence between segmented and one-shot automatic stepping",
+        ),
+        warnings=(
+            "Checkpoint boundaries can change shortened/automatic step partitioning.",
+            "Per-segment diagnostic times are durations; mapping keys are absolute times.",
+        ),
+    ),
+    PythonNumericalContract(
+        contract_id="python.legacy.adaptive_diffusion",
+        title="Legacy adaptive 1D diffusion controller",
+        module="biotransport.adaptive",
+        public_symbols=(
+            "AdaptiveTimeStepper",
+            "AdaptiveTimeStepperConfig",
+            "AdaptiveResult",
+            "solve_adaptive",
+        ),
+        category="legacy time integrator",
+        backend=PythonBackend.MIXED,
+        mathematical_scope=(
+            "du/dt = D*d2u/dx2 on a uniform 1D mesh with constant non-negative "
+            "diffusivity and fixed Dirichlet endpoint values."
+        ),
+        numerical_method=(
+            "Python step-doubling controller around the native DiffusionSolver "
+            "Forward-Euler update; accepted state uses two half steps."
+        ),
+        failure_policy=(
+            "Unsupported physics, invalid controller values, non-finite estimates, "
+            "infeasible minimum steps, rejection exhaustion, and maximum-step exhaustion "
+            "fail explicitly; callback state is isolated so attempted mutation cannot alter "
+            "the accepted solution."
+        ),
+        evidence=(
+            EvidenceRecord(
+                EvidenceLevel.ANALYTICAL,
+                "A smooth diffusion mode decays against its closed-form reference; "
+                "unsupported physics and controller failure paths are adversarially tested.",
+                (
+                    "python/tests/test_adaptive.py::test_diffusion_decay",
+                    "python/tests/test_adaptive.py::"
+                    "test_callback_cannot_mutate_the_accepted_state",
+                    "python/tests/test_adaptive.py::test_rejects_unrepresented_physics",
+                    "python/tests/test_adaptive.py::"
+                    "test_unsatisfied_tolerance_fails_after_rejecting_dt_min",
+                ),
+            ),
+        ),
+        disposition=(
+            "Legacy compatibility surface. Port adaptive control into the C++ canonical "
+            "solver before promoting it; otherwise deprecate after a native replacement."
+        ),
+        exclusions=(
+            "2D or 3D meshes",
+            "Neumann or Robin boundaries",
+            "advection, reactions, sources, and variable diffusivity",
+        ),
+        warnings=(
+            "This is Python orchestration and is not the default canonical solve path.",
+            "The local step-doubling tolerance is not a global-error guarantee.",
+        ),
+    ),
+    PythonNumericalContract(
+        contract_id="python.legacy.time_integrators",
+        title="Generic ODE stages and legacy higher-order diffusion wrappers",
+        module="biotransport.time_integrators",
+        public_symbols=(
+            "RK4Integrator",
+            "HeunIntegrator",
+            "IntegrationResult",
+            "integrate",
+            "rk4_step",
+            "heun_step",
+            "euler_step",
+        ),
+        category="ODE reference methods and legacy diffusion adapters",
+        backend=PythonBackend.MIXED,
+        mathematical_scope=(
+            "Standalone stages advance du/dt=f(u,t). HeunIntegrator and RK4Integrator "
+            "advance only constant-diffusivity 1D diffusion with Dirichlet endpoints; "
+            "integrate(method='euler') delegates to canonical native transport."
+        ),
+        numerical_method=(
+            "Forward Euler, explicit trapezoidal Runge-Kutta (Heun), and classical RK4. "
+            "Legacy diffusion right-hand sides are assembled in Python."
+        ),
+        failure_policy=(
+            "State and stage shapes/finiteness are checked, callbacks receive isolated "
+            "state, unstable requested diffusion steps are rejected rather than clipped, "
+            "and Python loop length is bounded."
+        ),
+        evidence=(
+            EvidenceRecord(
+                EvidenceLevel.CONVERGENCE,
+                "Generic ODE cases measure first-, second-, and fourth-order behavior, "
+                "while legacy diffusion wrappers reject omitted physics and unstable steps.",
+                (
+                    "python/tests/test_time_integrators.py::test_first_order_convergence",
+                    "python/tests/test_time_integrators.py::test_second_order_convergence",
+                    "python/tests/test_time_integrators.py::test_fourth_order_convergence",
+                    "python/tests/test_time_integrators.py::"
+                    "test_rejects_requested_step_above_stability_limit",
+                    "python/tests/test_time_integrators.py::"
+                    "test_rejects_unrepresented_physics",
+                ),
+            ),
+        ),
+        disposition=(
+            "Keep the generic stages as transparent reference utilities. Explicit "
+            "method='euler' uses the native path; an omitted method temporarily warns "
+            "and preserves historical RK4 behavior. Port or eventually deprecate the "
+            "legacy Python diffusion wrappers."
+        ),
+        exclusions=(
+            "automatic stability certification for arbitrary ODE callbacks",
+            "legacy Heun/RK4 support for non-Dirichlet or multidimensional transport",
+        ),
+        warnings=(
+            "Formal RK order does not provide stability for an arbitrary caller ODE.",
+            "Legacy diffusion wrappers are Python-loop orchestration, not performance APIs.",
+        ),
+    ),
+    PythonNumericalContract(
+        contract_id="python.native_backed.high_order",
+        title="High-order finite differences and explicit Runge-Kutta references",
+        module="biotransport.high_order",
+        public_symbols=(
+            "laplacian_2nd_order",
+            "laplacian_4th_order",
+            "laplacian_6th_order",
+            "gradient_4th_order",
+            "d2dx2",
+            "ddx",
+            "HighOrderDiffusionSolver",
+            "HighOrderResult",
+            "RungeKuttaResult",
+            "integrate_explicit_runge_kutta",
+            "verify_order_of_accuracy",
+        ),
+        category="native-backed spatial operators and callback time integration",
+        backend=PythonBackend.MIXED,
+        mathematical_scope=(
+            "Uniform Cartesian derivative stencils, explicit high-order diffusion, and "
+            "generic explicit Heun/RK4 integration over finite NumPy states."
+        ),
+        numerical_method=(
+            "Compiled centred second/fourth/sixth-order derivative kernels with a "
+            "native diffusion update. Generic Heun/RK4 stage orchestration runs in C++ "
+            "while caller-defined right-hand sides cross into Python."
+        ),
+        failure_policy=(
+            "Mesh/spacing/shape/domain checks, exact-time progress, spectral stability "
+            "ceilings, isolated callbacks, and finite-stage validation are enforced."
+        ),
+        evidence=(
+            EvidenceRecord(
+                EvidenceLevel.CONVERGENCE,
+                "Independent derivatives and generic ODE solutions measure their scoped "
+                "spatial/temporal orders; unsafe diffusion and callback cases fail.",
+                (
+                    "python/tests/test_high_order.py::"
+                    "test_laplacian_observed_order_against_known_derivative",
+                    "python/tests/test_high_order.py::"
+                    "test_runge_kutta_observed_order_for_exponential_growth",
+                    "python/tests/test_high_order.py::"
+                    "test_diffusion_rejects_unsafe_or_ill_defined_inputs",
+                    "python/tests/test_high_order.py::"
+                    "test_diffusion_callback_receives_isolated_shaped_copy",
+                    "python/tests/test_high_order.py::"
+                    "test_runge_kutta_callback_cannot_alias_accepted_state",
+                    "python/tests/test_high_order.py::"
+                    "test_runge_kutta_rejects_wrong_dimension_and_nonfinite_derivatives",
+                ),
+            ),
+        ),
+        disposition=(
+            "Retain the compiled stencil, diffusion, and Runge-Kutta orchestration. Keep "
+            "the generic callback RK surface as a reference API; fully native right-hand "
+            "sides remain the performance path."
+        ),
+        exclusions=(
+            "nonuniform or unstructured grids",
+            "automatic arbitrary-ODE stability certification",
+            "boundary closures with the same formal interior order",
+            "extreme anisotropy or field/spacing dynamic range whose directional "
+            "weights cannot be represented in binary64 (rejected explicitly)",
+        ),
+        warnings=(
+            "Interior stencil order is not a blanket full-domain PDE order claim.",
+            "Python callbacks can dominate runtime.",
+            "Finite inputs can still exceed binary64's representable intermediate "
+            "numeric domain; the native kernels fail loudly rather than omit a "
+            "directional contribution.",
+        ),
+    ),
+    PythonNumericalContract(
+        contract_id="python.reference.newton",
+        title="Reference Newton systems and steady nonlinear diffusion",
+        module="biotransport.newton_raphson",
+        public_symbols=(
+            "NewtonSolverError",
+            "NewtonEvaluationError",
+            "NewtonLinearSolveError",
+            "NewtonLineSearchError",
+            "NewtonRaphsonSolver",
+            "NonlinearDiffusionSolver",
+            "NewtonResult",
+            "ConvergenceCriterion",
+            "michaelis_menten",
+            "hill_kinetics",
+            "bistable",
+            "exponential_decay",
+        ),
+        category="nonlinear reference solver",
+        backend=PythonBackend.PYTHON_REFERENCE,
+        mathematical_scope=(
+            "Generic finite-dimensional F(u)=0 and steady "
+            "-div(D grad(u))+R(u)=S on supported uniform 1D/2D meshes."
+        ),
+        numerical_method=(
+            "Dense/sparse Newton updates with analytic or scaled finite-difference "
+            "Jacobians and an Armijo line search; conservative harmonic faces for "
+            "variable 1D diffusivity."
+        ),
+        failure_policy=(
+            "Evaluation, linear-solve, line-search, singularity, domain, and unsupported "
+            "geometry failures are typed. Iteration exhaustion returns converged=False "
+            "with diagnostics and must be checked by callers."
+        ),
+        evidence=(
+            EvidenceRecord(
+                EvidenceLevel.CONVERGENCE,
+                "Manufactured Poisson and Neumann cases measure second-order convergence; "
+                "singular systems and false convergence paths are tested independently.",
+                (
+                    "python/tests/test_newton_raphson.py::"
+                    "test_poisson_solution_is_second_order",
+                    "python/tests/test_newton_raphson.py::"
+                    "test_neumann_boundary_is_second_order_for_a_manufactured_cubic",
+                    "python/tests/test_newton_raphson.py::"
+                    "test_singular_jacobian_fails_by_default",
+                    "python/tests/test_newton_raphson.py::"
+                    "test_max_iterations_returns_a_nonconverged_result",
+                    "python/tests/test_newton_raphson.py::"
+                    "test_tiny_damping_cannot_manufacture_update_convergence",
+                    "python/tests/test_newton_raphson.py::"
+                    "test_both_criterion_cannot_converge_on_residual_scaling_alone",
+                ),
+            ),
+        ),
+        disposition=(
+            "Retain as a clearly labeled Python reference solver. Port repeated residual/"
+            "Jacobian kernels to C++ before making performance claims."
+        ),
+        exclusions=(
+            "variable diffusivity in 2D",
+            "2D Neumann boundaries",
+            "automatic positivity or uniqueness guarantees",
+        ),
+        warnings=(
+            "A converged nonlinear residual does not establish uniqueness or model validity.",
+            "Iteration exhaustion is diagnostic, not an exception; inspect converged.",
+        ),
+    ),
+    PythonNumericalContract(
+        contract_id="python.reference.pulsatile_diffusion",
+        title="Legacy pulsatile-boundary diffusion reference",
+        module="biotransport.pulsatile",
+        public_symbols=(
+            "PulsatileBC",
+            "ConstantBC",
+            "SinusoidalBC",
+            "RampBC",
+            "StepBC",
+            "SquareWaveBC",
+            "CustomBC",
+            "ArterialPressureBC",
+            "VenousPressureBC",
+            "CardiacOutputBC",
+            "RespiratoryBC",
+            "DrugInfusionBC",
+            "CompositeBC",
+            "PulsatileResult",
+            "solve_pulsatile",
+            "heart_rate_to_period",
+            "period_to_heart_rate",
+            "sample_waveform",
+        ),
+        category="legacy dynamic-boundary reference solver",
+        backend=PythonBackend.PYTHON_REFERENCE,
+        mathematical_scope=(
+            "du/dt=D*d2u/dx2 on a uniform 1D mesh with strong time-dependent "
+            "Dirichlet endpoint values or static outward-derivative Neumann data."
+        ),
+        numerical_method=(
+            "NumPy centred second differences and Forward Euler with explicit waveform "
+            "evaluation at the new time level."
+        ),
+        failure_policy=(
+            "Unsupported physics/boundaries/dimensions, unstable or non-finite steps, "
+            "invalid waveforms, and excessive Python step counts fail; callback arrays "
+            "are isolated from accepted solver state."
+        ),
+        evidence=(
+            EvidenceRecord(
+                EvidenceLevel.ANALYTICAL,
+                "Closed-domain mass, outward Neumann signs, dynamic boundary timing, and "
+                "the explicit diffusion ceiling are independently exercised.",
+                (
+                    "python/tests/test_pulsatile_science.py::"
+                    "test_reference_solver_preserves_mass_with_zero_neumann_boundaries",
+                    "python/tests/test_pulsatile_science.py::"
+                    "test_static_neumann_values_are_outward_derivatives_with_correct_signs",
+                    "python/tests/test_pulsatile_science.py::"
+                    "test_reference_solver_applies_dynamic_dirichlet_at_the_new_time_level",
+                    "python/tests/test_pulsatile_science.py::"
+                    "test_reference_solver_rejects_an_unstable_step",
+                ),
+            ),
+        ),
+        disposition=(
+            "Retain only as a warning-emitting compatibility/reference path until native "
+            "time-dependent boundary support exists, then deprecate it."
+        ),
+        exclusions=(
+            "advection, reactions, sources, and variable diffusivity",
+            "2D/3D meshes and Robin boundaries",
+            "physiological validation of bundled waveform templates",
+        ),
+        warnings=(
+            "Every solve emits RuntimeWarning because the stepping loop is Python.",
+            "Template waveforms are illustrative, not patient-specific evidence.",
+        ),
+    ),
+    PythonNumericalContract(
+        contract_id="python.workflow.convergence",
+        title="Grid/time refinement and GCI-style workflow",
+        module="biotransport.convergence",
+        public_symbols=(
+            "GridConvergenceStudy",
+            "ConvergenceResult",
+            "ConvergenceSolveResult",
+            "compute_order_of_accuracy",
+            "run_convergence_study",
+            "temporal_convergence_study",
+            "plot_convergence",
+        ),
+        category="verification workflow",
+        backend=PythonBackend.WORKFLOW,
+        mathematical_scope=(
+            "Observed-order, Richardson extrapolation, and GCI-style summaries for "
+            "caller-supplied scalar quantities and optional independent errors."
+        ),
+        numerical_method=(
+            "Generalized unequal-refinement order solve plus log-regression utilities; "
+            "no PDE is advanced by this module."
+        ),
+        failure_policy=(
+            "Insufficient, duplicate, non-finite, oscillatory, partially reported, "
+            "ill-conditioned, or non-log-plottable evidence raises instead of receiving "
+            "a theoretical substitute."
+        ),
+        evidence=(
+            EvidenceRecord(
+                EvidenceLevel.ANALYTICAL,
+                "Synthetic unequal-ratio sequences recover known order and degenerate or "
+                "oscillatory sequences fail explicitly.",
+                (
+                    "python/tests/test_convergence.py::"
+                    "test_analyze_solves_unequal_refinement_ratios",
+                    "python/tests/test_convergence.py::"
+                    "test_identical_solutions_are_indeterminate_not_theoretical",
+                    "python/tests/test_convergence.py::"
+                    "test_analyze_rejects_oscillatory_sequence",
+                ),
+            ),
+        ),
+        disposition=(
+            "Retain in Python as scientific orchestration; solver kernels remain native."
+        ),
+        exclusions=(
+            "automatic proof that a refinement sequence is asymptotic",
+            "experimental validation or ASME V&V 20 compliance",
+        ),
+        warnings=(
+            "Observed order is meaningful only for the supplied quantity and sequence.",
+        ),
+    ),
+    PythonNumericalContract(
+        contract_id="python.workflow.analysis",
+        title="Sensitivity and uncertainty screening workflow",
+        module="biotransport.analysis",
+        public_symbols=(
+            "EvaluationFailure",
+            "LocalSensitivityResult",
+            "Model",
+            "ModelEvaluationError",
+            "ParameterRange",
+            "ParameterSweepResult",
+            "RegressionScreeningResult",
+            "SampleDesign",
+            "UncertaintyResult",
+            "parameter_sweep",
+            "local_sensitivity",
+            "latin_hypercube",
+            "propagate_uncertainty",
+            "standardized_regression_coefficients",
+        ),
+        category="scientific analysis workflow",
+        backend=PythonBackend.WORKFLOW,
+        mathematical_scope=(
+            "Deterministic sweeps, central local sensitivity, independent-marginal Latin "
+            "hypercubes, scalar uncertainty summaries, and standardized regression "
+            "screening around a caller-supplied model."
+        ),
+        numerical_method=(
+            "Python/NumPy orchestration and linear algebra over scalar model evaluations; "
+            "the model callback may invoke native solvers."
+        ),
+        failure_policy=(
+            "Invalid parameter domains, complex/non-finite or non-scalar callbacks, sample "
+            "loss, rank deficiency, ill-conditioning, and invalid uncertainty summaries "
+            "raise with sample context."
+        ),
+        evidence=(
+            EvidenceRecord(
+                EvidenceLevel.ANALYTICAL,
+                "Known power-law sensitivities, stratification, analytic uncertainty "
+                "moments, and exact linear screening coefficients are recovered.",
+                (
+                    "python/tests/test_analysis.py::"
+                    "test_central_local_elasticities_match_power_law_exponents",
+                    "python/tests/test_analysis.py::"
+                    "test_latin_hypercube_is_reproducible_and_marginally_stratified",
+                    "python/tests/test_analysis.py::"
+                    "test_uncertainty_summary_is_reproducible_and_close_to_analytic_mean",
+                    "python/tests/test_analysis.py::"
+                    "test_standardized_regression_recovers_exact_linear_screening_model",
+                ),
+            ),
+        ),
+        disposition=(
+            "Retain in Python as high-level orchestration; do not port callback scheduling "
+            "without profiling a concrete workload."
+        ),
+        exclusions=(
+            "correlated input distributions",
+            "global Sobol/Morris indices",
+            "calibration, causal inference, and model discrepancy",
+        ),
+        warnings=(
+            "Screening results inherit every assumption and failure of the caller model.",
+            "Independent-marginal sampling is not a joint biological prior.",
+        ),
+    ),
+)
+
+
 def _build_registry() -> Mapping[str, SolverContract]:
     by_id: dict[str, SolverContract] = {}
     symbol_owner: dict[str, str] = {}
@@ -1873,6 +2491,45 @@ SOLVER_CONTRACTS: Final[Mapping[str, SolverContract]] = _build_registry()
 
 _BY_SYMBOL: Final[Mapping[str, SolverContract]] = MappingProxyType(
     {symbol: contract for contract in _CONTRACTS for symbol in contract.native_symbols}
+)
+
+
+def _build_python_numerical_registry() -> Mapping[str, PythonNumericalContract]:
+    by_id: dict[str, PythonNumericalContract] = {}
+    symbol_owner: dict[str, str] = {}
+    module_owner: dict[str, str] = {}
+    for contract in _PYTHON_NUMERICAL_CONTRACTS:
+        if contract.contract_id in by_id:
+            raise RuntimeError(
+                f"duplicate Python numerical contract id: {contract.contract_id}"
+            )
+        if contract.module in module_owner:
+            raise RuntimeError(
+                f"Python module {contract.module!r} belongs to both "
+                f"{module_owner[contract.module]!r} and {contract.contract_id!r}"
+            )
+        by_id[contract.contract_id] = contract
+        module_owner[contract.module] = contract.contract_id
+        for symbol in contract.public_symbols:
+            if symbol in symbol_owner:
+                raise RuntimeError(
+                    f"Python numerical symbol {symbol!r} belongs to both "
+                    f"{symbol_owner[symbol]!r} and {contract.contract_id!r}"
+                )
+            symbol_owner[symbol] = contract.contract_id
+    return MappingProxyType(by_id)
+
+
+PYTHON_NUMERICAL_CONTRACTS: Final[Mapping[str, PythonNumericalContract]] = (
+    _build_python_numerical_registry()
+)
+
+_PYTHON_BY_SYMBOL: Final[Mapping[str, PythonNumericalContract]] = MappingProxyType(
+    {
+        symbol: contract
+        for contract in _PYTHON_NUMERICAL_CONTRACTS
+        for symbol in contract.public_symbols
+    }
 )
 
 
@@ -1903,6 +2560,32 @@ def list_native_solver_symbols() -> tuple[str, ...]:
     """Return all compiled entry-point names covered by the registry."""
 
     return tuple(sorted(_BY_SYMBOL))
+
+
+def get_python_numerical_contract(name: str) -> PythonNumericalContract:
+    """Return a Python numerical contract by registry ID or public symbol."""
+
+    if name in PYTHON_NUMERICAL_CONTRACTS:
+        return PYTHON_NUMERICAL_CONTRACTS[name]
+    if name in _PYTHON_BY_SYMBOL:
+        return _PYTHON_BY_SYMBOL[name]
+    raise KeyError(
+        f"unknown Python numerical contract {name!r}; use "
+        "list_python_numerical_contracts() or list_python_numerical_symbols() "
+        "to discover valid names"
+    )
+
+
+def list_python_numerical_contracts() -> tuple[PythonNumericalContract, ...]:
+    """Return every public Python numerical/workflow contract in stable order."""
+
+    return _PYTHON_NUMERICAL_CONTRACTS
+
+
+def list_python_numerical_symbols() -> tuple[str, ...]:
+    """Return public Python symbols owned by the separate numerical registry."""
+
+    return tuple(sorted(_PYTHON_BY_SYMBOL))
 
 
 def _contains_casefold(values: tuple[str, ...], expected: str) -> bool:
@@ -1968,15 +2651,31 @@ def registry_as_dict() -> dict[str, dict[str, object]]:
     return {contract.contract_id: contract.to_dict() for contract in _CONTRACTS}
 
 
+def python_registry_as_dict() -> dict[str, dict[str, object]]:
+    """Return a JSON-ready snapshot of Python numerical/workflow contracts."""
+
+    return {
+        contract.contract_id: contract.to_dict()
+        for contract in _PYTHON_NUMERICAL_CONTRACTS
+    }
+
+
 __all__ = [
     "EVIDENCE_DISCLAIMER",
     "EvidenceLevel",
     "EvidenceRecord",
+    "PYTHON_NUMERICAL_CONTRACTS",
+    "PythonBackend",
+    "PythonNumericalContract",
     "SOLVER_CONTRACTS",
     "SolverContract",
     "filter_contracts",
     "get_contract",
+    "get_python_numerical_contract",
     "list_contracts",
     "list_native_solver_symbols",
+    "list_python_numerical_contracts",
+    "list_python_numerical_symbols",
+    "python_registry_as_dict",
     "registry_as_dict",
 ]

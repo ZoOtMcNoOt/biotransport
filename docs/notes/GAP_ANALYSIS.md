@@ -48,14 +48,17 @@ Its always-on evidence covers conservative finite-volume diffusion with
 harmonic face coefficients, conservative first-order upwind advection,
 Forward Euler stability enforcement, exact final-time landing, composable
 reactions, boundary signs/corners, closed-domain conservation, manufactured
-steady cases, and first-order reaction-time convergence.
+steady cases, second-order spatial convergence for a smooth diffusion mode,
+first-order spatial convergence for a heterogeneous upwind
+advection--diffusion manufactured case with mixed Dirichlet/Robin boundaries,
+and first-order reaction-time convergence.
 
-`examples/verification/grid_convergence.py` additionally performs a scoped
-spatial and temporal refinement study for one diffusion case. That example is
-useful evidence when run and archived, but it is not an always-on CTest/pytest
-order certificate for every canonical configuration. The canonical method does
-not claim high-order advection, arbitrary-reaction monotonicity, or biological
-validity.
+`examples/verification/grid_convergence.py` remains a runnable reporting
+workflow, but the corresponding smooth-diffusion spatial acceptance sequence
+is now also an always-on CTest. These bounded studies are not order
+certificates for every coefficient, boundary, or advection configuration. The
+canonical method does not claim high-order advection, arbitrary-reaction
+monotonicity, or biological validity.
 
 ### Specialized native surfaces
 
@@ -65,13 +68,14 @@ Darcy/Stokes/Navier--Stokes flow, generalized-Newtonian constitutive laws,
 bioheat cryotherapy, tumor drug delivery, and a fitted nonuniform 1D diffusion
 slice.
 
-`python/biotransport/contracts.py` is the machine-readable inventory for native
-solver entry points. Each contract states its equation, unknown placement,
-units, supported dimensions/terms/boundaries, numerical policy, exact evidence
-references, exclusions, and warnings. Runtime tests fail when a native solver
-is missing or a registered evidence path becomes stale. Evidence remains
-claim-specific: an analytical test of one solver or configuration never
-promotes a superficially similar surface.
+`python/biotransport/contracts.py` contains two deliberately separate
+machine-readable inventories. `SolverContract` covers compiled solver entry
+points, while `PythonNumericalContract` discloses public Python adapters,
+reference solvers, and workflow numerics together with their backend and
+retain/port/deprecate disposition. Runtime tests fail when a governed public
+symbol is missing, a symbol has multiple owners, or a registered evidence path
+becomes stale. Evidence remains claim-specific: an analytical test of one
+solver or configuration never promotes a superficially similar surface.
 
 The nonuniform slice is real node-centred finite volume on a fixed fitted 1D
 mesh, with harmonic face diffusivity, a shared conservative flux, a local
@@ -107,10 +111,10 @@ adaptive refinement.
 
 | Priority | Capability | Status | What landed | What remains open |
 |---|---|---|---|---|
-| P0 | Per-native-solver scientific contracts | **Closed (scoped)** | Immutable registry, exact test references, runtime coverage/stale-reference gates, exclusions and warnings. | Keep contracts synchronized and strengthen low-evidence entries rather than inflating labels. Python-only numerical implementations need separate contracts or retirement. |
-| P0 | Canonical conservative scalar contract | **Partial** | Strong equation/sign/boundary/stability/balance tests and scoped reaction-time convergence. | Move the spatial refinement acceptance sequence from an example into an always-on solver test and broaden coefficient/boundary combinations. |
-| P0 | Independent specialized benchmarks | **Partial** | Focused analytical, manufactured, invariant, and some order tests exist for multiple specialized families. Darcy now has direct linear pressure/velocity, heterogeneous interface-flux, failure, and measured first-order discontinuous-interface evidence. | Broad spatial **and** temporal asymptotic evidence is absent for many dimensions/BCs; Navier--Stokes still lacks an independent velocity benchmark. |
-| P0 | Fail-loud public numerical surfaces | **Partial** | Canonical transport plus audited legacy scalar/reaction/advection, specialized diffusion corners, sparse solves, Stokes, Darcy, and Python Newton paths reject their known unsupported, unstable, non-finite, singular, or non-converged cases. | Continue the same adversarial audit across remaining Python numerical helpers and add forced-failure evidence wherever a public convergence policy is not yet exercised. |
+| P0 | Native and Python numerical contracts | **Closed (scoped)** | Immutable native-solver and separate Python-numerical registries, exact public-symbol ownership, backend/disposition disclosure, current test references, exclusions, and warnings. | Keep both registries synchronized, port or deprecate the explicitly legacy Python loops, and strengthen low-evidence entries without inflating labels. |
+| P0 | Canonical conservative scalar contract | **Closed (scoped)** | Equation/sign/boundary/stability/balance tests plus always-on smooth diffusion, heterogeneous mixed-boundary upwind, and reaction-time refinement evidence. | Extend evidence only when claiming new dimensions, schemes, coefficient tensors, or boundary semantics; current first-order time/upwind limits remain explicit. |
+| P0 | Independent specialized benchmarks | **Partial** | Darcy interface/velocity evidence, manufactured Navier--Stokes and bioheat spatial studies with time error suppressed, a separate bioheat temporal study, Nernst--Planck diffusion-limit spatial refinement with time error suppressed, and cylindrical radial/angular operator orders now complement focused invariants. | Broad spatial **and** temporal asymptotic evidence is still absent for many 3D, nonsmooth, coupled, and alternative-boundary configurations. |
+| P0 | Fail-loud public numerical surfaces | **Closed (scoped)** | Current native solvers and governed Python numerical/workflow modules reject or explicitly diagnose invalid, unsupported, unstable, non-finite, singular, ill-conditioned, or exhausted cases. Python Newton exhaustion returns `converged=False` by contract rather than pretending success. | Maintain adversarial coverage for every new public numerical symbol; replace remaining legacy Python loops with native kernels or deprecate them. |
 | P0 | Application parameter provenance | **Partial** | Typed immutable records, manifests, stale-value detection, and honest illustrative records for current defaults. | Supply defensible sourced records with material/population, method, temperature, applicability, and uncertainty before any value is called recommended. |
 | P1 | Units at the API boundary | **Partial** | Python quantities distinguish temperature, pressure, concentration, diffusivity, permeability meanings, perfusion bases, and common dimensions. | Raw native C++ APIs remain untyped doubles; solver/config boundaries do not universally require `Quantity`; compound-specific mass-to-molar conversion remains caller-owned. |
 | P1 | Sensitivity and uncertainty screening | **Closed (scoped)** | Seeded one-at-a-time/local/LHS/propagation/SRC workflow with failure and conditioning diagnostics. | Correlated inputs, Sobol/Morris methods, Bayesian calibration, surrogate validation, model discrepancy, and automatic numerical-uncertainty combination are not implemented. |
@@ -128,16 +132,26 @@ adaptive refinement.
 - A stable implicit method can still be inaccurate. “Unconditionally stable”
   is never permission to skip a temporal study.
 - General Python callbacks cross the Python/C++ boundary and can be slower than
-  fully native kernels. No uncontrolled speedup claim should be inferred.
+  fully native kernels. Explicit `integrate(method="euler")` is native; an
+  omitted method temporarily warns and preserves historical RK4 behavior.
+  Legacy Heun/RK4, adaptive, Newton, and pulsatile references are identified
+  separately in the Python numerical registry. No uncontrolled speedup claim
+  should be inferred.
 - The canonical scalar method is first order in time and first order for
   advection. Higher-order or specialized methods carry separate contracts.
+- The native explicit RK4 stage reduction is fail-loud for non-representable
+  arithmetic but is not a correctly rounded superaccumulator. Adversarial
+  constant-RHS checks have observed differences of up to two binary64 ULP
+  versus a single-rounding reference; this is tracked as lower-severity
+  arithmetic accuracy debt, not a formal-order failure.
 - Stokes is a **collocated** centred-difference/SIMPLE-like implementation, not
   a staggered MAC method. Its pressure field lacks Rhie--Chow-style checkerboard
   stabilization.
 - Fluid outflow/traction semantics are solver-specific. A zero-gradient
   outflow is not automatically a traction or pressure boundary.
-- Cylindrical and 3D operators require dedicated axis, metric, balance, and
-  convergence evidence for the intended application.
+- Cylindrical operators now have scoped radial and periodic-angular order
+  tests; full cylindrical applications and 3D solvers still require their own
+  axis, metric, balance, and convergence evidence.
 - Existing application defaults are demonstrations until sourced provenance
   and a calibration/applicability domain are supplied.
 - Numerical verification, a closed balance, parameter traceability, and a

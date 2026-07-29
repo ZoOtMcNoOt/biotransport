@@ -608,9 +608,7 @@ NavierStokesSolver::StepInfo NavierStokesSolver::takeStep(std::vector<double>& u
         throw std::runtime_error("Navier-Stokes integration produced a nonpositive time step");
     }
     const double stability_limit = maxTimeStep(u, v);
-    const double allowance =
-        kRoundoffFactor * std::numeric_limits<double>::epsilon() * std::max(1.0, stability_limit);
-    if (dt > stability_limit + allowance) {
+    if (dt > stability_limit) {
         throw std::domain_error("Configured time step " + std::to_string(dt) +
                                 " exceeds the explicit stability bound " +
                                 std::to_string(stability_limit));
@@ -764,15 +762,27 @@ NavierStokesResult NavierStokesSolver::solve(double duration, double output_inte
             throw std::runtime_error("Navier-Stokes solve exceeded ten million time steps");
         }
         const double requested_dt = dt_fixed_ > 0.0 ? dt_fixed_ : maxTimeStep(u, v);
-        const double dt = std::min(requested_dt, duration - time);
+        const double remaining = duration - time;
+        const double dt = std::min(requested_dt, remaining);
         final_step = takeStep(u, v, pressure, dt);
-        time += dt;
         ++steps;
 
-        const double time_tolerance =
-            kRoundoffFactor * std::numeric_limits<double>::epsilon() * std::max(1.0, duration);
-        if (duration - time <= time_tolerance) {
+        if (dt == remaining) {
             time = duration;
+        } else {
+            const double next_time = time + dt;
+            if (!std::isfinite(next_time) || next_time <= time) {
+                throw std::runtime_error(
+                    "time step is too small to advance the Navier-Stokes clock");
+            }
+            if (next_time >= duration) {
+                time = duration;
+            } else {
+                const double residual = duration - next_time;
+                const double roundoff = kRoundoffFactor * std::numeric_limits<double>::epsilon() *
+                                        std::max(std::abs(duration), std::abs(next_time));
+                time = residual <= roundoff && residual < 0.5 * dt ? duration : next_time;
+            }
         }
     }
 

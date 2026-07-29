@@ -116,7 +116,7 @@ K = np.full((ny + 1, nx + 1), K_normal, dtype=np.float64)
 K[mask_tumor] = K_tumor
 
 tumor_mask_flat = mask_tumor.astype(np.uint8).ravel(order="C").tolist()
-K_flat = K.ravel(order="C").tolist()
+K_flat = K.ravel(order="C")
 solver = bt.TumorDrugDeliverySolver(
     mesh, tumor_mask_flat, K_flat, IFP_normal_pa, IFP_tumor_pa
 )

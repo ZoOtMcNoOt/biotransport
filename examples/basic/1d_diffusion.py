@@ -30,11 +30,15 @@ problem = (
 
 # Solve using the simplified API
 print("Solving 1D diffusion for t_end=0.1...")
-result = bt.solve(problem, t=0.1)
+result = bt.solve(problem, end_time=0.1)
 
 # Plot result with initial condition overlay
 x = bt.x_nodes(mesh)
-bt.plot(mesh, result.solution(), title=f"Diffusion after t = {result.stats.t_end}")
+bt.plot(
+    mesh,
+    result.concentration,
+    title=f"Diffusion after t = {result.diagnostics.final_time}",
+)
 plt.plot(x, bt.gaussian(mesh, center=0.5, width=0.1), "b--", alpha=0.5, label="Initial")
 plt.legend()
 plt.savefig(bt.get_result_path("diffusion_result.png", EXAMPLE_NAME))

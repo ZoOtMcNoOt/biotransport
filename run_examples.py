@@ -32,11 +32,19 @@ def iter_example_scripts(examples_dir: Path) -> list[Path]:
 def run_one(script: Path, repo_root: Path, timeout_s: int) -> tuple[int, float, str]:
     env = os.environ.copy()
     env.setdefault("MPLBACKEND", "Agg")
+    command = [sys.executable, str(script)]
+    if (
+        script.relative_to(repo_root).as_posix()
+        == "examples/verification/reproducible_artifact.py"
+    ):
+        # The regression runner intentionally refreshes generated artifacts;
+        # the standalone example keeps its safer no-overwrite default.
+        command.append("--overwrite")
 
     started = time.perf_counter()
     try:
         proc = subprocess.run(
-            [sys.executable, str(script)],
+            command,
             cwd=str(repo_root),
             env=env,
             capture_output=True,

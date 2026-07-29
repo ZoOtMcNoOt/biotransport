@@ -147,7 +147,7 @@ objects. They do not create alternative solver kernels.
 | `biotransport.units` | Immutable semantic quantities, explicit conversion, affine temperatures, distinct permeability meanings, and perfusion-basis checks. | Raw C++ values remain untyped; unit correctness is not parameter validity. |
 | `biotransport.provenance` | Immutable parameter records/sets with source, context, validity, uncertainty, status, JSON, and fingerprints. | Structural completeness cannot judge source quality or confer biological validity. |
 | `biotransport.analysis` | Parameter sweeps, central local sensitivity, seeded independent-marginal Latin hypercubes, uncertainty propagation, and standardized-regression screening. | No correlated distributions, calibration, causality, Sobol/Morris indices, or model discrepancy. |
-| `biotransport.contracts` | Immutable machine-readable native solver/evidence registry with lookup/filter/JSON helpers. | Evidence levels are scoped numerical claims, not experimental validation. |
+| `biotransport.contracts` | Separate immutable registries for native solvers and governed Python numerical/workflow surfaces, with lookup/filter/JSON helpers, exact evidence references, backend, and disposition. | Evidence levels are scoped numerical claims, not experimental validation; a Python record is not a native-performance claim. |
 | `biotransport.reproducibility` | Canonical JSON, frozen configs, SHA-256 fingerprints, method/seed/build metadata, convergence/balance records, and atomic manifest I/O. | A manifest is not authentication, durable archival, FAIR compliance, or validation. |
 | `biotransport.config` | Validated application configuration dataclasses and parameter-provenance attachment. | Current bundled values remain illustrative/unprovenanced. |
 
@@ -163,10 +163,24 @@ VTK export, result paths, and the canonical `run`/`solve` wrappers are Python
 convenience layers.
 
 `adaptive.py`, `time_integrators.py`, `high_order.py`, `pulsatile.py`,
-`convergence.py`, and `newton_raphson.py` contain orchestration or numerical
-logic beyond a pure re-export. Some call native kernels; some are independent
-Python implementations. Their existence does not make the package universally
-thin and does not let them borrow another solver's evidence.
+`convergence.py`, `analysis.py`, `newton_raphson.py`, and `run.py` contain
+orchestration or numerical logic beyond a pure re-export. Their exact top-level
+symbols are owned by `PythonNumericalContract` records:
+
+| Surface | Backend and disposition |
+|---|---|
+| Canonical `solve`/`run` | Retained thin native adapter; explicit `integrate(method="euler")` also selects native Euler, while an omitted method temporarily warns and preserves historical RK4. |
+| `run_checkpoints` | Retained native-segment orchestrator with per-segment diagnostics and cumulative step limits; replace with native solve-at-times when available. |
+| Adaptive and legacy Heun/RK4 diffusion | Mixed Python/native compatibility paths; port the controller/loop or deprecate after native replacements. |
+| High-order operators/diffusion | Retain compiled kernels; generic Python Runge--Kutta remains a reference utility. |
+| Newton/nonlinear diffusion | Retained, explicitly labeled Python reference implementation; port hot residual/Jacobian kernels before performance claims. |
+| Pulsatile diffusion | Warning-emitting Python reference pending native time-dependent boundaries, then deprecate. |
+| Convergence and analysis | Retained Python scientific orchestration; these modules do not advance a competing physical model. |
+
+Field, initial-condition, mesh-reshape, VTK, and visualization helpers are
+validated convenience/I/O layers, not physical solvers. Their existence does
+not make the package universally thin and does not let any surface borrow
+another solver's evidence.
 
 ## Examples
 

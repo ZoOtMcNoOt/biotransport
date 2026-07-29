@@ -26,17 +26,131 @@ References:
 from __future__ import annotations
 
 import os
+import re
+from collections.abc import Mapping, Sequence
+from numbers import Real
 from pathlib import Path
 from typing import TYPE_CHECKING
+from xml.sax.saxutils import quoteattr
 
 import numpy as np
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
     from numpy.typing import ArrayLike
 
     from ._core import CylindricalMesh, StructuredMesh
+
+
+def _validate_title(title: str) -> str:
+    if not isinstance(title, str):
+        raise TypeError("title must be a string")
+    if not title:
+        raise ValueError("title must not be empty")
+    if "\n" in title or "\r" in title:
+        raise ValueError("title must not contain newlines")
+    try:
+        encoded = title.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("title must contain only ASCII characters") from exc
+    if len(encoded) > 255:
+        raise ValueError("title must be at most 255 ASCII bytes")
+    return title
+
+
+def _mesh_layout(mesh) -> tuple[str, tuple[int, ...], int]:
+    """Return supported geometry kind, native field shape, and node count."""
+    from ._core import CylindricalMesh, StructuredMesh
+    from .mesh_utils import r_nodes, x_nodes, y_nodes, z_nodes
+
+    shape: tuple[int, ...]
+    if isinstance(mesh, StructuredMesh):
+        num_nodes = int(mesh.num_nodes())
+        x_nodes(mesh)
+        if mesh.is_1d():
+            shape = (int(mesh.nx()) + 1,)
+            kind = "cartesian_1d"
+        else:
+            y_nodes(mesh)
+            shape = (int(mesh.ny()) + 1, int(mesh.nx()) + 1)
+            kind = "cartesian_2d"
+    elif isinstance(mesh, CylindricalMesh):
+        if mesh.is_3d():
+            raise ValueError(
+                "VTK export does not support full 3D cylindrical meshes yet"
+            )
+        num_nodes = int(mesh.num_nodes())
+        r_nodes(mesh)
+        if mesh.is_radial():
+            shape = (int(mesh.nr()) + 1,)
+            kind = "radial_1d"
+        elif mesh.is_axisymmetric():
+            z_nodes(mesh)
+            shape = (int(mesh.nz()) + 1, int(mesh.nr()) + 1)
+            kind = "axisymmetric_2d"
+        else:
+            raise ValueError("unsupported cylindrical mesh geometry")
+    else:
+        raise TypeError("mesh must be a StructuredMesh or CylindricalMesh")
+
+    if num_nodes <= 0 or int(np.prod(shape)) != num_nodes:
+        raise ValueError("mesh reports an inconsistent node count")
+    return kind, shape, num_nodes
+
+
+def _safe_field_name(name: str) -> str:
+    if not isinstance(name, str):
+        raise TypeError("field names must be strings")
+    if not name:
+        raise ValueError("field names must not be empty")
+    safe_name = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    if not any(character.isalnum() for character in safe_name):
+        raise ValueError(f"Field name {name!r} has no usable letters or digits")
+    return safe_name
+
+
+def _normalize_fields(
+    fields: Mapping[str, ArrayLike],
+    expected_shape: tuple[int, ...],
+    num_nodes: int,
+) -> dict[str, np.ndarray]:
+    """Validate fields fully before a file or directory is created."""
+    from .mesh_utils import _numeric_array
+
+    if not isinstance(fields, Mapping):
+        raise TypeError("fields must be a mapping of names to scalar arrays")
+
+    normalized: dict[str, np.ndarray] = {}
+    source_names: dict[str, str] = {}
+    for name, data in fields.items():
+        safe_name = _safe_field_name(name)
+        if safe_name in normalized:
+            other_name = source_names[safe_name]
+            raise ValueError(
+                f"Field names {other_name!r} and {name!r} both sanitize to "
+                f"{safe_name!r}"
+            )
+
+        arr = _numeric_array(data, f"Field {name!r}")
+        if arr.ndim == 0 or arr.ndim > len(expected_shape):
+            raise ValueError(
+                f"Field {name!r} must be flat or have shape {expected_shape}; "
+                f"got shape {arr.shape}"
+            )
+        if arr.ndim == 1 and arr.size != num_nodes:
+            raise ValueError(
+                f"Field {name!r} has {arr.size} values, but mesh has {num_nodes} nodes"
+            )
+        if arr.ndim > 1 and arr.shape != expected_shape:
+            raise ValueError(
+                f"Field {name!r} must have shape {expected_shape}; got {arr.shape}"
+            )
+        if not np.all(np.isfinite(arr)):
+            raise ValueError(f"Field {name!r} must contain only finite values")
+
+        normalized[safe_name] = arr.reshape(-1, order="C")
+        source_names[safe_name] = name
+
+    return normalized
 
 
 def write_vtk(
@@ -54,7 +168,8 @@ def write_vtk(
     Args:
         mesh: StructuredMesh (1D or 2D) or CylindricalMesh.
         fields: Dictionary mapping field names to numpy arrays.
-            Each array must have length equal to mesh.num_nodes().
+            Each array must be finite and either flat with
+            ``mesh.num_nodes()`` values or have the mesh's exact native shape.
         filename: Output file path. Extension .vtk will be added if missing.
         title: Title string embedded in VTK file header.
 
@@ -62,7 +177,8 @@ def write_vtk(
         Path to the written file.
 
     Raises:
-        ValueError: If field array length doesn't match mesh node count.
+        ValueError: If geometry, field shape/data, title, or field names are
+            invalid. Full 3D cylindrical meshes are not yet supported.
         TypeError: If mesh type is not supported.
 
     Example:
@@ -70,38 +186,34 @@ def write_vtk(
         >>> temperature = np.linspace(300, 400, mesh.num_nodes())
         >>> bt.write_vtk(mesh, {"temperature": temperature}, "heat.vtk")
     """
-    filepath = Path(filename)
+    title = _validate_title(title)
+    mesh_kind, expected_shape, num_nodes = _mesh_layout(mesh)
+    normalized_fields = _normalize_fields(fields, expected_shape, num_nodes)
+
+    try:
+        filepath = Path(filename)
+    except TypeError as exc:
+        raise TypeError("filename must be a path-like value") from exc
     if filepath.suffix.lower() != ".vtk":
         filepath = filepath.with_suffix(".vtk")
 
     # Ensure parent directory exists
     filepath.parent.mkdir(parents=True, exist_ok=True)
 
-    # Determine mesh type and dimensions
-    # CylindricalMesh has 'nr' method, StructuredMesh has 'nx'
-    is_cylindrical = hasattr(mesh, "nr") and not hasattr(mesh, "nx")
-    is_1d = mesh.is_1d() if hasattr(mesh, "is_1d") else False
-
-    num_nodes = mesh.num_nodes()
-
-    # Validate field sizes
-    for name, data in fields.items():
-        arr = np.asarray(data).ravel()
-        if len(arr) != num_nodes:
-            raise ValueError(
-                f"Field '{name}' has {len(arr)} values, but mesh has {num_nodes} nodes"
-            )
-
     # Write VTK file
     with open(filepath, "w", encoding="ascii") as f:
         _write_vtk_header(f, title)
 
-        if is_1d:
+        if mesh_kind == "cartesian_1d":
             _write_vtk_1d_geometry(f, mesh)
+        elif mesh_kind == "radial_1d":
+            _write_vtk_radial_geometry(f, mesh)
+        elif mesh_kind == "axisymmetric_2d":
+            _write_vtk_cylindrical_geometry(f, mesh)
         else:
-            _write_vtk_2d_geometry(f, mesh, is_cylindrical)
+            _write_vtk_cartesian_2d_geometry(f, mesh)
 
-        _write_vtk_point_data(f, fields, num_nodes)
+        _write_vtk_point_data(f, normalized_fields, num_nodes)
 
     return filepath
 
@@ -121,7 +233,8 @@ def write_vtk_series(
     Args:
         mesh: StructuredMesh (1D or 2D) or CylindricalMesh.
         time_fields: Sequence of (time, fields_dict) tuples.
-            Each fields_dict maps field names to numpy arrays.
+            Times must be finite and strictly increasing. Each fields_dict maps
+            field names to arrays accepted by :func:`write_vtk`.
         base_filename: Base path for output files. Will create:
             - base_filename.pvd (collection file)
             - base_filename_0000.vtk, base_filename_0001.vtk, ...
@@ -138,16 +251,48 @@ def write_vtk_series(
         ...     snapshots.append((t, {"concentration": c}))
         >>> bt.write_vtk_series(mesh, snapshots, "results/diffusion")
     """
-    base_path = Path(base_filename)
-    base_path.parent.mkdir(parents=True, exist_ok=True)
+    title = _validate_title(title)
+    mesh_kind, expected_shape, num_nodes = _mesh_layout(mesh)
+    del mesh_kind
 
+    try:
+        base_path = Path(base_filename)
+    except TypeError as exc:
+        raise TypeError("base_filename must be a path-like value") from exc
+
+    snapshots: list[tuple[float, dict[str, np.ndarray], str]] = []
+    previous_time: float | None = None
+    for index, snapshot in enumerate(time_fields):
+        try:
+            time_val, fields = snapshot
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"time_fields[{index}] must be a (time, fields) pair"
+            ) from exc
+        if isinstance(time_val, (bool, np.bool_)) or not isinstance(time_val, Real):
+            raise TypeError(f"time_fields[{index}] time must be a real number")
+        try:
+            time_float = float(time_val)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise TypeError(f"time_fields[{index}] time must be a real number") from exc
+        if not np.isfinite(time_float):
+            raise ValueError(f"time_fields[{index}] time must be finite")
+        if previous_time is not None and time_float <= previous_time:
+            raise ValueError("time values must be strictly increasing")
+
+        normalized = _normalize_fields(fields, expected_shape, num_nodes)
+        snapshot_title = _validate_title(f"{title} t={time_float:.6g}")
+        snapshots.append((time_float, normalized, snapshot_title))
+        previous_time = time_float
+
+    base_path.parent.mkdir(parents=True, exist_ok=True)
     vtk_files: list[tuple[float, Path]] = []
 
     # Write individual VTK files
-    for idx, (time_val, fields) in enumerate(time_fields):
+    for idx, (time_val, fields, snapshot_title) in enumerate(snapshots):
         vtk_name = f"{base_path.stem}_{idx:04d}.vtk"
         vtk_path = base_path.parent / vtk_name
-        write_vtk(mesh, fields, vtk_path, title=f"{title} t={time_val:.6g}")
+        write_vtk(mesh, fields, vtk_path, title=snapshot_title)
         vtk_files.append((time_val, vtk_path))
 
     # Write PVD collection file
@@ -179,14 +324,6 @@ def _write_vtk_1d_geometry(f, mesh) -> None:
     f.write(f"SPACING {dx} 1.0 1.0\n")
 
 
-def _write_vtk_2d_geometry(f, mesh, is_cylindrical: bool) -> None:
-    """Write 2D mesh geometry as VTK STRUCTURED_GRID or RECTILINEAR_GRID."""
-    if is_cylindrical:
-        _write_vtk_cylindrical_geometry(f, mesh)
-    else:
-        _write_vtk_cartesian_2d_geometry(f, mesh)
-
-
 def _write_vtk_cartesian_2d_geometry(f, mesh) -> None:
     """Write 2D Cartesian mesh as STRUCTURED_POINTS."""
     nx = mesh.nx()
@@ -205,6 +342,16 @@ def _write_vtk_cartesian_2d_geometry(f, mesh) -> None:
     f.write(f"DIMENSIONS {num_x} {num_y} 1\n")
     f.write(f"ORIGIN {xmin} {ymin} 0.0\n")
     f.write(f"SPACING {dx} {dy} 1.0\n")
+
+
+def _write_vtk_radial_geometry(f, mesh) -> None:
+    """Write a radial mesh as an explicit line in the positive x direction."""
+    num_r = mesh.nr() + 1
+    f.write("DATASET STRUCTURED_GRID\n")
+    f.write(f"DIMENSIONS {num_r} 1 1\n")
+    f.write(f"POINTS {num_r} double\n")
+    for i in range(num_r):
+        f.write(f"{mesh.r(i)} 0.0 0.0\n")
 
 
 def _write_vtk_cylindrical_geometry(f, mesh) -> None:
@@ -238,11 +385,7 @@ def _write_vtk_point_data(f, fields: Mapping[str, ArrayLike], num_nodes: int) ->
 
     for name, data in fields.items():
         arr = np.asarray(data, dtype=np.float64).ravel()
-
-        # Sanitize field name (VTK doesn't like spaces/special chars)
-        safe_name = name.replace(" ", "_").replace("-", "_")
-
-        f.write(f"SCALARS {safe_name} double 1\n")
+        f.write(f"SCALARS {name} double 1\n")
         f.write("LOOKUP_TABLE default\n")
 
         # Write data values
@@ -259,8 +402,8 @@ def _write_pvd_file(pvd_path: Path, vtk_files: list[tuple[float, Path]]) -> None
 
         for time_val, vtk_path in vtk_files:
             # Use relative path from PVD file location
-            rel_path = vtk_path.name
-            f.write(f'    <DataSet timestep="{time_val}" file="{rel_path}"/>\n')
+            rel_path = quoteattr(vtk_path.name)
+            f.write(f'    <DataSet timestep="{time_val}" file={rel_path}/>\n')
 
         f.write("  </Collection>\n")
         f.write("</VTKFile>\n")

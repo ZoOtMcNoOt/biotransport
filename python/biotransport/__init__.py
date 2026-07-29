@@ -150,7 +150,7 @@ from .mesh_utils import (
     mesh_1d,
     mesh_2d,
 )
-from .run import run, run_checkpoints, solve
+from .run import CheckpointResult, run, run_checkpoints, solve
 from .visualization import (
     plot_1d_solution,
     plot_2d_solution,
@@ -175,7 +175,12 @@ from .config import (
 )
 
 # Adaptive time-stepping
-from .adaptive import AdaptiveTimeStepper, AdaptiveResult, solve_adaptive
+from .adaptive import (
+    AdaptiveResult,
+    AdaptiveTimeStepper,
+    AdaptiveTimeStepperConfig,
+    solve_adaptive,
+)
 
 # Higher-order time integration (RK4, Heun)
 from .time_integrators import (
@@ -190,6 +195,7 @@ from .time_integrators import (
 
 # Grid convergence studies (verification)
 from .convergence import (
+    ConvergenceSolveResult,
     GridConvergenceStudy,
     ConvergenceResult,
     compute_order_of_accuracy,
@@ -272,10 +278,16 @@ from .analysis import (
     standardized_regression_coefficients,
 )
 from .contracts import (
+    PythonBackend,
+    PythonNumericalContract,
     SolverContract,
     filter_contracts,
     get_contract,
+    get_python_numerical_contract,
     list_contracts,
+    list_python_numerical_contracts,
+    list_python_numerical_symbols,
+    python_registry_as_dict,
     registry_as_dict,
 )
 from .provenance import (
@@ -335,10 +347,16 @@ __all__ = [
     "ParameterSetProvenance",
     "illustrative_parameter_set",
     "SolverContract",
+    "PythonBackend",
+    "PythonNumericalContract",
     "get_contract",
+    "get_python_numerical_contract",
     "list_contracts",
+    "list_python_numerical_contracts",
+    "list_python_numerical_symbols",
     "filter_contracts",
     "registry_as_dict",
+    "python_registry_as_dict",
     "freeze_config",
     "method_metadata",
     "convergence_table",
@@ -400,8 +418,10 @@ __all__ = [
     "solve_transport",
     "run",
     "run_checkpoints",
+    "CheckpointResult",
     # ========== Adaptive time-stepping ==========
     "AdaptiveTimeStepper",
+    "AdaptiveTimeStepperConfig",
     "AdaptiveResult",
     "solve_adaptive",
     # ========== Higher-order time integration ==========
@@ -414,6 +434,7 @@ __all__ = [
     "euler_step",
     # ========== Grid convergence (verification) ==========
     "GridConvergenceStudy",
+    "ConvergenceSolveResult",
     "ConvergenceResult",
     "compute_order_of_accuracy",
     "run_convergence_study",

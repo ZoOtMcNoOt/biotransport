@@ -69,8 +69,9 @@ def demo_michaelis_menten_reaction():
     solver.set_boundary(bt.Boundary.Right, 0.0, bc_type="neumann")  # No flux at center
     solver.set_parameters(verbose=True)
 
-    # Initial guess: linear decay
-    initial = S0 * (1 - x / L)
+    # A strictly positive, no-flux-compatible guess keeps every trial inside
+    # the Michaelis-Menten concentration domain.
+    initial = np.full_like(x, S0)
 
     # Solve
     result = solver.solve(initial)
@@ -303,10 +304,19 @@ def demo_2d_nonlinear():
 
     solver = bt.NonlinearDiffusionSolver(mesh, D=1.0)
     solver.set_reaction(reaction)
-    solver.set_boundary(bt.Boundary.Left, 1.0)
-    solver.set_boundary(bt.Boundary.Right, 0.0)
-    solver.set_boundary(bt.Boundary.Bottom, 0.5)
-    solver.set_boundary(bt.Boundary.Top, 0.5)
+
+    # Model a square tissue sample held at a uniform bath concentration.
+    # NonlinearDiffusionSolver currently accepts one constant trace per side,
+    # so a shared value is required for compatible Dirichlet data at every
+    # corner. The u² reaction still depletes the interior below the boundary.
+    bath_concentration = 0.5
+    for boundary in (
+        bt.Boundary.Left,
+        bt.Boundary.Right,
+        bt.Boundary.Bottom,
+        bt.Boundary.Top,
+    ):
+        solver.set_boundary(boundary, bath_concentration)
 
     result = solver.solve()
 
@@ -349,7 +359,7 @@ def main():
         """
 Core Solvers:
   - bt.NewtonRaphsonSolver(residual, jacobian, n)  # General F(u)=0 solver
-  - bt.NonlinearDiffusionSolver(mesh, D)           # -D∇²u + R(u) = S
+  - bt.NonlinearDiffusionSolver(mesh, D)           # -D*laplacian(u) + R(u) = S
 
 Built-in Reaction Terms:
   - bt.michaelis_menten(Vmax, Km)     # R = Vmax*u/(Km+u)

@@ -9,7 +9,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![C++17](https://img.shields.io/badge/C++-17-blue.svg)](https://isocpp.org/)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#testing-and-development-status)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://github.com/ZoOtMcNoOt/biotransport/blob/master/LICENSE)
 
 </div>
 
@@ -111,7 +111,7 @@ machine-readable tools for the assumptions and evidence around a run:
 | Explicit unit conversion | `biotransport.units` | Converts and dimension-checks selected quantities; raw C++ solvers still receive plain, caller-consistent doubles. |
 | Parameter traceability | `biotransport.provenance` | Records sources, context, validity, and uncertainty; bundled application values remain honestly illustrative and unprovenanced. |
 | Sensitivity and uncertainty screening | `biotransport.analysis` | Seeded sweeps, local sensitivities, independent-marginal Latin hypercubes, propagation, and linear SRC screening—not calibration, causality, or model validation. |
-| Solver contracts | `biotransport.contracts` | Records equations, units, supported terms, exclusions, and exact test references for native solver entry points. |
+| Numerical contracts | `biotransport.contracts` | Separately records native solver equations/units/evidence and governed Python numerical backends/dispositions; neither registry confers biological validation. |
 | Balance accounting | `BalanceLedger` and `reconcile_balances` | Audits caller-supplied inventories and exchanges; it does not couple PDEs or infer fluxes from fields. |
 | Reproducible artifacts | `biotransport.reproducibility` | Produces deterministic, fingerprinted JSON manifests; a manifest is not a publication repository or biological validation. |
 
@@ -124,15 +124,20 @@ D = units.diffusivity(1.33e-5, "cm^2/s")
 problem.diffusivity(D.require(units.Dimension.DIFFUSIVITY))  # 1.33e-9 m^2/s
 ```
 
-The contract registry can be queried by stable ID or native symbol:
+The native registry can be queried by stable ID or native symbol, while the
+separate Python registry makes reference/workflow backends explicit:
 
 ```python
-from biotransport.contracts import get_contract
+from biotransport.contracts import get_contract, get_python_numerical_contract
 
 contract = get_contract("NernstPlanckSolver")
 print(contract.equation)
 print(contract.evidence_level.value)
 print(contract.exclusions)
+
+python_surface = get_python_numerical_contract("NewtonRaphsonSolver")
+print(python_surface.backend.value)  # python-reference
+print(python_surface.disposition)
 ```
 
 The first nonuniform-geometry slice is a separate native C++
@@ -282,14 +287,19 @@ The current science-first verification contract covers:
 - first-order explicit Euler time integration with enforced transport/CFL limits;
 - configured diffusion, advection, and reaction terms advanced together;
 - Dirichlet, outward-normal Neumann, and Robin boundary behavior;
-- conservation for closed variable-coefficient problems, manufactured steady cases, reaction
-  temporal convergence, exact final-time landing, and deterministic corner handling.
+- conservation for closed variable-coefficient problems, manufactured steady cases, smooth
+  second-order diffusion-space refinement, heterogeneous mixed-boundary first-order upwind
+  refinement, first-order reaction-time refinement, exact final-time landing, and deterministic
+  corner handling.
 
 The runnable `examples/verification/grid_convergence.py` performs a scoped spatial and temporal
-refinement study for one diffusion case. It is not an always-on CTest/pytest convergence certificate
-for every canonical configuration. The nonuniform 1D solver separately has an automated smooth-mesh
-spatial-convergence test; other specialized convergence claims are listed individually in the
-contract registry.
+refinement report for one diffusion case. Smooth-diffusion spatial refinement is now also in the
+always-on CTest gate, but neither sequence is a convergence certificate for every canonical
+configuration. The nonuniform 1D solver separately has an automated smooth-mesh
+spatial-convergence test; Navier--Stokes velocity, bioheat space/time, Nernst--Planck's diffusion
+limit, and cylindrical operators now have their own bounded order evidence. The specialized spatial
+studies suppress time error explicitly; exact claims are listed individually in the contract
+registry.
 
 This canonical contract does **not** extend automatically to 3D or cylindrical grids, implicit or
 higher-order integration, central/QUICK/hybrid advection, coupled multi-species systems, fluid
@@ -359,17 +369,19 @@ hard-coded test count: the count changes as the suite grows and is not evidence 
 specialized module has the same validation depth. Check the current test run and review the relevant
 verification cases for the physics you plan to model.
 
-The implementation rationale and near-term boundaries are recorded in
-[`docs/notes/SCIENCE_FIRST_ARCHITECTURE.md`](docs/notes/SCIENCE_FIRST_ARCHITECTURE.md).
-Application equations, provenance, and biological-validity limits are recorded in
-[`docs/notes/MODEL_SCOPE_AND_REFERENCES.md`](docs/notes/MODEL_SCOPE_AND_REFERENCES.md).
-The current machine-readable solver evidence is summarized in
-[`docs/notes/SOLVER_CONTRACTS.md`](docs/notes/SOLVER_CONTRACTS.md). Workflow guides cover
-[`units`](docs/notes/UNITS.md), [`parameter provenance`](docs/notes/PARAMETER_PROVENANCE.md),
-[`sensitivity and uncertainty`](docs/notes/SENSITIVITY_AND_UNCERTAINTY.md),
-[`balance accounting`](docs/notes/BALANCE_ACCOUNTING.md),
-[`reproducible artifacts`](docs/notes/REPRODUCIBILITY.md), and the
-[`nonuniform 1D geometry slice`](docs/notes/NONUNIFORM_GEOMETRY.md).
+The implementation rationale and near-term boundaries are recorded in the
+[`science-first architecture guide`](https://github.com/ZoOtMcNoOt/biotransport/blob/master/docs/notes/SCIENCE_FIRST_ARCHITECTURE.md).
+Application equations, provenance, and biological-validity limits are recorded in the
+[`model scope and references guide`](https://github.com/ZoOtMcNoOt/biotransport/blob/master/docs/notes/MODEL_SCOPE_AND_REFERENCES.md).
+The current machine-readable solver evidence is summarized in the
+[`solver contract guide`](https://github.com/ZoOtMcNoOt/biotransport/blob/master/docs/notes/SOLVER_CONTRACTS.md).
+Workflow guides cover
+[`units`](https://github.com/ZoOtMcNoOt/biotransport/blob/master/docs/notes/UNITS.md),
+[`parameter provenance`](https://github.com/ZoOtMcNoOt/biotransport/blob/master/docs/notes/PARAMETER_PROVENANCE.md),
+[`sensitivity and uncertainty`](https://github.com/ZoOtMcNoOt/biotransport/blob/master/docs/notes/SENSITIVITY_AND_UNCERTAINTY.md),
+[`balance accounting`](https://github.com/ZoOtMcNoOt/biotransport/blob/master/docs/notes/BALANCE_ACCOUNTING.md),
+[`reproducible artifacts`](https://github.com/ZoOtMcNoOt/biotransport/blob/master/docs/notes/REPRODUCIBILITY.md), and the
+[`nonuniform 1D geometry slice`](https://github.com/ZoOtMcNoOt/biotransport/blob/master/docs/notes/NONUNIFORM_GEOMETRY.md).
 
 ## Contributing
 
@@ -379,6 +391,7 @@ should fail explicitly until that evidence exists.
 
 ## License
 
-BioTransport is available under the [MIT License](LICENSE).
+BioTransport is available under the
+[MIT License](https://github.com/ZoOtMcNoOt/biotransport/blob/master/LICENSE).
 
 Built for transport-phenomena research and teaching at Texas A&M University.

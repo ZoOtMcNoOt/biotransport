@@ -59,6 +59,47 @@ class TestBoundedBoundaryContract:
 
 
 class TestResultContract:
+    @pytest.mark.parametrize(
+        "scheme", [bt.ConvectionScheme.UPWIND, bt.ConvectionScheme.CENTRAL]
+    )
+    def test_uniform_velocity_is_an_exact_navier_stokes_solution(
+        self, scheme: object
+    ) -> None:
+        """A spatially uniform flow has zero convection, diffusion, and pressure gradient."""
+        nx, ny = 9, 7
+        mesh = bt.StructuredMesh(nx, ny, -0.4, 1.4, 0.2, 1.25)
+        solver = bt.NavierStokesSolver(mesh, density=1.3, viscosity=0.07)
+        exact_u = 0.23
+        exact_v = -0.17
+        boundary = bt.VelocityBC.dirichlet(exact_u, exact_v)
+        for side in (
+            bt.Boundary.Left,
+            bt.Boundary.Right,
+            bt.Boundary.Bottom,
+            bt.Boundary.Top,
+        ):
+            solver.set_velocity_bc(side, boundary)
+
+        u0 = np.full(mesh.num_nodes(), exact_u)
+        v0 = np.full(mesh.num_nodes(), exact_v)
+        solver.set_initial_velocity(u0, v0)
+        solver.set_convection_scheme(scheme)
+        solver.set_time_step(0.001)
+        solver.set_pressure_tolerance(1e-12)
+
+        result = solver.solve(0.031)
+
+        np.testing.assert_allclose(result.u(), exact_u, atol=2e-15, rtol=0.0)
+        np.testing.assert_allclose(result.v(), exact_v, atol=2e-15, rtol=0.0)
+        np.testing.assert_allclose(result.pressure(), 0.0, atol=2e-15, rtol=0.0)
+        assert result.time_steps == 31
+        assert result.max_velocity == pytest.approx(
+            math.hypot(exact_u, exact_v), abs=2e-15
+        )
+        assert result.divergence == pytest.approx(0.0, abs=2e-15)
+        assert result.pressure_residual == pytest.approx(0.0, abs=2e-15)
+        assert result.stable
+
     def test_exact_time_shapes_padding_and_diagnostics(self) -> None:
         nx, ny = 6, 5
         mesh, solver = _solver(nx, ny)
@@ -187,6 +228,18 @@ class TestStabilityAndInputValidation:
             solver.set_initial_velocity(nonfinite, valid)
         with pytest.raises(ValueError, match="finite"):
             solver.max_time_step(valid, nonfinite)
+
+    @pytest.mark.parametrize(
+        ("force_x", "force_y"),
+        [(math.nan, 0.0), (0.0, math.inf), (-math.inf, 0.0)],
+    )
+    def test_nonfinite_constant_body_force_is_rejected(
+        self, force_x: float, force_y: float
+    ) -> None:
+        _, solver = _solver()
+
+        with pytest.raises(ValueError, match="finite"):
+            solver.set_body_force(force_x, force_y)
 
     def test_fixed_step_above_stability_limit_is_rejected(self) -> None:
         mesh, solver = _solver(4, 4)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
+import math
+
 import numpy as np
 import pytest
 
@@ -48,6 +51,48 @@ def test_arterial_template_has_declared_extrema_and_period():
     assert waveform(0.37) == pytest.approx(waveform(1.37))
 
 
+def test_periodic_waveforms_reduce_extreme_phases_without_nan():
+    sinusoid = bt.SinusoidalBC(frequency=1e308, phase=1e308)
+    square = bt.SquareWaveBC(frequency=1e308, phase=1e308)
+
+    assert math.isfinite(sinusoid(1e308))
+    assert math.isfinite(square(1e308))
+    with pytest.raises(ValueError, match="period outside the finite float64 range"):
+        bt.SinusoidalBC(frequency=np.nextafter(0.0, 1.0)).period()
+
+
+def test_waveform_derived_arithmetic_is_finite_or_fails_loudly():
+    maximum = np.finfo(float).max
+    ramp = bt.RampBC(start_value=-maximum, end_value=maximum)
+    assert ramp(0.5) == pytest.approx(0.0)
+
+    respiratory = bt.RespiratoryBC(
+        mean=maximum,
+        amplitude=maximum,
+        respiratory_rate=60.0,
+        inspiration_fraction=0.5,
+    )
+    with pytest.raises(ValueError, match="non-finite"):
+        respiratory(0.5)
+
+    with pytest.raises(ValueError, match="mean_flow is incompatible"):
+        bt.CardiacOutputBC(
+            mean_flow=maximum,
+            peak_flow=maximum,
+            heart_rate=60.0,
+            ejection_fraction=np.nextafter(1.0, 0.0),
+        )
+
+
+def test_venous_mean_pressure_is_the_declared_cycle_mean():
+    waveform = bt.VenousPressureBC(mean_pressure=8.0, amplitude=4.0, heart_rate=72.0)
+    count = 20_000
+    times = (np.arange(count, dtype=np.float64) + 0.5) * waveform.period() / count
+    sampled_mean = np.mean([waveform(float(time)) for time in times])
+
+    assert sampled_mean == pytest.approx(8.0, rel=0.0, abs=2e-9)
+
+
 def test_cardiac_output_mean_is_the_declared_cycle_mean():
     waveform = bt.CardiacOutputBC(
         mean_flow=5.0,
@@ -82,6 +127,11 @@ def test_sampling_and_rate_conversions_validate_their_domains():
         bt.sample_waveform(bt.ConstantBC(1.0), 1.0, 0.0)
     with pytest.raises(ValueError, match="num_points"):
         bt.sample_waveform(bt.ConstantBC(1.0), num_points=0)
+    subnormal = np.nextafter(0.0, 1.0)
+    with pytest.raises(ValueError, match="outside the finite float64 range"):
+        bt.heart_rate_to_period(subnormal)
+    with pytest.raises(ValueError, match="outside the finite float64 range"):
+        bt.period_to_heart_rate(subnormal)
 
 
 def test_reference_solver_preserves_mass_with_zero_neumann_boundaries():
@@ -177,6 +227,14 @@ def test_reference_solver_rejects_unsupported_boundaries_and_dimensions():
     with pytest.raises(NotImplementedError, match="Robin"):
         bt.solve_pulsatile(robin_problem, 0.1, {}, dt=0.001)
 
+    with pytest.raises(NotImplementedError, match="Robin"):
+        bt.solve_pulsatile(
+            robin_problem,
+            0.1,
+            {bt.Boundary.Right: bt.ConstantBC(1.0)},
+            dt=0.001,
+        )
+
     mesh_2d = bt.mesh_2d(5, 4, 0.0, 1.0, 0.0, 1.0)
     problem_2d = bt.Problem(mesh_2d).diffusivity(0.1).initial_condition(0.0)
     with pytest.raises(ValueError, match="one-dimensional"):
@@ -222,3 +280,196 @@ def test_callback_receives_a_read_only_copy_and_step_guard_is_enforced():
     assert len(callback_fields) == result.stats["steps"]
     with pytest.raises(ValueError, match="more than max_steps"):
         bt.solve_pulsatile(problem, 0.1, {}, dt=0.001, max_steps=5)
+
+
+def test_step_planning_never_rounds_down_a_tiny_final_remainder():
+    mesh = bt.mesh_1d(10, 0.0, 1.0)
+    problem = bt.Problem(mesh).diffusivity(1.0).initial_condition(0.0)
+    stable_dt = math.nextafter(0.5 * mesh.dx() ** 2, 0.0)
+    final_time = stable_dt * (1.0 + 3e-14)
+
+    with pytest.raises(ValueError, match="more than max_steps=1"):
+        bt.solve_pulsatile(problem, final_time, {}, dt=stable_dt, max_steps=1)
+
+    with pytest.warns(RuntimeWarning):
+        result = bt.solve_pulsatile(problem, final_time, {}, dt=stable_dt, max_steps=2)
+    assert result.stats["steps"] == 2
+    assert result.stats["max_diffusion_number"] <= 0.5
+
+
+def test_step_planning_uses_the_exact_float_ratio_not_rounded_products():
+    _, problem = _problem_1d(diffusivity=0.0)
+    step_dt = 0.09375291778124752
+    final_time = 0.28125875334374256
+
+    with pytest.raises(ValueError, match="more than max_steps=3"):
+        bt.solve_pulsatile(problem, final_time, {}, dt=step_dt, max_steps=3)
+
+    callback_times = []
+    with pytest.warns(RuntimeWarning):
+        result = bt.solve_pulsatile(
+            problem,
+            final_time,
+            {},
+            dt=step_dt,
+            max_steps=4,
+            callback=lambda time, _field: callback_times.append(time),
+        )
+    assert result.stats["steps"] == 4
+    assert result.time == final_time
+    assert result.stats["last_dt"] > 0.0
+    assert np.all(np.diff(callback_times) > 0.0)
+
+
+def test_decimal_endpoint_keeps_its_exact_remainder_step():
+    _, problem = _problem_1d(diffusivity=0.0)
+
+    with pytest.warns(RuntimeWarning):
+        result = bt.solve_pulsatile(problem, 0.1, {}, dt=0.0001, max_steps=1001)
+
+    assert result.stats["steps"] == 1001
+    assert result.time == 0.1
+    assert 0.0 < result.stats["last_dt"] <= 0.0001
+
+
+def test_subnormal_dt_fails_with_the_step_guard_instead_of_overflowing():
+    _, problem = _problem_1d(diffusivity=0.0)
+    subnormal_dt = np.nextafter(0.0, 1.0)
+
+    with pytest.raises(ValueError, match="more than max_steps=10"):
+        bt.solve_pulsatile(problem, 1.0, {}, dt=subnormal_dt, max_steps=10)
+
+
+def test_tiny_diffusivity_is_not_lost_when_the_stable_dt_overflows():
+    mesh = bt.mesh_1d(10, 0.0, 1.0)
+    diffusivity = np.nextafter(0.0, 1.0)
+    initial = np.zeros(mesh.num_nodes())
+    initial[5] = 1.0
+    problem = bt.Problem(mesh).diffusivity(diffusivity).initial_condition(initial)
+    step_dt = 1e308
+    expected_diffusion_number = diffusivity * step_dt / mesh.dx() ** 2
+
+    with pytest.warns(RuntimeWarning):
+        result = bt.solve_pulsatile(problem, step_dt, {}, dt=step_dt, max_steps=1)
+
+    expected = initial.copy()
+    expected[4] = expected_diffusion_number
+    expected[5] = 1.0 - 2.0 * expected_diffusion_number
+    expected[6] = expected_diffusion_number
+    np.testing.assert_allclose(result.solution, expected, rtol=2e-16, atol=0.0)
+    assert math.isinf(result.stats["max_stable_dt"])
+    assert result.stats["max_diffusion_number"] == pytest.approx(
+        expected_diffusion_number, rel=1e-15
+    )
+
+
+@pytest.mark.parametrize("peak", [1e300, np.finfo(float).max])
+def test_subnormal_cfl_preserves_representable_large_field_updates(peak):
+    mesh = bt.mesh_1d(4, 0.0, 4.0)
+    diffusivity = np.nextafter(0.0, 1.0)
+    step_dt = 0.25
+    initial = np.zeros(mesh.num_nodes())
+    initial[2] = peak
+    problem = bt.Problem(mesh).diffusivity(diffusivity).initial_condition(initial)
+    exact_lambda = (
+        Fraction.from_float(diffusivity)
+        * Fraction.from_float(step_dt)
+        / Fraction.from_float(mesh.dx()) ** 2
+    )
+    expected_increment = float(exact_lambda * Fraction.from_float(peak))
+
+    with pytest.warns(RuntimeWarning):
+        result = bt.solve_pulsatile(problem, step_dt, {}, dt=step_dt, max_steps=1)
+
+    assert np.all(np.isfinite(result.solution))
+    assert result.solution[1] == expected_increment
+    assert result.solution[3] == expected_increment
+    assert result.stats["max_diffusion_number"] > 0.0
+    assert result.stats["max_diffusion_number_exact"] == (
+        f"{exact_lambda.numerator}/{exact_lambda.denominator}"
+    )
+
+
+def test_subnormal_cfl_preserves_representable_neumann_update():
+    mesh = bt.mesh_1d(1, 0.0, 1.0)
+    diffusivity = np.nextafter(0.0, 1.0)
+    step_dt = 0.25
+    derivative = 1e300
+    problem = (
+        bt.Problem(mesh)
+        .diffusivity(diffusivity)
+        .initial_condition(0.0)
+        .neumann(bt.Boundary.Left, derivative)
+        .dirichlet(bt.Boundary.Right, 0.0)
+    )
+    exact_lambda = (
+        Fraction.from_float(diffusivity)
+        * Fraction.from_float(step_dt)
+        / Fraction.from_float(mesh.dx()) ** 2
+    )
+    expected = float(2 * exact_lambda * Fraction.from_float(derivative))
+
+    with pytest.warns(RuntimeWarning):
+        result = bt.solve_pulsatile(problem, step_dt, {}, dt=step_dt, max_steps=1)
+
+    assert result.solution[0] == expected
+    assert result.solution[1] == 0.0
+
+
+def test_stable_limit_avoids_large_spacing_intermediate_overflow():
+    mesh = bt.mesh_1d(10, 0.0, 1e156)
+    problem = bt.Problem(mesh).diffusivity(1e308).initial_condition(0.0)
+    expected_limit = 0.5 * (mesh.dx() / 1e308) * mesh.dx()
+
+    with pytest.warns(RuntimeWarning):
+        automatic = bt.solve_pulsatile(problem, 100.0, {})
+    with pytest.warns(RuntimeWarning):
+        explicit = bt.solve_pulsatile(problem, 100.0, {}, dt=40.0)
+
+    assert automatic.stats["max_stable_dt"] == pytest.approx(expected_limit, rel=2e-15)
+    assert automatic.stats["dt"] <= automatic.stats["max_stable_dt"]
+    assert automatic.stats["max_diffusion_number"] <= 0.5
+    assert explicit.stats["max_stable_dt"] == automatic.stats["max_stable_dt"]
+    assert explicit.stats["max_diffusion_number"] == pytest.approx(0.4)
+
+
+def test_stable_limit_avoids_tiny_spacing_intermediate_underflow():
+    mesh = bt.mesh_1d(1, 0.0, 1e-200)
+    problem = bt.Problem(mesh).diffusivity(1e-100).initial_condition(0.0)
+    expected_limit = 0.5 * (mesh.dx() / 1e-100) * mesh.dx()
+
+    with pytest.warns(RuntimeWarning):
+        result = bt.solve_pulsatile(problem, 1e-300, {})
+
+    assert result.stats["max_stable_dt"] == pytest.approx(expected_limit, rel=2e-15)
+    assert result.stats["dt"] <= result.stats["max_stable_dt"]
+    assert result.stats["max_diffusion_number"] <= 0.5
+
+
+def test_custom_waveform_cannot_mutate_the_transport_problem():
+    _, problem = _problem_1d(diffusivity=0.01)
+
+    def mutate_problem(_time):
+        problem.diffusivity(0.02)
+        return 1.0
+
+    waveform = bt.CustomBC(mutate_problem)
+    with pytest.warns(RuntimeWarning):
+        with pytest.raises(RuntimeError, match="TransportProblem was mutated"):
+            bt.solve_pulsatile(
+                problem,
+                0.01,
+                {bt.Boundary.Left: waveform},
+                dt=0.01,
+            )
+
+
+def test_solve_callback_cannot_mutate_the_transport_problem():
+    _, problem = _problem_1d(diffusivity=0.01)
+
+    def mutate_problem(_time, _field):
+        problem.initial_condition(3.0)
+
+    with pytest.warns(RuntimeWarning):
+        with pytest.raises(RuntimeError, match="TransportProblem was mutated"):
+            bt.solve_pulsatile(problem, 0.02, {}, dt=0.01, callback=mutate_problem)

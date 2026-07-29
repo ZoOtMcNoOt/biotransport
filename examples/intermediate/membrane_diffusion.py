@@ -34,11 +34,12 @@ x = bt.x_nodes(mesh)
 # Build spatially-varying diffusivity using SpatialField builder
 mem_lo = membrane_pos - membrane_width / 2
 mem_hi = membrane_pos + membrane_width / 2
-D_field = list(
+D_field = np.asarray(
     bt.SpatialField(mesh)
     .default(D_medium)
     .region_box(mem_lo, mem_hi, value=D_membrane)
-    .build()
+    .build(),
+    dtype=np.float64,
 )
 
 # Initial condition: linear ramp across membrane
@@ -53,7 +54,7 @@ initial = np.where(
 problem = (
     bt.Problem(mesh)
     .diffusivity_field(D_field)
-    .initial_condition(list(initial))
+    .initial_condition(initial)
     .dirichlet(bt.Boundary.Left, C_left)
     .dirichlet(bt.Boundary.Right, C_right)
 )
@@ -65,9 +66,9 @@ saved_solutions = {0.0: initial.copy()}
 t = 0.0
 for t_target in times_to_save:
     print(f"Simulating from t={t:.1f}s to t={t_target:.1f}s...")
-    result = bt.solve(problem, t_target - t)
-    sol = np.asarray(result.solution).copy()
-    problem = problem.initial_condition(list(sol))
+    result = bt.solve(problem, end_time=t_target - t)
+    sol = np.asarray(result.concentration).copy()
+    problem = problem.initial_condition(sol)
     saved_solutions[t_target] = sol
     t = t_target
 

@@ -37,11 +37,16 @@ mesh = bt.mesh_2d(50, 50, x_min=-1.0, x_max=1.0, y_min=-1.0, y_max=1.0)
 # Physical parameters
 # Units: cm, seconds
 D = 1e-6  # Drug diffusivity in tissue (cm²/s)
-decay_rate = 1e-3  # First-order metabolism rate (1/s)
+illustrative_half_life_hours = 24.0
+decay_rate = np.log(2.0) / (illustrative_half_life_hours * 3600.0)
+# This half-life is an explicit teaching assumption, not a calibrated drug value.
 
 # Initial condition: Gaussian drug bolus in center
 # gaussian() creates a symmetric 2D Gaussian centered at (center, center)
-initial_condition = bt.gaussian(mesh, center=0.0, width=0.15, amplitude=1.0)
+initial_condition = np.asarray(
+    bt.gaussian(mesh, center=0.0, width=0.15, amplitude=1.0),
+    dtype=np.float64,
+)
 
 # Setup problem with no-flux boundaries (drug stays in domain)
 problem = (
@@ -80,11 +85,11 @@ solutions.append(current_solution.copy())
 times_s.append(0.0)
 
 print(f"\nCapturing snapshots at: {snapshot_hours} hours")
-print(f"{'Time (h)':>10} {'Min Conc':>15} {'Max Conc':>15} {'Total Mass':>15}")
+print(f"{'Time (h)':>10} {'Min Conc':>15} {'Max Conc':>15} {'Inventory':>15}")
 print("-" * 70)
 
-# Calculate initial mass
-initial_mass = np.sum(current_solution)
+initial_inventory = None
+final_inventory = None
 
 for i in range(1, len(snapshot_times)):
     # Time interval for this segment
@@ -102,22 +107,31 @@ for i in range(1, len(snapshot_times)):
         .neumann(bt.Boundary.Top, 0.0)
     )
 
-    # Solve for this time segment using Crank-Nicolson for efficiency
-    result = bt.solve(problem_segment, t=dt_segment, dt=100.0, method="crank_nicolson")
-    current_solution = result.solution()
+    # Advance the full diffusion-and-decay model with the verified conservative
+    # C++ solver. CrankNicolsonDiffusion is intentionally not used here because
+    # that specialized API solves diffusion only and would omit metabolism.
+    result = bt.solve(
+        problem_segment,
+        end_time=dt_segment,
+        time_step=100.0,
+    )
+    current_solution = result.concentration
+    if initial_inventory is None:
+        initial_inventory = result.diagnostics.initial_mass
+    final_inventory = result.diagnostics.final_mass
 
     # Store snapshot
     solutions.append(current_solution.copy())
     times_s.append(snapshot_times[i])
 
     # Print statistics
-    current_mass = np.sum(current_solution)
     print(
         f"{snapshot_hours[i]:>10.1f} {current_solution.min():>15.6e} "
-        f"{current_solution.max():>15.6e} {current_mass / initial_mass:>15.3f}"
+        f"{current_solution.max():>15.6e} "
+        f"{final_inventory / initial_inventory:>15.3f}"
     )
 
-print(f"\n✓ Captured {len(solutions)} time snapshots")
+print(f"\n[OK] Captured {len(solutions)} time snapshots")
 
 # ========================================================================
 # VTK Export for ParaView visualization
@@ -128,23 +142,25 @@ print(f"{'=' * 70}")
 
 # Export time series
 series_prefix = bt.get_result_path("drug_diffusion_series", EXAMPLE_NAME)
-bt.write_vtk_series(
-    mesh, solutions, times_s, series_prefix, field_name="drug_concentration"
-)
+time_fields = [
+    (time_s, {"drug_concentration": solution})
+    for time_s, solution in zip(times_s, solutions)
+]
+bt.write_vtk_series(mesh, time_fields, series_prefix)
 
-print("\n✓ VTK time series exported:")
+print("\n[OK] VTK time series exported:")
 print(f"  Prefix: {series_prefix}")
 print(f"  Files: drug_diffusion_series_*.vtk ({len(solutions)} files)")
 print("\nTo visualize in ParaView:")
 print("  1. Open ParaView")
-print("  2. File → Open → Select all 'drug_diffusion_series_*.vtk' files")
+print("  2. File -> Open -> Select all 'drug_diffusion_series_*.vtk' files")
 print("  3. Click 'Apply' in Properties panel")
 print("  4. Press 'Play' button to animate")
 
 # Also export final state as single file for quick viewing
 final_vtk = bt.get_result_path("drug_final.vtk", EXAMPLE_NAME)
-bt.write_vtk(mesh, solutions[-1], final_vtk, field_name="drug_concentration")
-print(f"\n✓ Final snapshot exported: {final_vtk}")
+bt.write_vtk(mesh, {"drug_concentration": solutions[-1]}, final_vtk)
+print(f"\n[OK] Final snapshot exported: {final_vtk}")
 
 # ========================================================================
 # Matplotlib visualization of snapshots
@@ -168,10 +184,7 @@ for i, (solution, t_s) in enumerate(zip(solutions, times_s)):
         solution,
         ax=axes[i],
         title=f"t = {t_h:.0f} hours\nMax = {solution.max():.4f}",
-        colorbar=True,
-        cmap="hot",
-        vmin=0,
-        vmax=initial_condition.max(),
+        colorbar_label="Drug concentration",
     )
 
 # Hide unused subplots
@@ -191,7 +204,7 @@ bt.plot(
     ax=ax_3d,
     kind="surface",
     title=f"Drug Concentration at {snapshot_hours[-1]} hours",
-    cmap="hot",
+    zlabel="Drug concentration",
 )
 plt.tight_layout()
 plt.savefig(bt.get_result_path("drug_final_3d.png", EXAMPLE_NAME), dpi=150)
@@ -206,25 +219,27 @@ print("SUMMARY")
 print(f"{'=' * 70}")
 
 final_solution = solutions[-1]
-retention = np.sum(final_solution) / initial_mass * 100
+if initial_inventory is None or final_inventory is None:
+    raise RuntimeError("the time integration produced no inventory diagnostics")
+retention = final_inventory / initial_inventory * 100
 
 print(f"\nSimulation completed for {snapshot_hours[-1]} hours")
 print(f"  Initial peak concentration: {initial_condition.max():.6f}")
 print(f"  Final peak concentration: {final_solution.max():.6f}")
-print(f"  Drug retention: {retention:.1f}% (decay + diffusion to boundaries)")
+print(f"  Drug retention: {retention:.1f}% (first-order metabolism)")
 print(f"  Reduction factor: {initial_condition.max() / final_solution.max():.1f}x")
 
-print("\n📊 Visualization files created:")
-print("  • Matplotlib time series: drug_time_series.png")
-print("  • 3D surface plot: drug_final_3d.png")
-print("  • VTK series for ParaView: drug_diffusion_series_*.vtk")
-print("  • VTK final snapshot: drug_final.vtk")
+print("\nVisualization files created:")
+print("  - Matplotlib time series: drug_time_series.png")
+print("  - 3D surface plot: drug_final_3d.png")
+print("  - VTK series for ParaView: drug_diffusion_series_*.vtk")
+print("  - VTK final snapshot: drug_final.vtk")
 
-print("\n💡 Next steps:")
-print("  • Open VTK files in ParaView for interactive 3D visualization")
-print("  • Try different decay rates to see metabolism effects")
-print("  • Modify initial condition to simulate injection sites")
-print("  • Add heterogeneous diffusivity for tissue layers")
+print("\nNext steps:")
+print("  - Open VTK files in ParaView for interactive 3D visualization")
+print("  - Try different decay rates to see metabolism effects")
+print("  - Modify initial condition to simulate injection sites")
+print("  - Add heterogeneous diffusivity for tissue layers")
 
-print(f"\n📁 All results saved to: {bt.get_result_path('', EXAMPLE_NAME)}")
+print(f"\nAll results saved to: {bt.get_result_path('', EXAMPLE_NAME)}")
 print(f"{'=' * 70}")

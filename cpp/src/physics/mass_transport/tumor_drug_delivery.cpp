@@ -275,8 +275,8 @@ TumorDrugDeliverySaved TumorDrugDeliverySolver::simulate(
     }
 
     const auto matchesFixedPressure = [](double value, double target) {
-        const double tolerance =
-            128.0 * std::numeric_limits<double>::epsilon() * std::max(1.0, std::abs(target));
+        const double scale = std::max(std::abs(value), std::abs(target));
+        const double tolerance = 128.0 * std::numeric_limits<double>::epsilon() * scale;
         return std::abs(value - target) <= tolerance;
     };
     for (int i = 0; i <= nx_; ++i) {
@@ -590,9 +590,12 @@ TumorDrugDeliverySaved TumorDrugDeliverySolver::simulate(
                 const double derivative = (west_flux - east_flux) / width_x +
                                           (south_flux - north_flux) / width_y + exchange -
                                           (k_binding + k_uptake) * free[center];
-                double updated = free[center] + step_size * derivative;
-                const double negativity_tolerance = 256.0 * std::numeric_limits<double>::epsilon() *
-                                                    std::max({1.0, c_plasma, free[center]});
+                const double increment = step_size * derivative;
+                double updated = free[center] + increment;
+                const double negativity_scale =
+                    std::max({std::abs(free[center]), std::abs(increment), std::abs(updated)});
+                const double negativity_tolerance =
+                    256.0 * std::numeric_limits<double>::epsilon() * negativity_scale;
                 invalid_update[center] = static_cast<std::uint8_t>(
                     updated < -negativity_tolerance || !std::isfinite(updated));
                 if (updated < 0.0) {

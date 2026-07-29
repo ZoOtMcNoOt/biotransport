@@ -583,11 +583,30 @@ inline std::size_t plannedSteps(double final_time, double time_step) {
     }
     const long double ratio =
         static_cast<long double>(final_time) / static_cast<long double>(time_step);
-    const long double count = std::ceil(ratio);
-    if (count > static_cast<long double>(std::numeric_limits<std::size_t>::max())) {
+    const long double approximate_count = std::ceil(ratio);
+    if (!std::isfinite(approximate_count) ||
+        approximate_count > static_cast<long double>(std::numeric_limits<std::size_t>::max())) {
         throw std::overflow_error("requested solve requires too many time steps");
     }
-    return std::max<std::size_t>(1, static_cast<std::size_t>(count));
+    std::size_t count = std::max<std::size_t>(1, static_cast<std::size_t>(approximate_count));
+    const long double final_time_exact = static_cast<long double>(final_time);
+    const long double time_step_exact = static_cast<long double>(time_step);
+    const auto final_remainder = [&]() {
+        return std::fma(-static_cast<long double>(count - 1), time_step_exact, final_time_exact);
+    };
+    while (count > 1 && final_remainder() <= 0.0L) {
+        --count;
+    }
+    while (final_remainder() > time_step_exact) {
+        if (static_cast<double>(count) * time_step == final_time) {
+            break;
+        }
+        if (count == std::numeric_limits<std::size_t>::max()) {
+            throw std::overflow_error("requested solve requires too many time steps");
+        }
+        ++count;
+    }
+    return count;
 }
 
 inline void buildInternalFluxes(const TransportProblem& problem,
@@ -793,18 +812,27 @@ inline TransportResult solve(const TransportProblem& problem, const SolveOptions
     std::vector<double> x_flux(x_face_count, 0.0);
     std::vector<double> y_flux(y_face_count, 0.0);
 
-    double time = 0.0;
     diagnostics.minimum_time_step = std::numeric_limits<double>::infinity();
+    const long double final_time_schedule = static_cast<long double>(options.final_time);
+    const long double target_step_schedule = static_cast<long double>(target_step);
     for (std::size_t step = 0; step < step_count; ++step) {
-        const double dt = step + 1 == step_count ? options.final_time - time : target_step;
+        const long double remaining_schedule =
+            std::fma(-static_cast<long double>(step), target_step_schedule, final_time_schedule);
+        const long double elapsed_schedule = final_time_schedule - remaining_schedule;
+        double time = static_cast<double>(elapsed_schedule);
+        if (step + 1 == step_count && remaining_schedule > 0.0L && time >= options.final_time) {
+            time = std::nextafter(options.final_time, -std::numeric_limits<double>::infinity());
+        }
+        const double dt = step + 1 == step_count
+                              ? std::min(target_step, static_cast<double>(remaining_schedule))
+                              : target_step;
         if (!(dt > 0.0) || !finite(dt)) {
-            throw std::runtime_error("floating-point time accumulation produced an invalid step");
+            throw std::runtime_error("floating-point time schedule produced an invalid step");
         }
         takeStep(problem, essential_data, result.concentration, next, x_flux, y_flux, time, dt,
                  options.check_finite);
         diagnostics.minimum_time_step = std::min(diagnostics.minimum_time_step, dt);
         diagnostics.maximum_time_step = std::max(diagnostics.maximum_time_step, dt);
-        time += dt;
     }
 
     // Assigning the requested value avoids exposing harmless summation roundoff.

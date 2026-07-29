@@ -78,6 +78,29 @@ void constructionRejectsAmbiguousOrNonphysicalInputs() {
                                                 0.0, 0.0, 0.0, 1.0, 0, {});
         },
         "tumor pressure improperly weakened the outer pressure-boundary check");
+
+    StructuredMesh zero_pressure_mesh(2, 2, 0.0, 1.0, 0.0, 1.0);
+    TumorDrugDeliverySolver zero_pressure_solver(zero_pressure_mesh, emptyMask(zero_pressure_mesh),
+                                                 constantField(zero_pressure_mesh, 1.0), 0.0, 0.0);
+    auto near_zero_boundary = constantField(zero_pressure_mesh, 0.0);
+    for (int i = 0; i <= zero_pressure_mesh.nx(); ++i) {
+        near_zero_boundary[static_cast<std::size_t>(zero_pressure_mesh.index(i, 0))] = -1.0e-14;
+        near_zero_boundary[static_cast<std::size_t>(
+            zero_pressure_mesh.index(i, zero_pressure_mesh.ny()))] = -1.0e-14;
+    }
+    for (int j = 0; j <= zero_pressure_mesh.ny(); ++j) {
+        near_zero_boundary[static_cast<std::size_t>(zero_pressure_mesh.index(0, j))] = -1.0e-14;
+        near_zero_boundary[static_cast<std::size_t>(
+            zero_pressure_mesh.index(zero_pressure_mesh.nx(), j))] = -1.0e-14;
+    }
+    requireThrows<std::invalid_argument>(
+        [&] {
+            (void)zero_pressure_solver.simulate(
+                near_zero_boundary, constantField(zero_pressure_mesh, 0.0),
+                constantField(zero_pressure_mesh, 0.0), constantField(zero_pressure_mesh, 0.0), 0.0,
+                0.0, 0.0, 1.0, 0, {});
+        },
+        "a physically different near-zero fixed-pressure boundary was accepted");
 }
 
 void pressureSolveRespectsBoundsSymmetryAndConvergence() {

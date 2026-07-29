@@ -15,14 +15,59 @@ where:
 The example shows:
 1. A bolus injection (Gaussian pulse) being carried downstream
 2. The effect of Peclet number on transport regime
-3. Comparison of upwind vs central differencing schemes
+3. Comparison of upwind and cell-Peclet hybrid differencing
+
+The specialized ``AdvectionDiffusionSolver`` is used because it explicitly
+supports those legacy advective-form stencils. The intuitive ``bt.solve`` API
+uses the conservative transport equation and currently admits upwind
+advection only. For the uniform velocities used here, divergence is zero, so
+the conservative and advective PDE forms coincide.
 
 BMEN 341 Reference: Weeks 5-6 (Convection-Diffusion, Peclet Number)
 """
 
-import numpy as np
+import math
+import time
+
 import matplotlib.pyplot as plt
+import numpy as np
+
 import biotransport as bt
+
+
+def solve_advective_form(
+    mesh,
+    diffusivity,
+    vx,
+    vy,
+    scheme,
+    initial,
+    duration,
+    *,
+    safety=0.4,
+):
+    """Advance a uniform, divergence-free advective-form problem exactly."""
+    solver = bt.AdvectionDiffusionSolver(
+        mesh,
+        diffusivity=diffusivity,
+        vx=vx,
+        vy=vy,
+        scheme=scheme,
+    )
+    solver.set_initial_condition(initial)
+    solver.set_boundary(bt.Boundary.Left, bt.BoundaryCondition.dirichlet(0.0))
+    solver.set_boundary(bt.Boundary.Right, bt.BoundaryCondition.neumann(0.0))
+    if not mesh.is_1d():
+        solver.set_boundary(bt.Boundary.Bottom, bt.BoundaryCondition.neumann(0.0))
+        solver.set_boundary(bt.Boundary.Top, bt.BoundaryCondition.neumann(0.0))
+
+    maximum_step = solver.max_time_step(safety)
+    steps = max(1, math.ceil(duration / maximum_step))
+    step = duration / steps
+    start = time.perf_counter()
+    solver.solve(step, steps)
+    elapsed = time.perf_counter() - start
+    return np.asarray(solver.solution()).copy(), steps, step, elapsed
 
 
 def run_advection_diffusion_1d():
@@ -49,6 +94,15 @@ def run_advection_diffusion_1d():
     print(f"  Drug diffusivity: {D:.2e} m²/s")
     print(f"  Domain Peclet: {Pe:.2e}")
     print(f"  Cell Peclet: {Pe_cell:.1f}")
+    if Pe_cell >= 2.0:
+        print(
+            "  The hybrid stencil selects upwind at this cell Peclet number; "
+            "matching curves are expected."
+        )
+        print(
+            "  Physical diffusion is under-resolved on this teaching grid, so "
+            "upwind numerical diffusion affects the pulse width."
+        )
 
     # Initial condition: Gaussian bolus at x = 2 cm
     # Using the gaussian helper with center and width in domain coordinates
@@ -67,23 +121,21 @@ def run_advection_diffusion_1d():
 
     results = {}
     for name, scheme in schemes:
-        problem = (
-            bt.Problem(mesh)
-            .diffusivity(D)
-            .velocity(v_blood)
-            .advection_scheme(scheme)
-            .initial_condition(ic.tolist())
-            .dirichlet(bt.Boundary.Left, 0.0)
-            .neumann(bt.Boundary.Right, 0.0)
+        solution, steps, step, wall_time = solve_advective_form(
+            mesh,
+            D,
+            v_blood,
+            0.0,
+            scheme,
+            ic,
+            t_end,
         )
 
-        result = bt.solve(problem, t=t_end, safety_factor=0.4)
-
-        results[name] = result
+        results[name] = solution
         print(f"\n{name} scheme:")
-        print(f"  Steps: {result.stats.steps}")
-        print(f"  dt: {result.stats.dt:.2e} s")
-        print(f"  Wall time: {result.stats.wall_time_s:.3f} s")
+        print(f"  Steps: {steps}")
+        print(f"  dt: {step:.2e} s")
+        print(f"  Wall time: {wall_time:.3f} s")
 
     # Expected final position
     expected_x = x0 + v_blood * t_end
@@ -96,8 +148,7 @@ def run_advection_diffusion_1d():
 
     # Initial condition
     axes[0].plot(x * 100, ic, "k--", linewidth=2, label="Initial (t=0)")
-    for name, result in results.items():
-        sol = result.solution()
+    for name, sol in results.items():
         axes[0].plot(x * 100, sol, linewidth=2, label=f"{name} (t={t_end}s)")
     axes[0].axvline(
         expected_x * 100, color="gray", linestyle=":", label="Expected center"
@@ -110,8 +161,7 @@ def run_advection_diffusion_1d():
 
     # Zoom on the bolus
     axes[1].plot(x * 100, ic, "k--", linewidth=2, label="Initial")
-    for name, result in results.items():
-        sol = result.solution()
+    for name, sol in results.items():
         axes[1].plot(x * 100, sol, linewidth=2, label=f"{name}")
     axes[1].set_xlim([expected_x * 100 - 3, expected_x * 100 + 3])
     axes[1].set_xlabel("Position (cm)")
@@ -145,9 +195,9 @@ def run_peclet_comparison():
     # Pe > 1: advection dominates (translation)
     # Pe >> 1: strongly convective (minimal spreading)
     cases = [
-        {"D": 1e-4, "v": 0.001, "label": "Diffusion-dominated (Pe~1)"},
-        {"D": 1e-6, "v": 0.01, "label": "Convection-dominated (Pe~100)"},
-        {"D": 1e-8, "v": 0.05, "label": "Strongly convective (Pe~5000)"},
+        {"D": 1e-4, "v": 0.001, "label": "Balanced domain transport"},
+        {"D": 1e-6, "v": 0.01, "label": "Advection-dominated"},
+        {"D": 1e-8, "v": 0.05, "label": "Strongly advection-dominated"},
     ]
 
     x0 = 0.02
@@ -162,21 +212,22 @@ def run_peclet_comparison():
     for case in cases:
         Pe = bt.dimensionless.peclet(case["v"], L, case["D"])
 
-        problem = (
-            bt.Problem(mesh)
-            .diffusivity(case["D"])
-            .velocity(case["v"])
-            .advection_scheme(bt.AdvectionScheme.HYBRID)
-            .initial_condition(ic.tolist())
-            .dirichlet(bt.Boundary.Left, 0.0)
-            .neumann(bt.Boundary.Right, 0.0)
+        sol, steps, _, _ = solve_advective_form(
+            mesh,
+            case["D"],
+            case["v"],
+            0.0,
+            bt.AdvectionScheme.HYBRID,
+            ic,
+            t_end,
         )
-
-        result = bt.solve(problem, t=t_end)
-        sol = result.solution()
         ax.plot(x * 100, sol, linewidth=2, label=f"{case['label']}")
 
-        print(f"{case['label']}: Pe = {Pe:.0f}, steps = {result.stats.steps}")
+        cell_peclet = abs(case["v"]) * mesh.dx() / case["D"]
+        print(
+            f"{case['label']}: domain Pe = {Pe:.0f}, "
+            f"cell Pe = {cell_peclet:.2g}, steps = {steps}"
+        )
 
     ax.set_xlabel("Position (cm)")
     ax.set_ylabel("Concentration")
@@ -216,32 +267,26 @@ def run_2d_transport():
     r2 = (X - x0) ** 2 + (Y - y0) ** 2
     ic = np.exp(-r2 / (r0**2)).reshape(-1)
 
-    # Uniform velocity in +x direction (Poiseuille profile could be added)
-    problem = (
-        bt.Problem(mesh)
-        .diffusivity(D)
-        .velocity(v_mean, 0.0)  # vx, vy
-        .advection_scheme(bt.AdvectionScheme.HYBRID)
-        .initial_condition(ic.tolist())
-        .dirichlet(bt.Boundary.Left, 0.0)
-        .neumann(bt.Boundary.Right, 0.0)
-        .neumann(bt.Boundary.Bottom, 0.0)
-        .neumann(bt.Boundary.Top, 0.0)
-    )
-
     # Time snapshots
     times = [0.0, 1.0, 2.0, 4.0]
     snapshots = [ic.copy()]
     current_t = 0.0
 
     for t in times[1:]:
-        dt = t - current_t
-        result = bt.solve(problem, t=dt, safety_factor=0.3)
-        snapshots.append(result.solution().copy())
-        # Update IC for next segment
-        problem.initial_condition(result.solution().tolist())
+        duration = t - current_t
+        solution, steps, _, _ = solve_advective_form(
+            mesh,
+            D,
+            v_mean,
+            0.0,
+            bt.AdvectionScheme.HYBRID,
+            snapshots[-1],
+            duration,
+            safety=0.3,
+        )
+        snapshots.append(solution)
         current_t = t
-        print(f"t = {t:.1f}s: steps = {result.stats.steps}")
+        print(f"t = {t:.1f}s: steps = {steps}")
 
     # Plot snapshots
     fig, axes = plt.subplots(2, 2, figsize=(12, 6))

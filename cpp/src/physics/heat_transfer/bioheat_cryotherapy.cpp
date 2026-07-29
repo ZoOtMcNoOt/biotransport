@@ -247,29 +247,22 @@ BioheatSaved BioheatCryotherapySolver::simulate(double dt, int num_steps,
     }
 
     const double stable_dt_s = maximumStableTimeStep();
-    const double comparison_tolerance = 32.0 * std::numeric_limits<double>::epsilon() * stable_dt_s;
-    if (dt > stable_dt_s + comparison_tolerance) {
+    if (dt > stable_dt_s) {
         throw std::invalid_argument("dt exceeds the conservative explicit stability limit of " +
                                     std::to_string(stable_dt_s) + " s");
     }
 
-    const double time_tolerance =
-        64.0 * std::numeric_limits<double>::epsilon() * std::max({1.0, total_time_s, dt});
     std::vector<double> save_times;
     save_times.reserve(times_to_save_s.size());
     for (double requested : times_to_save_s) {
         requireFinite(requested, "save time");
-        if (requested < -time_tolerance || requested > total_time_s + time_tolerance) {
+        if (requested < 0.0 || requested > total_time_s) {
             throw std::invalid_argument("save times must lie in [0, dt * num_steps]");
         }
-        save_times.push_back(std::clamp(requested, 0.0, total_time_s));
+        save_times.push_back(requested == 0.0 ? 0.0 : requested);
     }
     std::sort(save_times.begin(), save_times.end());
-    save_times.erase(std::unique(save_times.begin(), save_times.end(),
-                                 [&](double first, double second) {
-                                     return std::abs(first - second) <= time_tolerance;
-                                 }),
-                     save_times.end());
+    save_times.erase(std::unique(save_times.begin(), save_times.end()), save_times.end());
 
     const auto node_count = static_cast<std::size_t>(mesh_.numNodes());
     std::vector<double> temperature = initial_temperature_K_;
@@ -317,7 +310,7 @@ BioheatSaved BioheatCryotherapySolver::simulate(double dt, int num_steps,
 
     std::size_t next_save = 0;
     double time_s = 0.0;
-    if (next_save < save_times.size() && save_times[next_save] <= time_tolerance) {
+    if (next_save < save_times.size() && save_times[next_save] == 0.0) {
         save(0.0);
         ++next_save;
     }
@@ -407,8 +400,8 @@ BioheatSaved BioheatCryotherapySolver::simulate(double dt, int num_steps,
         temperature.swap(next_temperature);
     };
 
-    while (time_s < total_time_s - time_tolerance) {
-        while (next_save < save_times.size() && save_times[next_save] <= time_s + time_tolerance) {
+    while (time_s < total_time_s) {
+        while (next_save < save_times.size() && save_times[next_save] == time_s) {
             save(save_times[next_save]);
             ++next_save;
         }
@@ -417,25 +410,30 @@ BioheatSaved BioheatCryotherapySolver::simulate(double dt, int num_steps,
         if (next_save < save_times.size()) {
             target_time_s = std::min(target_time_s, save_times[next_save]);
         }
-        const double step_s = std::min(dt, target_time_s - time_s);
+        const double remaining_s = target_time_s - time_s;
+        const double step_s = std::min(dt, remaining_s);
         if (!(step_s > 0.0) || !std::isfinite(step_s)) {
             throw std::runtime_error("time integration failed to make positive finite progress");
         }
 
         advance(step_s);
-        time_s += step_s;
-        if (std::abs(time_s - target_time_s) <= time_tolerance) {
+        if (step_s == remaining_s) {
             time_s = target_time_s;
+        } else {
+            const double next_time_s = time_s + step_s;
+            if (!std::isfinite(next_time_s) || next_time_s <= time_s) {
+                throw std::runtime_error("time integration failed to advance the bioheat clock");
+            }
+            time_s = next_time_s;
         }
     }
 
-    time_s = total_time_s;
-    while (next_save < save_times.size()) {
-        if (std::abs(save_times[next_save] - time_s) > time_tolerance) {
-            throw std::runtime_error("failed to reach a requested save time exactly");
-        }
+    while (next_save < save_times.size() && save_times[next_save] == time_s) {
         save(save_times[next_save]);
         ++next_save;
+    }
+    if (next_save != save_times.size()) {
+        throw std::runtime_error("failed to reach a requested save time exactly");
     }
 
     result.frames = static_cast<int>(result.times_s.size());

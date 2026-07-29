@@ -14,9 +14,11 @@ The architectural rule is therefore narrower and testable:
 
 The canonical `Problem` / `solve` path is thin: Python normalizes arguments and
 calls the compiled `solve_transport` entry point. Older Python numerical paths
-remain separate experimental surfaces. They should either move their kernels
-to C++, gain their own equation/evidence contracts, or be retired; they are not
-covered by the canonical contract merely because they share a package.
+remain separate surfaces and do not borrow the canonical claim. The separate
+`PythonNumericalContract` registry now names their backend, mathematical scope,
+failure policy, evidence, and disposition. Native adapters are retained;
+workflow orchestration stays in Python; legacy stepping loops are explicit
+port/deprecation candidates.
 
 ## Governing contract
 
@@ -36,16 +38,21 @@ Every native solver contract must state:
 - exact automated evidence references; and
 - exclusions and interpretation warnings.
 
-`python/biotransport/contracts.py` is the machine-readable registry. Runtime
-tests require exact coverage of public native solver entry points and reject
-stale evidence paths. An evidence level applies only to its recorded claim; it
-is not biological validation or a blanket endorsement of every configuration.
+`python/biotransport/contracts.py` contains two machine-readable registries.
+`SolverContract` covers compiled solver entry points. The deliberately separate
+`PythonNumericalContract` covers governed public Python modules without
+mislabeling them as native. Runtime tests require exact native entry-point
+coverage, exact ownership of public symbols from governed Python modules, and
+current evidence paths. An evidence level applies only to its recorded claim;
+it is not biological validation or a blanket endorsement of every
+configuration.
 
 ## Layer responsibilities
 
 ```text
 Scientific records and orchestration (Python)
   units | parameter provenance | UQ screening | reproducibility manifests
+  convergence | explicitly labeled reference algorithms
                               |
 User configuration and native bindings (Python/pybind11)
                               |
@@ -85,8 +92,9 @@ The layers have explicit boundaries:
    Each specialized solver contract states its own stability and exact-time
    policy.
 6. Unsupported schemes, dimensions, constitutive domains, singular systems,
-   and non-converged solves fail loudly instead of falling through to another
-   model.
+   and non-converged solves fail loudly or return an explicit non-converged
+   diagnostic instead of falling through to another model or pretending
+   success.
 7. No method clips, normalizes, substitutes a theoretical result, or changes
    requested time/state semantics without reporting it.
 8. Friendly APIs may reduce ceremony, but may not hide equation, units,
@@ -124,6 +132,14 @@ indeterminate, never replaced with theoretical order. A convergence study that
 exists only as a runnable example must be described as an example until it is
 part of the always-on test gate.
 
+The canonical test gate now contains smooth-diffusion spatial refinement,
+heterogeneous mixed-boundary upwind refinement, and reaction-time refinement.
+Specialized order evidence remains solver-specific: current examples include a
+manufactured Navier--Stokes velocity field, bioheat spatial/time eigenmodes,
+the Nernst--Planck diffusion limit, and cylindrical radial/angular operators.
+The specialized spatial studies use ``dt=O(h^3)`` to suppress first-order time
+error.
+
 ## Performance policy
 
 Performance work follows discrete-model verification. Kernels stay in C++ when
@@ -131,6 +147,13 @@ their workload benefits from native execution, release the Python GIL when
 safe, and operate on explicit data layouts. OpenMP, SIMD, sparse backends, and
 accelerators must preserve the documented scientific result within stated
 tolerances.
+
+The friendly `solve()` path and explicit `integrate(method="euler")` execute
+the canonical C++ solver. Omitting `integrate()`'s method temporarily warns and
+preserves historical RK4 behavior. Python sensitivity/convergence
+orchestration remains Python by design. Legacy adaptive, Heun/RK4 diffusion,
+Newton, and pulsatile reference paths are discoverable in the Python numerical
+registry and are not presented as native-performance APIs.
 
 No “massive speedup” or generic performance claim is published without a
 reproducible baseline containing the problem size, correctness criterion,

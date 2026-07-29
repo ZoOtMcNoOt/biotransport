@@ -198,15 +198,11 @@ protected:
         if (!std::isfinite(dt) || dt <= 0.0) {
             return false;
         }
-        double dx = mesh_.dx();
-        double max_dt = dx * dx / (2.0 * diffusivity_);
-
+        double total_diffusion_number = StencilOps::diffusionNumber(diffusivity_, dt, mesh_.dx());
         if (!mesh_.is1D()) {
-            double dy = mesh_.dy();
-            max_dt = 1.0 / (2.0 * diffusivity_ * (1.0 / (dx * dx) + 1.0 / (dy * dy)));
+            total_diffusion_number += StencilOps::diffusionNumber(diffusivity_, dt, mesh_.dy());
         }
-
-        bool stable = dt <= max_dt;
+        bool stable = std::isfinite(total_diffusion_number) && total_diffusion_number <= 0.5;
 
         // Let derived class add its own stability checks
         if (stable) {

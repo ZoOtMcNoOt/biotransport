@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import math
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,30 @@ import biotransport.reproducibility as repro
 
 EXAMPLE_NAME = "verification/reproducible_artifact"
 RANDOM_SEED = 20260722
+
+
+def required_mapping(
+    values: Mapping[str, object], key: str, context: str
+) -> Mapping[str, object]:
+    """Read required nested manifest metadata without unchecked casts."""
+    value = values.get(key)
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{context}.{key} must be a JSON object")
+    return value
+
+
+def required_string(values: Mapping[str, object], key: str, context: str) -> str:
+    value = values.get(key)
+    if not isinstance(value, str):
+        raise RuntimeError(f"{context}.{key} must be a string")
+    return value
+
+
+def required_bool(values: Mapping[str, object], key: str, context: str) -> bool:
+    value = values.get(key)
+    if not isinstance(value, bool):
+        raise RuntimeError(f"{context}.{key} must be a boolean")
+    return value
 
 
 def relative_l2(numerical: np.ndarray, reference: np.ndarray) -> float:
@@ -185,18 +210,41 @@ def main() -> int:
         ],
         include_volatile=args.include_volatile,
     )
-    output = repro.write_manifest(args.output, manifest, overwrite=args.overwrite)
+    try:
+        output = repro.write_manifest(args.output, manifest, overwrite=args.overwrite)
+    except FileExistsError:
+        existing = repro.load_manifest(args.output)
+        if args.include_volatile or existing != manifest:
+            raise FileExistsError(
+                f"{args.output} already contains different content; "
+                "pass --overwrite to replace it"
+            ) from None
+        output = args.output
     loaded = repro.load_manifest(output)
+    configuration = required_mapping(loaded, "configuration", "manifest")
+    configuration_fingerprint = required_mapping(
+        configuration, "fingerprint", "manifest.configuration"
+    )
+    content_fingerprint = required_mapping(loaded, "content_fingerprint", "manifest")
+    software = required_mapping(loaded, "software", "manifest")
+    native_software = required_mapping(software, "native", "manifest.software")
+    configuration_sha256 = required_string(
+        configuration_fingerprint, "value", "manifest.configuration.fingerprint"
+    )
+    content_sha256 = required_string(
+        content_fingerprint, "value", "manifest.content_fingerprint"
+    )
+    native_available = required_bool(
+        native_software, "available", "manifest.software.native"
+    )
 
     print("Reproducible numerical artifact")
     print(f"  study passed                 {results['passed']}")
     print(f"  finest relative L2 error     {results['finest_relative_l2_error']:.3e}")
     print(f"  finest observed order        {results['finest_observed_order']:.3f}")
-    print(
-        f"  configuration SHA-256        {loaded['configuration']['fingerprint']['value']}"
-    )
-    print(f"  manifest content SHA-256     {loaded['content_fingerprint']['value']}")
-    print(f"  native metadata available    {loaded['software']['native']['available']}")
+    print(f"  configuration SHA-256        {configuration_sha256}")
+    print(f"  manifest content SHA-256     {content_sha256}")
+    print(f"  native metadata available    {native_available}")
     print(f"  output                        {output}")
     if args.include_volatile:
         print("  volatile run metadata         included (bytes vary between runs)")

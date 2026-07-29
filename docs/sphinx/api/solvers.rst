@@ -15,6 +15,70 @@ The classes below are specialized numerical surfaces.  Their benchmarks apply
 only to their stated equation, dimensions, coefficients, and boundary
 conditions; they do not inherit the canonical solver's evidence automatically.
 
+Friendly native adapters
+------------------------
+
+The primary :func:`solve` adapter and result diagnostics are documented on
+:doc:`core`.
+
+.. autofunction:: run
+
+.. autofunction:: run_checkpoints
+
+.. autoclass:: CheckpointResult
+   :members:
+
+``run_checkpoints`` partitions time into native solve segments and returns
+per-segment diagnostics.  Automatic or shortened steps can therefore produce a
+slightly different valid discrete trajectory than one one-shot solve.  A
+requested step that divides every segment preserves the same partition.
+This alpha API now returns an immutable mapping-like ``CheckpointResult`` rather
+than a mutable ``dict``; indexing and ``dict(result)`` remain supported, while
+callers that mutate the returned mapping must migrate to their own copy.
+
+Python reference and legacy time surfaces
+-----------------------------------------
+
+These APIs have separate :class:`PythonNumericalContract` records and do not
+claim native performance.  Explicit ``integrate(method="euler")`` uses the
+canonical native Euler path.  Omitting ``method`` temporarily emits a
+``FutureWarning`` and preserves historical RK4 behavior; explicit Heun/RK4
+diffusion remains a legacy path.
+
+.. autoclass:: AdaptiveTimeStepper
+   :members:
+
+.. autoclass:: AdaptiveTimeStepperConfig
+   :members:
+
+.. autofunction:: solve_adaptive
+
+.. autoclass:: RK4Integrator
+   :members:
+
+.. autoclass:: HeunIntegrator
+   :members:
+
+.. autofunction:: integrate
+
+.. autofunction:: integrate_explicit_runge_kutta
+
+.. autoclass:: HighOrderDiffusionSolver
+   :members:
+
+.. autoclass:: NewtonRaphsonSolver
+   :members:
+
+.. autoclass:: NonlinearDiffusionSolver
+   :members:
+
+.. autofunction:: solve_pulsatile
+
+Inspect :func:`get_python_numerical_contract` for each backend, failure policy,
+evidence, and retain/port/deprecate disposition.  Newton iteration exhaustion
+returns a result with ``converged=False`` rather than silently reporting
+success.
+
 Diffusion
 ---------
 

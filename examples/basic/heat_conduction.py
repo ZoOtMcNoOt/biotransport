@@ -48,8 +48,8 @@ for t_target in times:
         .dirichlet(bt.Boundary.Right, T_right)
     )
 
-    result = bt.solve(problem, t=t_target - t_current, safety_factor=0.9)
-    solutions[t_target] = list(result.solution())
+    result = bt.solve(problem, end_time=t_target - t_current, safety_factor=0.9)
+    solutions[t_target] = result.concentration.tolist()
 
 # Plot evolution
 plt.figure(figsize=(12, 8))

@@ -1,423 +1,361 @@
 #!/usr/bin/env python3
-"""
-Navier-Stokes Flow Examples - Transient Viscous Flow
+"""Bounded, incompressible Navier--Stokes examples.
 
-This example demonstrates the Navier-Stokes solver for incompressible
-viscous flow, relevant to larger vessels and higher Reynolds numbers.
+The compatible :class:`biotransport.NavierStokesSolver` advances a Newtonian,
+laminar flow on a two-dimensional MAC (staggered) grid.  It currently supports
+closed domains with no-slip or constant Dirichlet velocity boundaries.  Open
+inlets/outlets and prescribed-pressure or traction boundaries need a different
+pressure-boundary model and are deliberately rejected.
 
-BMEN 341 Relevance:
-- Part II: Fluid Mechanics - Full Navier-Stokes equations
-- Blood flow in arteries
-- Flow development in vessels
-- Pulsatile flow (time-dependent)
-
-The Navier-Stokes equations:
-    ρ(∂v/∂t + v·∇v) = -∇p + μ∇²v + f
-    ∇·v = 0  (incompressibility)
+These examples therefore use wall-driven cavities.  They demonstrate transient
+momentum diffusion, oscillatory wall forcing, and Reynolds-number sensitivity;
+they are not models of an open blood vessel.  Pressure is the cell-centred
+projection pressure with a zero-mean gauge, so only pressure differences are
+physical.  The solver has no turbulence or non-Newtonian closure.
 """
 
-import numpy as np
+from __future__ import annotations
+
 import matplotlib.pyplot as plt
+import numpy as np
+
 import biotransport as bt
 
 
-def example_developing_flow():
-    """
-    Flow development from uniform to parabolic profile.
+EXAMPLE_NAME = "navier_stokes"
 
-    Starting from a uniform inlet velocity, the flow develops
-    into the characteristic parabolic Poiseuille profile.
 
-    Development length: L_e ≈ 0.06 * Re * D
-    """
-    print("=" * 60)
-    print("Example 1: Developing Channel Flow")
-    print("=" * 60)
-
-    # Channel dimensions
-    L = 0.01  # 1 cm channel length
-    H = 0.001  # 1 mm channel height
-
-    # Fluid properties (blood-like)
-    rho = 1060.0  # kg/m³
-    mu = 0.0035  # Pa·s (blood viscosity)
-
-    # Inlet velocity
-    U_inlet = 0.1  # 10 cm/s (typical arterial flow)
-
-    # Reynolds number
-    Re = rho * U_inlet * H / mu
-    print(f"  Reynolds number: {Re:.1f}")
-
-    # Development length estimate
-    L_dev = 0.06 * Re * H
-    print(f"  Development length: {L_dev * 1000:.1f} mm")
-
-    # Create mesh (nx, ny, xmin, xmax, ymin, ymax)
-    nx, ny = 101, 26
-    mesh = bt.StructuredMesh(nx, ny, 0.0, L, 0.0, H)
-
-    # Create Navier-Stokes solver
-    solver = bt.NavierStokesSolver(mesh, rho, mu)
-    solver.set_convection_scheme(bt.ConvectionScheme.UPWIND)
-
-    # Set boundary conditions using factory methods
+def _set_closed_cavity_boundaries(
+    solver: bt.NavierStokesSolver, lid_velocity: float
+) -> None:
+    """Apply flux-compatible walls with a tangentially moving top lid."""
+    solver.set_velocity_bc(bt.Boundary.Left, bt.VelocityBC.no_slip())
+    solver.set_velocity_bc(bt.Boundary.Right, bt.VelocityBC.no_slip())
     solver.set_velocity_bc(bt.Boundary.Bottom, bt.VelocityBC.no_slip())
-    solver.set_velocity_bc(bt.Boundary.Top, bt.VelocityBC.no_slip())
-    solver.set_velocity_bc(bt.Boundary.Left, bt.VelocityBC.inflow(U_inlet, 0.0))
-    solver.set_velocity_bc(bt.Boundary.Right, bt.VelocityBC.outflow())
+    solver.set_velocity_bc(bt.Boundary.Top, bt.VelocityBC.dirichlet(lid_velocity, 0.0))
 
-    # Time stepping
-    dt = 1e-4  # Larger time step for faster execution
-    t_final = 0.01  # 10 ms (reduced for faster example run)
 
-    print(f"  Simulating to t = {t_final * 1000:.0f} ms...")
+def _cell_centered_fields(
+    result: bt.NavierStokesResult, nx: int, ny: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Interpolate packed MAC velocities to cells and remove display padding."""
+    shape = (ny + 1, nx + 1)
+    u_faces = np.asarray(result.u()).reshape(shape)
+    v_faces = np.asarray(result.v()).reshape(shape)
+    pressure_packed = np.asarray(result.pressure()).reshape(shape)
 
-    # Integrate transient Navier–Stokes forward in time.
-    # The Python bindings expose `set_time_step(dt)` + `solve(duration, output_interval)`.
-    solver.set_time_step(dt)
-    result = solver.solve(t_final, output_interval=0.0)
+    u_cells = 0.5 * (u_faces[:ny, :nx] + u_faces[:ny, 1 : nx + 1])
+    v_cells = 0.5 * (v_faces[:ny, :nx] + v_faces[1 : ny + 1, :nx])
+    pressure_cells = pressure_packed[:ny, :nx]
+    return u_cells, v_cells, pressure_cells
 
-    print(f"  Stable: {result.stable}")
-    print(f"  Final time: {result.time * 1000:.2f} ms")
-    print(f"  Time steps: {result.time_steps}")
-    print(f"  Max velocity: {result.max_velocity:.4f} m/s")
 
-    # Extract results (NavierStokes uses (nx+1, ny+1) nodes)
-    u = result.u().reshape((ny + 1, nx + 1))
-    v = result.v().reshape((ny + 1, nx + 1))
-    p = result.pressure().reshape((ny + 1, nx + 1))
+def _require_stable(result: bt.NavierStokesResult, label: str) -> None:
+    """Stop an example instead of plotting a failed numerical state."""
+    arrays = (result.u(), result.v(), result.pressure())
+    if not result.stable or not all(np.all(np.isfinite(values)) for values in arrays):
+        raise RuntimeError(f"{label} did not return a finite projection-stable state")
 
-    # Plot results
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-    # Velocity field
-    ax = axes[0, 0]
-    speed = np.sqrt(u**2 + v**2)
-    im = ax.imshow(
+def example_lid_driven_cavity() -> bt.NavierStokesResult:
+    """Show transient momentum transfer from a moving wall into a closed cavity."""
+    print("=" * 68)
+    print("Example 1: Transient Lid-Driven Cavity")
+    print("=" * 68)
+
+    # SI values give a low-Reynolds-number, blood-viscosity-scale demonstration.
+    length = 1.0e-3
+    density = 1060.0
+    viscosity = 3.5e-3
+    lid_velocity = 5.0e-2
+    reynolds = density * lid_velocity * length / viscosity
+    print(f"  Lid Reynolds number rho*U*L/mu: {reynolds:.2f}")
+
+    nx = ny = 20
+    mesh = bt.StructuredMesh(nx, ny, 0.0, length, 0.0, length)
+    solver = bt.NavierStokesSolver(mesh, density, viscosity)
+    solver.set_convection_scheme(bt.ConvectionScheme.CENTRAL)
+    solver.set_pressure_tolerance(1.0e-9)
+    _set_closed_cavity_boundaries(solver, lid_velocity)
+
+    # Adaptive stepping enforces the explicit convective/diffusive stability bound.
+    result = solver.solve_steps(100)
+    _require_stable(result, "lid-driven cavity")
+    u, v, pressure = _cell_centered_fields(result, nx, ny)
+    speed = np.hypot(u, v)
+
+    x = (np.arange(nx) + 0.5) * length / nx
+    y = (np.arange(ny) + 0.5) * length / ny
+    x_mm = x * 1.0e3
+    y_mm = y * 1.0e3
+
+    figure, axes = plt.subplots(2, 2, figsize=(12, 9))
+
+    image = axes[0, 0].imshow(
         speed,
-        extent=[0, L * 1000, 0, H * 1000],
+        extent=[0.0, length * 1.0e3, 0.0, length * 1.0e3],
         origin="lower",
-        aspect="auto",
-        cmap="jet",
+        aspect="equal",
+        cmap="viridis",
     )
-    ax.set_xlabel("x (mm)")
-    ax.set_ylabel("y (mm)")
-    ax.set_title("Velocity Magnitude (Steady State)")
-    plt.colorbar(im, ax=ax, label="m/s")
+    axes[0, 0].set_title("Cell-Centred Speed")
+    axes[0, 0].set_xlabel("x (mm)")
+    axes[0, 0].set_ylabel("y (mm)")
+    figure.colorbar(image, ax=axes[0, 0], label="m/s")
 
-    # Velocity profiles at different x locations
-    ax = axes[0, 1]
-    y = np.linspace(0, H * 1000, ny + 1)
-    x_locs = [0.1, 0.25, 0.5, 0.75, 0.9]  # Fractions along channel
-
-    for frac in x_locs:
-        i = int(frac * nx)
-        x_pos = frac * L * 1000
-        ax.plot(u[:, i] / U_inlet, y, "-", linewidth=2, label=f"x = {x_pos:.1f} mm")
-
-    # Add analytical fully-developed profile
-    y_norm = np.linspace(0, 1, 100)
-    u_analytical = 1.5 * (1 - (2 * y_norm - 1) ** 2)  # Normalized parabolic profile
-    ax.plot(
-        u_analytical,
-        y_norm * H * 1000,
-        "k--",
-        linewidth=2,
-        label="Poiseuille (analytical)",
+    pressure_image = axes[0, 1].imshow(
+        pressure,
+        extent=[0.0, length * 1.0e3, 0.0, length * 1.0e3],
+        origin="lower",
+        aspect="equal",
+        cmap="coolwarm",
     )
+    axes[0, 1].set_title("Projection Pressure (Zero-Mean Gauge)")
+    axes[0, 1].set_xlabel("x (mm)")
+    axes[0, 1].set_ylabel("y (mm)")
+    figure.colorbar(pressure_image, ax=axes[0, 1], label="Pa")
 
-    ax.set_xlabel("u / U_inlet")
-    ax.set_ylabel("y (mm)")
-    ax.set_title("Velocity Profile Development")
-    ax.legend(loc="right")
-    ax.grid(True, alpha=0.3)
-
-    # Pressure along centerline
-    ax = axes[1, 0]
-    x = np.linspace(0, L * 1000, nx + 1)
-    p_centerline = p[(ny + 1) // 2, :]
-    ax.plot(x, p_centerline, "b-", linewidth=2)
-    ax.set_xlabel("x (mm)")
-    ax.set_ylabel("Pressure (Pa)")
-    ax.set_title("Centerline Pressure Distribution")
-    ax.grid(True, alpha=0.3)
-
-    # Streamlines
-    ax = axes[1, 1]
-    x_grid = np.linspace(0, L, nx + 1)
-    y_grid = np.linspace(0, H, ny + 1)
-    X, Y = np.meshgrid(x_grid, y_grid)
-    ax.streamplot(X * 1000, Y * 1000, u, v, density=2, color="blue", linewidth=0.8)
-    ax.set_xlabel("x (mm)")
-    ax.set_ylabel("y (mm)")
-    ax.set_title("Streamlines")
-    ax.set_xlim([0, L * 1000])
-    ax.set_ylim([0, H * 1000])
-
-    plt.tight_layout()
-    plt.savefig(bt.get_result_path("navier_stokes_developing_flow.png"), dpi=150)
-    plt.close()
-
-    print(
-        f"  Maximum velocity: {np.max(u):.4f} m/s (expected: {1.5 * U_inlet:.4f} m/s)"
+    axes[1, 0].streamplot(
+        x_mm,
+        y_mm,
+        u,
+        v,
+        color=speed,
+        cmap="viridis",
+        density=1.4,
+        linewidth=0.9,
     )
-    print("  Plot saved to results/navier_stokes_developing_flow.png")
+    axes[1, 0].set_title("Cell-Centred Streamlines")
+    axes[1, 0].set_xlabel("x (mm)")
+    axes[1, 0].set_ylabel("y (mm)")
+    axes[1, 0].set_aspect("equal")
 
+    centre_column = nx // 2
+    axes[1, 1].plot(u[:, centre_column] / lid_velocity, y_mm, linewidth=2)
+    axes[1, 1].axvline(0.0, color="black", linewidth=0.8)
+    axes[1, 1].set_title("Transient Horizontal-Velocity Profile")
+    axes[1, 1].set_xlabel("u / U_lid")
+    axes[1, 1].set_ylabel("y (mm)")
+    axes[1, 1].grid(True, alpha=0.3)
+
+    figure.suptitle(
+        f"Closed cavity after {result.time * 1.0e3:.2f} ms "
+        f"({result.time_steps} adaptive steps)"
+    )
+    figure.tight_layout()
+    output = bt.get_result_path("lid_driven_cavity.png", EXAMPLE_NAME)
+    figure.savefig(output, dpi=150)
+    plt.close(figure)
+
+    print(f"  Simulated time: {result.time * 1.0e3:.3f} ms")
+    print(f"  Maximum cell-centred speed: {result.max_velocity:.5f} m/s")
+    print(f"  Maximum discrete divergence: {result.divergence:.3e} 1/s")
+    print(f"  Pressure residual: {result.pressure_residual:.3e}")
+    print(f"  Plot saved to: {output}")
     return result
 
 
-def example_pulsatile_flow():
+def example_oscillatory_lid() -> bt.NavierStokesResult:
+    """Drive a normalized closed cavity with a sinusoidally moving top wall.
+
+    The frequency is selected to keep this explicit demonstration short.  This
+    is an oscillatory-shear problem, not a physiological cardiac waveform.
     """
-    Pulsatile flow in a channel (simplified cardiac cycle).
+    print("\n" + "=" * 68)
+    print("Example 2: Oscillatory Wall-Driven Cavity")
+    print("=" * 68)
 
-    This models the oscillating pressure-driven flow typical
-    of arterial blood flow during the cardiac cycle.
-    """
-    print("\n" + "=" * 60)
-    print("Example 2: Pulsatile Flow (Cardiac Cycle)")
-    print("=" * 60)
+    length = 1.0
+    density = 1.0
+    viscosity = 2.0e-2
+    amplitude = 2.0e-1
+    frequency = 4.0
+    period = 1.0 / frequency
+    nx = ny = 16
+    steps_per_cycle = 64
+    cycles = 2
+    dt = period / steps_per_cycle
 
-    # Channel dimensions
-    L = 0.005  # 5 mm
-    H = 0.002  # 2 mm
+    reynolds = density * amplitude * length / viscosity
+    stokes_layer_depth = np.sqrt(viscosity / (density * np.pi * frequency))
+    print(f"  Oscillatory Reynolds number rho*U*L/mu: {reynolds:.1f}")
+    print(f"  Stokes-layer scale sqrt(nu/(pi*f)): {stokes_layer_depth:.3f}")
+    print(f"  Time step: {dt:.6f}; samples per cycle: {steps_per_cycle}")
 
-    # Fluid properties (blood)
-    rho = 1060.0
-    mu = 0.0035
-
-    # Pulsatile parameters
-    U_mean = 0.15  # Mean velocity (15 cm/s)
-    U_amp = 0.10  # Amplitude of oscillation
-    f_heart = 1.2  # Heart rate 72 bpm = 1.2 Hz
-    T_cardiac = 1.0 / f_heart
-
-    # Womersley number (ratio of oscillatory to viscous effects)
-    omega = 2 * np.pi * f_heart
-    alpha = H / 2 * np.sqrt(omega * rho / mu)
-    print(f"  Womersley number: alpha = {alpha:.2f}")
-
-    if alpha < 1:
-        print("  --> Quasi-steady flow (viscous effects dominate)")
-    elif alpha > 10:
-        print("  --> Plug flow (inertial effects dominate)")
-    else:
-        print("  --> Intermediate regime")
-
-    # Create mesh (nx, ny, xmin, xmax, ymin, ymax)
-    nx, ny = 51, 21
-    mesh = bt.StructuredMesh(nx, ny, 0.0, L, 0.0, H)
-
-    # Create solver
-    solver = bt.NavierStokesSolver(mesh, rho, mu)
+    mesh = bt.StructuredMesh(nx, ny, 0.0, length, 0.0, length)
+    solver = bt.NavierStokesSolver(mesh, density, viscosity)
     solver.set_convection_scheme(bt.ConvectionScheme.UPWIND)
+    solver.set_time_step(dt)
+    solver.set_pressure_tolerance(1.0e-8)
 
-    # Time parameters
-    n_cycles = 2
-    n_steps_per_cycle = 100
-    dt = T_cardiac / n_steps_per_cycle
+    packed_size = (nx + 1) * (ny + 1)
+    u_state = np.zeros(packed_size)
+    v_state = np.zeros(packed_size)
+    times: list[float] = []
+    lid_history: list[float] = []
+    centre_history: list[float] = []
+    result: bt.NavierStokesResult | None = None
 
-    print(f"  Simulating {n_cycles} cardiac cycles...")
-    print(f"  Time step: {dt * 1000:.3f} ms")
+    for step in range(cycles * steps_per_cycle):
+        time = step * dt
+        lid_velocity = amplitude * np.sin(2.0 * np.pi * frequency * time)
+        _set_closed_cavity_boundaries(solver, lid_velocity)
+        solver.set_initial_velocity(u_state, v_state)
+        result = solver.solve_steps(1)
+        _require_stable(result, "oscillatory cavity")
 
-    # Storage for time history
-    times = []
-    inlet_velocities = []
-    centerline_velocities = []
+        u_state = np.asarray(result.u()).copy()
+        v_state = np.asarray(result.v()).copy()
+        u_cells, _, _ = _cell_centered_fields(result, nx, ny)
+        times.append(time + dt)
+        lid_history.append(lid_velocity)
+        centre_history.append(float(u_cells[ny // 2, nx // 2]))
 
-    # Simulation loop
-    t = 0.0
-    for cycle in range(n_cycles):
-        for step in range(n_steps_per_cycle):
-            # Sinusoidal inlet velocity
-            U_inlet = U_mean + U_amp * np.sin(2 * np.pi * f_heart * t)
+    assert result is not None
+    u, v, _ = _cell_centered_fields(result, nx, ny)
+    speed = np.hypot(u, v)
+    times_array = np.asarray(times)
+    lid_array = np.asarray(lid_history)
+    centre_array = np.asarray(centre_history)
+    y = (np.arange(ny) + 0.5) / ny
 
-            # Set boundary conditions with current inlet velocity
-            solver.set_velocity_bc(bt.Boundary.Bottom, bt.VelocityBC.no_slip())
-            solver.set_velocity_bc(bt.Boundary.Top, bt.VelocityBC.no_slip())
-            solver.set_velocity_bc(bt.Boundary.Left, bt.VelocityBC.inflow(U_inlet, 0.0))
-            solver.set_velocity_bc(bt.Boundary.Right, bt.VelocityBC.outflow())
+    figure, axes = plt.subplots(2, 2, figsize=(12, 9))
+    axes[0, 0].plot(times_array, lid_array, linewidth=2, label="moving lid")
+    axes[0, 0].plot(times_array, centre_array, linewidth=2, label="cavity centre")
+    axes[0, 0].set_title("Imposed and Interior Horizontal Velocity")
+    axes[0, 0].set_xlabel("normalized time")
+    axes[0, 0].set_ylabel("velocity")
+    axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
 
-            # Take one time step
-            result = solver.step(dt)
+    last_cycle = slice(steps_per_cycle, 2 * steps_per_cycle)
+    phase = np.linspace(0.0, 360.0, steps_per_cycle, endpoint=False)
+    axes[0, 1].plot(phase, lid_array[last_cycle], linewidth=2, label="moving lid")
+    axes[0, 1].plot(phase, centre_array[last_cycle], linewidth=2, label="cavity centre")
+    axes[0, 1].set_title("Second-Cycle Phase Response")
+    axes[0, 1].set_xlabel("phase (degrees)")
+    axes[0, 1].set_ylabel("velocity")
+    axes[0, 1].legend()
+    axes[0, 1].grid(True, alpha=0.3)
 
-            # Store results
-            times.append(t)
-            inlet_velocities.append(U_inlet)
-
-            u = result.velocity_x.reshape((ny, nx))
-            u_center = u[ny // 2, nx // 2]
-            centerline_velocities.append(u_center)
-
-            t += dt
-
-    print(f"  Simulation complete. Final time: {t:.3f} s")
-
-    # Plot results
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-
-    times = np.array(times)
-    inlet_velocities = np.array(inlet_velocities)
-    centerline_velocities = np.array(centerline_velocities)
-
-    # Inlet vs centerline velocity
-    ax = axes[0, 0]
-    ax.plot(times * 1000, inlet_velocities * 100, "b-", linewidth=2, label="Inlet")
-    ax.plot(
-        times * 1000, centerline_velocities * 100, "r-", linewidth=2, label="Centerline"
-    )
-    ax.set_xlabel("Time (ms)")
-    ax.set_ylabel("Velocity (cm/s)")
-    ax.set_title("Pulsatile Velocity Waveform")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    # Phase lag analysis (second cycle only)
-    ax = axes[0, 1]
-    n = n_steps_per_cycle
-    phase = np.linspace(0, 360, n)
-    ax.plot(phase, inlet_velocities[n : 2 * n] * 100, "b-", linewidth=2, label="Inlet")
-    ax.plot(
-        phase,
-        centerline_velocities[n : 2 * n] * 100,
-        "r-",
-        linewidth=2,
-        label="Centerline",
-    )
-    ax.set_xlabel("Phase (degrees)")
-    ax.set_ylabel("Velocity (cm/s)")
-    ax.set_title("Phase Comparison (2nd Cycle)")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    # Final velocity field
-    ax = axes[1, 0]
-    u = result.velocity_x.reshape((ny, nx))
-    speed = np.sqrt(u**2 + result.velocity_y.reshape((ny, nx)) ** 2)
-    im = ax.imshow(
+    speed_image = axes[1, 0].imshow(
         speed,
-        extent=[0, L * 1000, 0, H * 1000],
+        extent=[0.0, 1.0, 0.0, 1.0],
         origin="lower",
-        aspect="auto",
-        cmap="jet",
+        aspect="equal",
+        cmap="viridis",
     )
-    ax.set_xlabel("x (mm)")
-    ax.set_ylabel("y (mm)")
-    ax.set_title(f"Final Velocity Field (t = {t * 1000:.0f} ms)")
-    plt.colorbar(im, ax=ax, label="m/s")
+    axes[1, 0].set_title("Final Cell-Centred Speed")
+    axes[1, 0].set_xlabel("x / L")
+    axes[1, 0].set_ylabel("y / L")
+    figure.colorbar(speed_image, ax=axes[1, 0], label="normalized velocity")
 
-    # Final velocity profile
-    ax = axes[1, 1]
-    y = np.linspace(0, H * 1000, ny)
-    ax.plot(u[:, nx // 2] * 100, y, "b-", linewidth=2)
-    ax.set_xlabel("u velocity (cm/s)")
-    ax.set_ylabel("y (mm)")
-    ax.set_title("Final Velocity Profile at Center")
-    ax.grid(True, alpha=0.3)
+    axes[1, 1].plot(u[:, nx // 2] / amplitude, y, linewidth=2)
+    axes[1, 1].axvline(0.0, color="black", linewidth=0.8)
+    axes[1, 1].set_title("Final Centreline Response")
+    axes[1, 1].set_xlabel("u / U_amplitude")
+    axes[1, 1].set_ylabel("y / L")
+    axes[1, 1].grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    plt.savefig(bt.get_result_path("navier_stokes_pulsatile.png"), dpi=150)
-    plt.close()
+    figure.tight_layout()
+    output = bt.get_result_path("oscillatory_cavity.png", EXAMPLE_NAME)
+    figure.savefig(output, dpi=150)
+    plt.close(figure)
 
-    print("  Plot saved to results/navier_stokes_pulsatile.png")
-
+    print(f"  Maximum final speed: {result.max_velocity:.5f}")
+    print(f"  Maximum final divergence: {result.divergence:.3e}")
+    print(f"  Plot saved to: {output}")
     return result
 
 
-def example_reynolds_comparison():
+def example_reynolds_comparison() -> list[bt.NavierStokesResult]:
+    """Compare equal-duration lid-driven transients at several Reynolds numbers.
+
+    This is a qualitative laminar-grid comparison, not evidence of a transition
+    threshold.  The coarse grid and lack of turbulence closure preclude a
+    turbulence claim.
     """
-    Compare flow at different Reynolds numbers.
+    print("\n" + "=" * 68)
+    print("Example 3: Bounded-Cavity Reynolds-Number Comparison")
+    print("=" * 68)
 
-    Demonstrates the transition from Stokes-like flow
-    to convection-dominated flow.
-    """
-    print("\n" + "=" * 60)
-    print("Example 3: Reynolds Number Comparison")
-    print("=" * 60)
+    length = 1.0
+    density = 1.0
+    lid_velocity = 1.0
+    reynolds_values = (1.0, 10.0, 50.0, 100.0)
+    duration = 0.08 * length / lid_velocity
+    nx = ny = 16
+    cell_width = length / nx
+    largest_kinematic_viscosity = lid_velocity * length / min(reynolds_values)
+    time_step = 0.04 * cell_width**2 / largest_kinematic_viscosity
+    print(f"  Common time step for a fair transient comparison: {time_step:.6f}")
 
-    # Channel geometry
-    L = 0.01
-    H = 0.001
+    figure, axes = plt.subplots(2, 2, figsize=(11, 9))
+    results: list[bt.NavierStokesResult] = []
 
-    # Fluid properties
-    rho = 1000.0
-    mu = 0.001
-
-    # Different Reynolds numbers
-    Re_values = [1, 10, 100, 500]
-
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    axes = axes.flatten()
-
-    for idx, Re in enumerate(Re_values):
-        print(f"  Computing Re = {Re}...")
-
-        # Velocity for desired Re
-        U = Re * mu / (rho * H)
-
-        # Mesh (nx, ny, xmin, xmax, ymin, ymax)
-        nx, ny = 101, 26
-        mesh = bt.StructuredMesh(nx, ny, 0.0, L, 0.0, H)
-
-        # Solver
-        solver = bt.NavierStokesSolver(mesh, rho, mu)
+    for axis, reynolds in zip(axes.flat, reynolds_values, strict=True):
+        viscosity = density * lid_velocity * length / reynolds
+        mesh = bt.StructuredMesh(nx, ny, 0.0, length, 0.0, length)
+        solver = bt.NavierStokesSolver(mesh, density, viscosity)
         solver.set_convection_scheme(bt.ConvectionScheme.UPWIND)
+        solver.set_time_step(time_step)
+        solver.set_pressure_tolerance(1.0e-8)
+        _set_closed_cavity_boundaries(solver, lid_velocity)
 
-        # BCs using factory methods
-        solver.set_velocity_bc(bt.Boundary.Bottom, bt.VelocityBC.no_slip())
-        solver.set_velocity_bc(bt.Boundary.Top, bt.VelocityBC.no_slip())
-        solver.set_velocity_bc(bt.Boundary.Left, bt.VelocityBC.inflow(U, 0.0))
-        solver.set_velocity_bc(bt.Boundary.Right, bt.VelocityBC.outflow())
+        print(f"  Solving Re = {reynolds:.0f}...")
+        result = solver.solve(duration)
+        _require_stable(result, f"Re={reynolds:.0f} cavity")
+        results.append(result)
+        u, v, _ = _cell_centered_fields(result, nx, ny)
+        speed = np.hypot(u, v)
 
-        # Solve to steady state
-        dt = 1e-5
-        t_final = 0.1
-        result = solver.solve_steady(t_final, dt, tol=1e-5, max_iter=100000)
-
-        # Plot
-        ax = axes[idx]
-        u = result.velocity_x.reshape((ny, nx))
-        v = result.velocity_y.reshape((ny, nx))
-        speed = np.sqrt(u**2 + v**2)
-        im = ax.imshow(
-            speed / U,
-            extent=[0, L * 1000, 0, H * 1000],
+        image = axis.imshow(
+            speed / lid_velocity,
+            extent=[0.0, 1.0, 0.0, 1.0],
             origin="lower",
-            aspect="auto",
-            cmap="jet",
-            vmin=0,
-            vmax=1.5,
+            aspect="equal",
+            cmap="viridis",
+            vmin=0.0,
+            vmax=1.0,
         )
-        ax.set_xlabel("x (mm)")
-        ax.set_ylabel("y (mm)")
-        ax.set_title(f"Re = {Re}")
-        plt.colorbar(im, ax=ax, label="|u|/U_inlet")
+        axis.streamplot(
+            (np.arange(nx) + 0.5) / nx,
+            (np.arange(ny) + 0.5) / ny,
+            u,
+            v,
+            color="white",
+            density=0.8,
+            linewidth=0.55,
+        )
+        axis.set_title(f"Re = {reynolds:.0f}; {result.time_steps} fixed steps")
+        axis.set_xlabel("x / L")
+        axis.set_ylabel("y / L")
+        figure.colorbar(image, ax=axis, label="|u| / U_lid")
+        print(
+            f"    max speed={result.max_velocity:.4f}, "
+            f"max divergence={result.divergence:.2e}"
+        )
 
-        # Development length
-        L_dev = 0.06 * Re * H * 1000
-        if L_dev < L * 1000:
-            ax.axvline(L_dev, color="white", linestyle="--", linewidth=1)
-            ax.text(L_dev + 0.2, H * 500, "L_dev", color="white", fontsize=8)
-
-    plt.suptitle("Velocity Fields at Different Reynolds Numbers", fontsize=14)
-    plt.tight_layout()
-    plt.savefig(bt.get_result_path("navier_stokes_reynolds_comparison.png"), dpi=150)
-    plt.close()
-
-    print("  Plot saved to results/navier_stokes_reynolds_comparison.png")
+    figure.suptitle(
+        "Equal-Duration Laminar Cavity Transients "
+        f"(t U_lid / L = {duration * lid_velocity / length:.2f})"
+    )
+    figure.tight_layout()
+    output = bt.get_result_path("reynolds_comparison.png", EXAMPLE_NAME)
+    figure.savefig(output, dpi=150)
+    plt.close(figure)
+    print(f"  Plot saved to: {output}")
+    return results
 
 
 if __name__ == "__main__":
-    print("Navier-Stokes Flow Examples for BMEN 341")
-    print("Modeling viscous flow in blood vessels and channels")
-    print()
+    print("Bounded Navier--Stokes examples")
+    print("Closed, wall-driven laminar flow with a compatible MAC projection\n")
 
-    example_developing_flow()
-    # Note: pulsatile_flow and reynolds_comparison require API features
-    # (step() method, velocity_x/y attributes) that are not currently exposed.
-    # example_pulsatile_flow()
-    # example_reynolds_comparison()
+    example_lid_driven_cavity()
+    example_oscillatory_lid()
+    example_reynolds_comparison()
 
-    print("\n" + "=" * 60)
-    print("Navier-Stokes examples completed!")
-    print("=" * 60)
+    print("\n" + "=" * 68)
+    print("Navier--Stokes examples completed")
+    print("=" * 68)

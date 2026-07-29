@@ -7,10 +7,15 @@ transport simulations. We compare:
 1. Fixed time-stepping (very small dt for accuracy)
 2. Adaptive time-stepping (error-controlled)
 
-The test problem is 1D diffusion with a sharp Gaussian initial condition.
-Early in the simulation, the solution changes rapidly and needs small steps.
-Later, as it smooths out, larger steps suffice. Adaptive stepping captures
-this automatically.
+The test problem is 1D uniform diffusion with a sharp Gaussian initial
+condition and homogeneous Dirichlet boundaries. Early in the simulation, the
+solution changes rapidly and needs small steps. Later, as it smooths out,
+larger steps suffice.
+
+``AdaptiveTimeStepper`` is a deliberately limited Python teaching reference,
+not the high-throughput production path. It rejects reactions, advection,
+variable diffusivity, multidimensional meshes, and non-Dirichlet boundaries.
+Use ``bt.solve`` for the canonical native C++ transport solver.
 """
 
 import time
@@ -37,13 +42,14 @@ x = np.array([mesh.x(i) for i in range(nx + 1)])
 sigma = 0.02  # Very narrow peak (2 cm width) - needs fine resolution early
 u0 = np.exp(-((x - L / 2) ** 2) / (2 * sigma**2))
 
-# Boundary conditions: Zero flux (Neumann) on both ends
+# Homogeneous Dirichlet boundaries match the Gaussian to machine precision and
+# are the boundary semantics implemented by the legacy adaptive reference path.
 problem = (
     bt.Problem(mesh)
     .diffusivity(D)
     .initial_condition(u0.tolist())
-    .boundary(bt.Boundary.Left, bt.BoundaryCondition.neumann(0.0))
-    .boundary(bt.Boundary.Right, bt.BoundaryCondition.neumann(0.0))
+    .dirichlet(bt.Boundary.Left, 0.0)
+    .dirichlet(bt.Boundary.Right, 0.0)
 )
 
 # Simulation time
@@ -54,7 +60,7 @@ print("Adaptive Time-Stepping Demonstration")
 print("=" * 60)
 print(f"Domain: [0, {L}] m with {nx} cells")
 print(f"Diffusivity: D = {D:.2e} m²/s")
-print(f"Initial: Sharp Gaussian peak (σ = {sigma} m)")
+print(f"Initial: Sharp Gaussian peak (sigma = {sigma} m)")
 print(f"Simulation time: {t_end} s")
 print()
 
@@ -133,7 +139,8 @@ print("Key insight: Adaptive time-stepping provides:")
 print("  1. Automatic error control (user specifies tolerance)")
 print("  2. Smaller steps early when solution changes rapidly")
 print("  3. Larger steps later when solution is smooth")
-print("  4. Robust handling of unknown dynamics")
+print("  4. A transparent reference for this scoped 1D diffusion problem")
+print("  Production transport remains on the canonical C++ bt.solve path.")
 print()
 
 # =============================================================================
@@ -221,7 +228,7 @@ plt.tight_layout()
 plt.savefig(bt.get_result_path("adaptive_timestepping.png", "adaptive"), dpi=150)
 plt.show()
 
-print("✅ Adaptive time-stepping example completed!")
+print("[OK] Adaptive time-stepping example completed!")
 print(
     f"   Plot saved to: {bt.get_result_path('adaptive_timestepping.png', 'adaptive')}"
 )

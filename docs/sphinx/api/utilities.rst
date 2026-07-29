@@ -75,12 +75,12 @@ authenticate an author or replace durable publication archiving.
 See :download:`the reproducibility guide <../../notes/REPRODUCIBILITY.md>`.
 
 
-Native solver contracts
------------------------
+Native and Python numerical contracts
+-------------------------------------
 
-The contract registry is the authoritative machine-readable inventory of
-native solver equations, units, supported cases, evidence, exclusions, and
-warnings.  Its evidence labels are numerical and claim-specific.
+The contract module contains separate authoritative inventories for native
+solver equations/units and governed Python numerical backends/dispositions.
+Its evidence labels are numerical and claim-specific.
 
 .. automodule:: biotransport.contracts
    :members:
@@ -177,6 +177,8 @@ Visualization
 
 .. autofunction:: plot_field
 
+.. autofunction:: plot
+
 
 Mesh utilities
 --------------
@@ -200,7 +202,9 @@ File utilities
 .. autofunction:: get_result_path
 
 
-Run helper
-----------
+Run and checkpoint helpers
+--------------------------
 
-.. autofunction:: run
+The canonical :func:`run`, :func:`run_checkpoints`, and
+:class:`CheckpointResult` APIs are documented with their numerical semantics
+on :doc:`solvers`.

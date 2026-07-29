@@ -7,7 +7,9 @@ fourth order in time, and the current Dirichlet boundary closure is second
 order.  Those distinctions matter when interpreting convergence results.
 """
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,6 +29,22 @@ RESULTS_DIR = Path(bt.get_results_dir()) / "high_order"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def bind_uniform_spacing(
+    operator: Callable[..., np.ndarray],
+) -> Callable[[int], Callable[[np.ndarray], np.ndarray]]:
+    """Adapt a public Laplacian function to the convergence-helper protocol."""
+
+    def factory(cells: int) -> Callable[[np.ndarray], np.ndarray]:
+        spacing = 1.0 / cells
+
+        def apply(values: np.ndarray) -> np.ndarray:
+            return operator(values, spacing)
+
+        return apply
+
+    return factory
+
+
 def demonstrate_spatial_convergence() -> None:
     """Verify formal interior order against an analytical derivative."""
     wave_number = 2.0 * np.pi
@@ -39,7 +57,7 @@ def demonstrate_spatial_convergence() -> None:
 
     grid_sizes = (20, 40, 80, 160)
 
-    schemes = (
+    schemes: tuple[tuple[str, Callable[..., np.ndarray], int, int], ...] = (
         ("2nd-order interior", laplacian_2nd_order, 1, 2),
         ("4th-order interior", laplacian_4th_order, 2, 4),
         ("6th-order interior", laplacian_6th_order, 3, 6),
@@ -51,21 +69,19 @@ def demonstrate_spatial_convergence() -> None:
     print("-" * 72)
     for label, operator, margin, formal_order in schemes:
         verification = verify_order_of_accuracy(
-            lambda cells, selected=operator: (
-                lambda values: selected(values, 1.0 / cells)
-            ),
+            bind_uniform_spacing(operator),
             field,
             exact_laplacian,
             grid_sizes=grid_sizes,
             interior_margin=margin,
         )
-        print(
-            f"{label:24s} {verification['observed_orders'][-1]:20.3f}"
-            f" {verification['errors'][-1]:24.3e}"
-        )
+        observed_orders = cast(list[float], verification["observed_orders"])
+        errors = cast(list[float], verification["errors"])
+        spacings = cast(list[float], verification["dx"])
+        print(f"{label:24s} {observed_orders[-1]:20.3f} {errors[-1]:24.3e}")
         axis.loglog(
-            verification["dx"],
-            verification["errors"],
+            spacings,
+            errors,
             "o-",
             label=f"{label} (formal p={formal_order})",
         )

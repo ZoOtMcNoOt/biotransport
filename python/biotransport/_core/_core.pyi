@@ -1453,8 +1453,14 @@ class TransportProblem:
         """Set uniform velocity field."""
         ...
 
+    @overload
+    def velocity_field(self, vx: ArrayLike) -> TransportProblem:
+        """Set a node-centred x velocity field for a 1D mesh."""
+        ...
+
+    @overload
     def velocity_field(self, vx: ArrayLike, vy: ArrayLike) -> TransportProblem:
-        """Set spatially-varying velocity field."""
+        """Set node-centred x and y velocity fields."""
         ...
 
     def advection_scheme(self, scheme: AdvectionScheme) -> TransportProblem:

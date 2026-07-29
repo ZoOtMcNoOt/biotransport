@@ -34,12 +34,22 @@ jobs:
           python/tests/typing/api_smoke.py
 
   python-tests:
-    name: Python ${{ matrix.os }}
+    name: Python ${{ matrix.python-version }} ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.9"
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.14"
+          - os: windows-latest
+            python-version: "3.11"
+          - os: macos-latest
+            python-version: "3.11"
     env:
       CMAKE_ARGS: >-
         -DBIOTRANSPORT_OPENMP=OFF
@@ -50,7 +60,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install package and test dependencies
@@ -194,11 +204,30 @@ jobs:
         run: python -m pip wheel --no-deps --wheel-dir dist/wheel dist/*.tar.gz
       - name: Check package metadata
         run: python -m twine check dist/*.tar.gz dist/wheel/*
+      - name: Install the built wheel
+        run: python -m pip install --force-reinstall dist/wheel/*
+      - name: Smoke-test installed wheel and typing data
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python -c "import importlib.metadata as md, pathlib;
+          import biotransport as bt;
+          package_root=pathlib.Path(bt.__file__).resolve().parent;
+          assert bt.__version__ == md.version('biotransport');
+          assert (package_root / 'py.typed').is_file();
+          assert (package_root / '_core' / '_core.pyi').is_file();
+          assert bt.native_build_info()['cxx']['standard'] >= 201703;
+          assert hasattr(bt, 'CheckpointResult');
+          assert hasattr(bt, 'PythonNumericalContract');
+          mesh=bt.mesh_1d(4, 0.0, 1.0);
+          problem=bt.Problem(mesh).diffusivity(0.1).initial_condition(1.0);
+          result=bt.solve(problem, end_time=0.01);
+          assert result.time == 0.01;
+          print(bt.__version__, package_root)"
       - name: Verify native build sources are present
         run: >-
           python -c "import glob,tarfile;
           p=glob.glob('dist/*.tar.gz')[0];
           n=tarfile.open(p).getnames();
-          r=['/CMakeLists.txt','/cpp/CMakeLists.txt','/python/bindings/CMakeLists.txt','/cmake/biotransportConfig.cmake.in','/LICENSE'];
+          r=['/CMakeLists.txt','/cpp/CMakeLists.txt','/python/bindings/CMakeLists.txt','/cmake/biotransportConfig.cmake.in','/python/biotransport/_core/_core.pyi','/python/biotransport/py.typed','/run_examples.py','/LICENSE'];
           m=[x for x in r if not any(y.endswith(x) for y in n)];
           assert not m, f'missing from sdist: {m}'"

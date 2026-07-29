@@ -66,3 +66,55 @@ def test_unverified_method_is_rejected_instead_of_substituted() -> None:
 
     with pytest.raises(ValueError, match="verified conservative"):
         bt.solve(problem, end_time=0.1, method="crank_nicolson")
+
+
+def test_one_component_velocity_field_is_intuitive_for_1d() -> None:
+    mesh = bt.mesh_1d(10)
+    velocity = np.linspace(0.1, 0.2, 11)
+    problem = bt.Problem(mesh)
+
+    returned = problem.velocity_field(velocity)
+
+    assert returned is problem
+    assert problem.has_advection()
+
+
+def test_two_component_velocity_field_remains_available_for_2d() -> None:
+    mesh = bt.mesh_2d(4, 3)
+    node_count = (mesh.nx() + 1) * (mesh.ny() + 1)
+    vx = np.full(node_count, 0.1)
+    vy = np.full(node_count, -0.2)
+    problem = bt.Problem(mesh)
+
+    returned = problem.velocity_field(vx, vy)
+
+    assert returned is problem
+    assert problem.has_advection()
+
+
+def test_one_component_velocity_field_fails_clearly_for_2d() -> None:
+    mesh = bt.mesh_2d(4, 3)
+    vx = np.full((mesh.nx() + 1) * (mesh.ny() + 1), 0.1)
+    problem = bt.Problem(mesh)
+
+    with pytest.raises(ValueError, match="2D velocity field requires both vx and vy"):
+        problem.velocity_field(vx)
+
+
+def test_rejected_1d_y_velocity_field_does_not_mutate_problem() -> None:
+    mesh = bt.mesh_1d(10)
+    node_count = mesh.nx() + 1
+    problem = (
+        bt.Problem(mesh)
+        .diffusivity(0.0)
+        .initial_condition(2.0)
+        .velocity_field(np.full(node_count, 0.1))
+        .dirichlet(bt.Boundary.Left, 2.0)
+    )
+
+    with pytest.raises(ValueError, match="y velocity field must be zero"):
+        problem.velocity_field(np.full(node_count, 0.5), np.full(node_count, 0.25))
+
+    result = bt.solve(problem, end_time=0.0)
+    np.testing.assert_array_equal(result.concentration, 2.0)
+    assert problem.has_advection()

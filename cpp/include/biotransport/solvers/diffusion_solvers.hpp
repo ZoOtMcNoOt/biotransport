@@ -195,7 +195,7 @@ public:
 
     // Required by CRTP base
     void computeNodeUpdate(int idx, int /*i*/, int /*j*/, const StencilOps& ops, double dt) {
-        scratch_[idx] = solution_[idx] + ops.diffusionTerm(solution_, idx, diffusivity_, dt);
+        scratch_[idx] = ops.diffusionStep(solution_, idx, diffusivity_, dt);
     }
 };
 

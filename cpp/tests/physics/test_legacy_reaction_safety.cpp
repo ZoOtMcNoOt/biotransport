@@ -101,6 +101,60 @@ void baseRejectsInvalidAndNonexistentBoundaryIdentifiers() {
                                          "Base accepted Top on a 1D mesh");
 }
 
+void baseDiffusionRetainsResolvableUpdatesAcrossExtremeScales() {
+    {
+        constexpr double spacing = 1.0e155;
+        StructuredMesh mesh(4, 0.0, 4.0 * spacing);
+        DiffusionSolver solver(mesh, 1.0);
+        std::vector<double> initial(static_cast<std::size_t>(mesh.numNodes()), 0.0);
+        initial[2] = 1.0e300;
+        solver.setInitialCondition(initial);
+        solver.solve(1.0, 1);
+
+        const auto& result = solver.solution();
+        SCIENCE_REQUIRE(std::isfinite(result[1]) && std::isfinite(result[3]),
+                        "large-spacing diffusion produced a non-finite neighbor update");
+        SCIENCE_REQUIRE_NEAR(result[1], 1.0e-10, 0.0, 2.0e-14,
+                             "large-spacing left-neighbor diffusion increment");
+        SCIENCE_REQUIRE_NEAR(result[3], 1.0e-10, 0.0, 2.0e-14,
+                             "large-spacing right-neighbor diffusion increment");
+    }
+
+    {
+        constexpr double spacing = 1.0e-200;
+        constexpr double dt = 1.0e-78;
+        const double diffusivity = std::numeric_limits<double>::denorm_min();
+        StructuredMesh mesh(4, 0.0, 4.0 * spacing);
+        DiffusionSolver solver(mesh, diffusivity);
+        std::vector<double> initial(static_cast<std::size_t>(mesh.numNodes()), 0.0);
+        initial[2] = 1.0;
+        solver.setInitialCondition(initial);
+        solver.solve(dt, 1);
+
+        constexpr double expected_lambda = 4.9406564584124654e-2;
+        const auto& result = solver.solution();
+        SCIENCE_REQUIRE_NEAR(result[1], expected_lambda, 0.0, 3.0e-14,
+                             "subnormal-diffusivity left-neighbor update");
+        SCIENCE_REQUIRE_NEAR(result[2], 1.0 - 2.0 * expected_lambda, 0.0, 3.0e-14,
+                             "subnormal-diffusivity center update");
+        SCIENCE_REQUIRE_NEAR(result[3], expected_lambda, 0.0, 3.0e-14,
+                             "subnormal-diffusivity right-neighbor update");
+    }
+
+    {
+        const double maximum = std::numeric_limits<double>::max();
+        StructuredMesh mesh(2, 0.0, 2.0);
+        DiffusionSolver solver(mesh, 0.5);
+        solver.setInitialCondition({maximum, -maximum, maximum});
+        solver.setDirichletBoundary(Boundary::Left, maximum);
+        solver.setDirichletBoundary(Boundary::Right, maximum);
+        solver.solve(1.0, 1);
+
+        SCIENCE_REQUIRE_NEAR(solver.solution()[1], maximum, 0.0, 0.0,
+                             "representable update after an overflowing raw increment");
+    }
+}
+
 void baseUsesOutwardNeumannSignsOnBothSides() {
     StructuredMesh mesh(8, 0.0, 1.0);
     DiffusionSolver solver(mesh, 0.01);
@@ -425,6 +479,8 @@ int main() {
              baseRejectsInvalidInitialAndBoundaryData},
             {"base rejects invalid/nonexistent boundaries",
              baseRejectsInvalidAndNonexistentBoundaryIdentifiers},
+            {"base scale-safe diffusion arithmetic",
+             baseDiffusionRetainsResolvableUpdatesAcrossExtremeScales},
             {"base outward Neumann signs", baseUsesOutwardNeumannSignsOnBothSides},
             {"base Robin equation and singularity", baseEnforcesRobinEquationAndRejectsSingularity},
             {"base conflicting Dirichlet corner", baseRejectsConflictingDirichletCorners},

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import tempfile
 from pathlib import Path
 
@@ -107,6 +108,41 @@ class TestWriteVtk:
             with pytest.raises(ValueError, match="has 5 values"):
                 bt.write_vtk(mesh, {"bad_field": wrong_size_data}, filepath)
 
+    def test_wrong_2d_shape_rejected_even_when_size_matches(self):
+        mesh = bt.StructuredMesh(3, 2, 0.0, 1.0, 0.0, 1.0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / "bad_shape.vtk"
+            with pytest.raises(ValueError, match="must have shape"):
+                bt.write_vtk(mesh, {"field": np.ones((4, 3))}, filepath)
+
+    @pytest.mark.parametrize(
+        ("data", "error", "message"),
+        [
+            (1.0, ValueError, "flat or have shape"),
+            ([0.0, 1.0, np.nan], ValueError, "finite"),
+            ([object(), object(), object()], TypeError, "numeric"),
+            (
+                np.array([1.0 + 2.0j, 2.0 + 0.0j, 3.0 - 1.0j]),
+                TypeError,
+                "complex",
+            ),
+            (np.array([True, False, True]), TypeError, "boolean"),
+            (np.array(["1.0", "2.0", "3.0"]), TypeError, "text and object"),
+            (
+                np.ma.array([1.0, 2.0, 3.0], mask=[False, True, False]),
+                ValueError,
+                "masked",
+            ),
+        ],
+    )
+    def test_invalid_field_data_fails_before_writing(self, data, error, message):
+        mesh = bt.StructuredMesh(2, 0.0, 1.0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / "nested" / "bad.vtk"
+            with pytest.raises(error, match=message):
+                bt.write_vtk(mesh, {"field": data}, filepath)
+            assert not filepath.parent.exists()
+
     def test_empty_fields_ok(self):
         """Test that empty fields dict is allowed."""
         mesh = bt.StructuredMesh(5, 0.0, 1.0)
@@ -132,6 +168,62 @@ class TestWriteVtk:
             content = result.read_text()
             assert "SCALARS my_field_name double" in content
             assert "SCALARS another_one double" in content
+
+    def test_sanitizes_all_non_identifier_characters(self):
+        mesh = bt.StructuredMesh(2, 0.0, 1.0)
+        data = np.zeros(mesh.num_nodes())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = bt.write_vtk(
+                mesh, {"drug/concentration (%)": data}, Path(tmpdir) / "names.vtk"
+            )
+            assert "SCALARS drug_concentration____ double" in result.read_text()
+
+    def test_rejects_invalid_or_colliding_field_names(self):
+        mesh = bt.StructuredMesh(2, 0.0, 1.0)
+        data = np.zeros(mesh.num_nodes())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / "bad_names.vtk"
+            with pytest.raises(ValueError, match="must not be empty"):
+                bt.write_vtk(mesh, {"": data}, filepath)
+            with pytest.raises(ValueError, match="both sanitize"):
+                bt.write_vtk(mesh, {"a-b": data, "a b": data}, filepath)
+            with pytest.raises(TypeError, match="must be strings"):
+                bt.write_vtk(mesh, {1: data}, filepath)
+            assert not filepath.exists()
+
+    @pytest.mark.parametrize(
+        ("title", "message"),
+        [
+            ("bad\nheader", "newlines"),
+            ("temperature \N{DEGREE SIGN}C", "ASCII"),
+            ("", "must not be empty"),
+        ],
+    )
+    def test_rejects_invalid_title_before_creating_directories(self, title, message):
+        mesh = bt.StructuredMesh(2, 0.0, 1.0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / "nested" / "result.vtk"
+            with pytest.raises(ValueError, match=message):
+                bt.write_vtk(mesh, {}, filepath, title=title)
+            assert not filepath.parent.exists()
+
+    def test_rejects_unsupported_mesh_types(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / "unsupported.vtk"
+            with pytest.raises(TypeError, match="StructuredMesh"):
+                bt.write_vtk(object(), {}, filepath)
+
+            mesh_3d = bt.CylindricalMesh(2, 8, 2, 0.1, 1.0, 0.0, 2 * math.pi, -1.0, 1.0)
+            with pytest.raises(ValueError, match="full 3D cylindrical"):
+                bt.write_vtk(mesh_3d, {}, filepath)
+
+    def test_rejects_non_finite_mesh_geometry(self):
+        mesh = bt.StructuredMesh(2, 0.0, np.nan)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = Path(tmpdir) / "bad_mesh.vtk"
+            with pytest.raises(ValueError, match="coordinates must be finite"):
+                bt.write_vtk(mesh, {}, filepath)
+            assert not filepath.exists()
 
 
 class TestWriteVtkSeries:
@@ -183,6 +275,59 @@ class TestWriteVtkSeries:
             assert "<Collection>" in content
             assert "</Collection>" in content
 
+    @pytest.mark.parametrize(
+        "times",
+        [
+            [0.0, 0.0],
+            [1.0, 0.5],
+        ],
+    )
+    def test_series_requires_strictly_increasing_times(self, times):
+        mesh = bt.StructuredMesh(2, 0.0, 1.0)
+        snapshots = [(time, {"field": np.zeros(3)}) for time in times]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "nested" / "series"
+            with pytest.raises(ValueError, match="strictly increasing"):
+                bt.write_vtk_series(mesh, snapshots, base_path)
+            assert not base_path.parent.exists()
+
+    @pytest.mark.parametrize("time", [np.nan, np.inf, -np.inf])
+    def test_series_rejects_non_finite_times(self, time):
+        mesh = bt.StructuredMesh(2, 0.0, 1.0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(ValueError, match="time must be finite"):
+                bt.write_vtk_series(
+                    mesh, [(time, {"field": np.zeros(3)})], Path(tmpdir) / "series"
+                )
+
+    @pytest.mark.parametrize("time", [True, "0.1", np.complex128(0.1 + 0.2j)])
+    def test_series_rejects_non_numeric_time_semantics(self, time):
+        mesh = bt.StructuredMesh(2, 0.0, 1.0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "nested" / "series"
+            with pytest.raises(TypeError, match="time must be a real number"):
+                bt.write_vtk_series(mesh, [(time, {"field": np.zeros(3)})], base_path)
+            assert not base_path.parent.exists()
+
+    def test_series_preflights_every_snapshot_before_writing(self):
+        mesh = bt.StructuredMesh(2, 0.0, 1.0)
+        snapshots = [
+            (0.0, {"field": np.zeros(3)}),
+            (1.0, {"field": np.array([0.0, np.nan, 0.0])}),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_path = Path(tmpdir) / "nested" / "series"
+            with pytest.raises(ValueError, match="finite"):
+                bt.write_vtk_series(mesh, snapshots, base_path)
+            assert not base_path.parent.exists()
+
+    def test_series_escapes_xml_filename(self):
+        mesh = bt.StructuredMesh(2, 0.0, 1.0)
+        snapshots = [(0.0, {"field": np.zeros(3)})]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pvd_path = bt.write_vtk_series(mesh, snapshots, Path(tmpdir) / "drug&heat")
+            assert 'file="drug&amp;heat_0000.vtk"' in pvd_path.read_text()
+
 
 class TestCylindricalMeshVtk:
     """Tests for VTK export with cylindrical meshes."""
@@ -202,3 +347,26 @@ class TestCylindricalMeshVtk:
             content = result.read_text()
             assert "STRUCTURED_GRID" in content
             assert "POINTS" in content
+
+    def test_radial_mesh_export(self):
+        mesh = bt.CylindricalMesh(5, 0.0, 1.0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = bt.write_vtk(
+                mesh,
+                {"concentration": np.linspace(0.0, 1.0, mesh.num_nodes())},
+                Path(tmpdir) / "radial.vtk",
+            )
+            content = result.read_text()
+            assert "DIMENSIONS 6 1 1" in content
+            assert "POINTS 6 double" in content
+            assert "POINT_DATA 6" in content
+
+    def test_axisymmetric_field_shape_is_validated(self):
+        mesh = bt.CylindricalMesh(2, 3, 0.0, 1.0, -1.0, 1.0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with pytest.raises(ValueError, match=r"shape \(4, 3\)"):
+                bt.write_vtk(
+                    mesh,
+                    {"field": np.ones((3, 4))},
+                    Path(tmpdir) / "transposed.vtk",
+                )

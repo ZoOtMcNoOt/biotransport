@@ -84,6 +84,30 @@ class TestBasicWaveforms:
 
         assert bc.period() == pytest.approx(0.5)
 
+    @pytest.mark.parametrize(
+        "value",
+        [
+            True,
+            1.0 + 2.0j,
+            np.complex128(3.0 + 4.0j),
+            "1.25",
+            b"1.25",
+            np.str_("1.25"),
+            np.bytes_("1.25"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "factory",
+        [
+            lambda value: bt.ConstantBC(value=value),
+            lambda value: bt.SinusoidalBC(frequency=value),
+            lambda value: bt.CustomBC(func=lambda _t: 0.0, T=value),
+        ],
+    )
+    def test_waveform_constructors_reject_nonreal_scalars(self, factory, value):
+        with pytest.raises(TypeError, match="real scalar"):
+            factory(value)
+
 
 class TestCardiacWaveforms:
     """Test physiological cardiac waveforms."""
@@ -225,6 +249,24 @@ class TestCustomBC:
         """CustomBC can specify period."""
         bc = bt.CustomBC(func=lambda t: np.sin(2 * np.pi * t), T=1.0)
         assert bc.period() == 1.0
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            True,
+            1.0 + 2.0j,
+            np.complex128(3.0 + 4.0j),
+            "1.25",
+            b"1.25",
+            np.str_("1.25"),
+            np.bytes_("1.25"),
+        ],
+    )
+    def test_custom_callback_rejects_nonreal_scalars(self, value):
+        bc = bt.CustomBC(func=lambda _t: value)
+
+        with pytest.raises(TypeError, match="must return a real scalar"):
+            bc(0.0)
 
 
 class TestUtilityFunctions:

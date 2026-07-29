@@ -25,8 +25,7 @@ _HEADLESS = os.environ.get("MPLBACKEND", "").lower() == "agg"
 nx, ny = (128, 128) if _HEADLESS else (256, 256)  # periodic cell samples
 Du = 0.16  # grid_length^2 / model_time
 Dv = 0.08  # grid_length^2 / model_time
-dt = 1.0  # model_time
-total_steps = 6000 if _HEADLESS else 20000
+requested_duration = 6000.0 if _HEADLESS else 20000.0  # model_time
 
 # Common illustrative Gray–Scott parameter sets (f and k both 1/model_time).
 pattern_sets = {
@@ -101,7 +100,7 @@ def initialize_fields(init_type="random"):
     return np.clip(u, 0, 1), np.clip(v, 0, 1)
 
 
-def simulate_gray_scott(f, k, init_type="random", steps_between_frames=1000):
+def simulate_gray_scott(f, k, init_type="random", time_between_frames=1000.0):
     print(f"Starting Gray-Scott with f={f}, k={k}, init={init_type}")
     start_time = time.time()
 
@@ -113,7 +112,27 @@ def simulate_gray_scott(f, k, init_type="random", steps_between_frames=1000):
     mesh = bt.mesh_2d(nx, ny, x_max=float(nx), y_max=float(ny))
     solver = bt.GrayScottSolver(mesh, Du, Dv, f, k)
 
-    check_interval = 500 if _HEADLESS else 1000
+    # GrayScottSolver checks its exact state-dependent positivity limit at every
+    # step, but cannot expose one fixed limit before the evolving V field is
+    # known. For this dimensionless example, use its documented plotting range
+    # V <= 1 as a conservative model envelope. The loss coefficients below are
+    # the same ones used by the C++ positivity check. A 20% safety margin keeps
+    # the example away from the limit while retaining its original duration.
+    inverse_spacing_sum = 1.0 / mesh.dx() ** 2 + 1.0 / mesh.dy() ** 2
+    v_envelope = 1.0
+    u_loss_ceiling = 2.0 * Du * inverse_spacing_sum + v_envelope**2 + f
+    v_loss_ceiling = 2.0 * Dv * inverse_spacing_sum + f + k
+    model_envelope_dt = 0.8 / max(u_loss_ceiling, v_loss_ceiling)
+    total_steps = int(np.ceil(requested_duration / model_envelope_dt))
+    dt = requested_duration / total_steps
+
+    steps_between_frames = max(1, int(round(time_between_frames / dt)))
+    check_time = 500.0 if _HEADLESS else 1000.0
+    check_interval = max(1, int(round(check_time / dt)))
+    print(
+        f"Using dt={dt:.6f} for {total_steps} steps "
+        f"(requested duration={requested_duration:.1f})"
+    )
     result = solver.simulate(
         u0.ravel(order="C").tolist(),
         v0.ravel(order="C").tolist(),
@@ -132,10 +151,12 @@ def simulate_gray_scott(f, k, init_type="random", steps_between_frames=1000):
 
     elapsed = time.time() - start_time
     print(f"Simulation finished in {elapsed:.1f} s, total steps = {result.steps_run}")
-    return u_frames, v_frames, frame_steps
+    return u_frames, v_frames, frame_steps, dt
 
 
-def visualize_frames(u_frames, v_frames, frame_steps, f, k, pattern_name, description):
+def visualize_frames(
+    u_frames, v_frames, frame_steps, dt, f, k, pattern_name, description
+):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     n_frames = len(v_frames)
     if n_frames < 1:
@@ -166,14 +187,14 @@ def visualize_frames(u_frames, v_frames, frame_steps, f, k, pattern_name, descri
         plt.imshow(
             u_contrast, cmap=u_cmap, interpolation="bilinear", vmin=0.0, vmax=1.0
         )
-        plt.title(f"1-U: step {actual_step}")
+        plt.title(f"1-U: t={actual_step * dt:.0f}")
         plt.axis("off")
 
         plt.subplot(2, len(show_indices), i + 1 + len(show_indices))
         plt.imshow(
             v_frames[idx], cmap=v_cmap, interpolation="bilinear", vmin=v_p1, vmax=v_p99
         )
-        plt.title(f"V: step {actual_step}")
+        plt.title(f"V: t={actual_step * dt:.0f}")
         plt.axis("off")
 
     plt.suptitle(f"Gray-Scott (f={f}, k={k}) - {description}", fontsize=16)
@@ -219,14 +240,14 @@ if __name__ == "__main__":
     init_type = (
         "center_square" if _HEADLESS else "center_square"
     )  # "random", "circles", "spots", "target_rings", or "center_square"
-    steps_between_frames = 500 if _HEADLESS else 2000
+    time_between_frames = 500.0 if _HEADLESS else 2000.0
 
     f, k, desc = pattern_sets[selected_pattern]
 
     print(f"Running Gray-Scott for pattern: {selected_pattern} with init={init_type}")
-    u_frames, v_frames, frame_steps = simulate_gray_scott(
-        f, k, init_type, steps_between_frames
+    u_frames, v_frames, frame_steps, dt = simulate_gray_scott(
+        f, k, init_type, time_between_frames
     )
-    visualize_frames(u_frames, v_frames, frame_steps, f, k, selected_pattern, desc)
+    visualize_frames(u_frames, v_frames, frame_steps, dt, f, k, selected_pattern, desc)
 
     print("Done. Check the generated images for final patterns.")

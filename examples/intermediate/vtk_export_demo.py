@@ -100,8 +100,10 @@ for i, t_target in enumerate(time_points):
             .neumann(bt.Boundary.Top, 0.0)
         )
 
-        result = bt.solve(problem, t=dt_segment, dt=10.0, method="crank_nicolson")
-        current_solution = result.solution()
+        # This demonstration uses the canonical conservative C++ diffusion
+        # solver and lets it choose a certified explicit step automatically.
+        result = bt.solve(problem, end_time=dt_segment)
+        current_solution = result.concentration
         solutions.append(current_solution.copy())
         times.append(t_target)
 

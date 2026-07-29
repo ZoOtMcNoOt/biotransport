@@ -66,14 +66,17 @@ Neumann data prescribe an outward **total molar flux**.  The fitted nonuniform
 1D diffusion solver again accepts ``dc/dn`` but rejects Robin conditions.  Flow
 outflow and traction semantics are specific to each flow solver.
 
-Machine-readable solver contracts
-----------------------------------
+Machine-readable numerical contracts
+------------------------------------
 
-``biotransport.contracts`` is the authoritative public registry for native
-solver entry points.  A contract states the equation, unknowns and locations,
+``biotransport.contracts`` contains separate authoritative registries for
+native solver entry points and governed public Python numerical/workflow
+modules.  A native contract states the equation, unknowns and locations,
 input/output units, supported dimensions/terms/boundaries, numerical method,
 stability and convergence policy, exact test references, exclusions, and
-warnings.
+warnings.  A Python numerical contract instead states its module/public
+symbols, backend, mathematical scope, failure policy, evidence, and explicit
+retain/port/deprecate disposition.
 
 The registry uses these claim-specific evidence levels:
 
@@ -97,8 +100,9 @@ The registry uses these claim-specific evidence levels:
 ``convergence``
    An observed refinement/order claim for the stated test case.
 
-The strongest label on a solver is not blanket evidence for every
-configuration.  Runtime tests require exact registry coverage and current
+The strongest label on a solver or workflow is not blanket evidence for every
+configuration.  Runtime tests require exact native solver coverage, exact
+ownership of public symbols from governed Python modules, and current
 ``path::selector`` references.  See
 :download:`the solver-contract guide <../notes/SOLVER_CONTRACTS.md>`.
 
@@ -107,10 +111,11 @@ Current numerical evidence boundary
 
 The canonical 1D/2D Cartesian path has always-on tests for manufactured steady
 cases, conservative variable-coefficient balances, boundary signs and corners,
-reaction-time convergence, exact final time, stability, and invalid inputs.
-The runnable ``examples/verification/grid_convergence.py`` performs one scoped
-spatial/time refinement study, but that example is not an always-on order
-certificate for every canonical configuration.
+smooth second-order diffusion-space refinement, heterogeneous mixed-boundary
+first-order upwind refinement, first-order reaction-time refinement, exact
+final time, stability, and invalid inputs.  The runnable
+``examples/verification/grid_convergence.py`` remains a reporting workflow, not
+an order certificate for every canonical configuration.
 
 Specialized solvers have separate evidence.  The fitted
 :class:`biotransport.NonuniformDiffusion1D` slice, for example, has automated
@@ -123,7 +128,11 @@ Stokes is a collocated centred-difference/SIMPLE-like solver, not a staggered
 MAC method.  Darcy has scoped analytical tests for uniform linear pressure and
 velocity plus interface-flux and measured first-order refinement evidence for
 a face-aligned discontinuous-conductivity case.  Those cases do not validate
-arbitrary heterogeneous tissue flow.  Always use the registry rather than
+arbitrary heterogeneous tissue flow.  Navier--Stokes now has a smooth,
+wall-compatible manufactured velocity refinement on square MAC grids;
+bioheat, the Nernst--Planck diffusion limit, and cylindrical operators have
+their own bounded order cases.  The specialized spatial studies suppress time
+error explicitly.  Always use the registry rather than
 transferring evidence by similarity of names; see :download:`the Darcy
 verification note <../notes/DARCY_VERIFICATION.md>`.
 
@@ -177,7 +186,9 @@ Fail-loud policy
 
 Unsupported discretizations, ambiguous boundary semantics, unstable explicit
 steps, non-finite model evaluations, invalid physical parameter domains,
-singular systems, and exhausted solver convergence are errors on surfaces that
-claim the fail-loud policy.  The library must not silently substitute a
-different equation or method.  Legacy and experimental surfaces with weaker
-policies remain identified as gaps rather than inheriting this claim.
+singular systems, and exhausted solver convergence raise or return an explicit
+non-converged diagnostic on governed surfaces.  The library must not silently
+substitute a different equation or method.  Python Newton iteration exhaustion,
+for example, returns ``converged=False`` by contract; callers must check it.
+Legacy Python stepping loops are separately labeled port/deprecation
+candidates rather than inheriting native status.

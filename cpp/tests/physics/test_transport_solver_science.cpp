@@ -41,6 +41,14 @@ void requireNear(double actual, double expected, double tolerance, const std::st
     }
 }
 
+double observedOrder(double coarse_error, double fine_error) {
+    if (!std::isfinite(coarse_error) || !std::isfinite(fine_error) || coarse_error <= 0.0 ||
+        fine_error <= 0.0 || fine_error >= coarse_error) {
+        throw std::runtime_error("observed-order inputs must be finite, positive, and decreasing");
+    }
+    return std::log(coarse_error / fine_error) / std::log(2.0);
+}
+
 template <typename Exception, typename Function>
 void requireThrows(Function&& function, const std::string& message) {
     try {
@@ -201,6 +209,120 @@ void reactionsComposeAndConvergeInTime() {
             "composed source+decay did not show first-order time convergence");
 }
 
+double canonicalDiffusionError(int cells) {
+    constexpr double pi = 3.141592653589793238462643383279502884;
+    constexpr double diffusivity = 0.01;
+    constexpr double final_time = 0.1;
+
+    StructuredMesh mesh(cells, 0.0, 1.0);
+    std::vector<double> initial(static_cast<std::size_t>(mesh.numNodes()), 0.0);
+    for (int i = 0; i <= mesh.nx(); ++i) {
+        initial[static_cast<std::size_t>(mesh.index(i))] = std::sin(pi * mesh.x(i));
+    }
+
+    TransportProblem problem(mesh);
+    problem.diffusivity(diffusivity)
+        .initialCondition(initial)
+        .dirichlet(Boundary::Left, 0.0)
+        .dirichlet(Boundary::Right, 0.0);
+
+    // Explicit diffusion requires dt=O(h^2), so every stable grid study must
+    // co-refine time.  Using only 2% of the CFL limit keeps the leading Euler
+    // contribution at about 6% of the centered-space contribution for this mode;
+    // the observed error is therefore a spatial-refinement acceptance check.
+    SolveOptions options;
+    options.final_time = final_time;
+    options.safety_factor = 0.02;
+    const auto result = solve(problem, options);
+
+    double squared_error = 0.0;
+    for (int i = 0; i <= mesh.nx(); ++i) {
+        const double exact =
+            std::sin(pi * mesh.x(i)) * std::exp(-diffusivity * pi * pi * final_time);
+        const double error = result.concentration[static_cast<std::size_t>(mesh.index(i))] - exact;
+        squared_error += error * error;
+    }
+    return std::sqrt(squared_error / static_cast<double>(mesh.numNodes()));
+}
+
+void canonicalSolveHasSecondOrderSpatialGridConvergence() {
+    const double coarse_error = canonicalDiffusionError(20);
+    const double medium_error = canonicalDiffusionError(40);
+    const double fine_error = canonicalDiffusionError(80);
+    const double coarse_order = observedOrder(coarse_error, medium_error);
+    const double fine_order = observedOrder(medium_error, fine_error);
+
+    require(fine_error < 1e-6, "fine-grid canonical diffusion error exceeded 1e-6");
+    require(coarse_order > 1.8 && coarse_order < 2.2,
+            "20-to-40 cell canonical diffusion order was outside [1.8, 2.2]: " +
+                std::to_string(coarse_order));
+    require(fine_order > 1.8 && fine_order < 2.2,
+            "40-to-80 cell canonical diffusion order was outside [1.8, 2.2]: " +
+                std::to_string(fine_order));
+}
+
+double heterogeneousAdvectionDiffusionError(int cells) {
+    StructuredMesh mesh(cells, 0.0, 1.0);
+    const std::size_t count = static_cast<std::size_t>(mesh.numNodes());
+    std::vector<double> exact(count, 0.0);
+    std::vector<double> diffusivity(count, 0.0);
+    std::vector<double> velocity(count, 0.0);
+    for (int i = 0; i <= mesh.nx(); ++i) {
+        const double x = mesh.x(i);
+        const std::size_t index = static_cast<std::size_t>(mesh.index(i));
+        exact[index] = 1.0 + x;
+        diffusivity[index] = 0.2 + 0.1 * x;
+        velocity[index] = 0.04 + 0.02 * x;
+    }
+
+    // For c=1+x, D=0.2+0.1x, and v=0.04+0.02x,
+    //
+    //   d(D dc/dx)/dx - d(vc)/dx = 0.04 - 0.04x.
+    //
+    // The independent manufactured source R=-0.04+0.04x makes c stationary.
+    // The left Dirichlet condition supplies advective inflow.  At the outflow,
+    // 2c+0.3 dc/dn=4.3 exercises a genuine mixed (non-essential) Robin law.
+    TransportProblem problem(mesh);
+    problem.diffusivityField(diffusivity)
+        .velocityField(velocity)
+        .reaction([](double, double x, double, double) { return -0.04 + 0.04 * x; }, 0.0)
+        .initialCondition(exact)
+        .dirichlet(Boundary::Left, 1.0)
+        .robin(Boundary::Right, 2.0, 0.3, 4.3);
+
+    SolveOptions options;
+    options.final_time = 0.05;
+    const auto result = solve(problem, options);
+
+    double squared_error = 0.0;
+    for (std::size_t index = 0; index < count; ++index) {
+        const double error = result.concentration[index] - exact[index];
+        squared_error += error * error;
+    }
+    return std::sqrt(squared_error / static_cast<double>(count));
+}
+
+void heterogeneousCoefficientsAndMixedBoundariesConverge() {
+    const double coarse_error = heterogeneousAdvectionDiffusionError(20);
+    const double medium_error = heterogeneousAdvectionDiffusionError(40);
+    const double fine_error = heterogeneousAdvectionDiffusionError(80);
+    const double coarse_order = observedOrder(coarse_error, medium_error);
+    const double fine_order = observedOrder(medium_error, fine_error);
+
+    // Conservative upwind advection is first order in space.  Requiring both
+    // adjacent refinement pairs to enter its asymptotic band catches sign,
+    // coefficient-placement, boundary-orientation, and source-composition
+    // errors without comparing the implementation against its own stencil.
+    require(coarse_order > 0.75 && coarse_order < 1.25,
+            "heterogeneous mixed-BC order (20-to-40) was outside [0.75, 1.25]: " +
+                std::to_string(coarse_order));
+    require(fine_order > 0.75 && fine_order < 1.25,
+            "heterogeneous mixed-BC order (40-to-80) was outside [0.75, 1.25]: " +
+                std::to_string(fine_order));
+    require(fine_error < 3e-5,
+            "heterogeneous mixed-BC fine-grid error exceeded 3e-5: " + std::to_string(fine_error));
+}
+
 void diffusionUsesHarmonicFaceCoefficient() {
     StructuredMesh mesh(2, 0.0, 1.0);
     TransportProblem problem(mesh);
@@ -237,6 +359,48 @@ void finalTimeIsExactAndLastStepIsShortened() {
                 "last step was not shortened to hit final_time");
     requireNear(result.concentration[1], 0.23, 2e-15,
                 "constant source was not integrated through exact final_time");
+}
+
+void plannedScheduleNeverExceedsRequestedStep() {
+    StructuredMesh mesh(3, 0.0, 1.0);
+    TransportProblem problem(mesh);
+    problem.diffusivity(0.0).constantSource(1.0).initialCondition(0.0);
+
+    SolveOptions ordinary;
+    ordinary.final_time = 1.0;
+    ordinary.time_step = 0.1;
+    ordinary.max_steps = 10;
+    const auto ordinary_result = solve(problem, ordinary);
+    require(ordinary_result.time == 1.0 && ordinary_result.diagnostics.steps == 10,
+            "a decimal endpoint residue consumed an extra canonical transport step");
+    require(ordinary_result.diagnostics.maximum_time_step <= ordinary.time_step,
+            "canonical transport applied a step above the requested ceiling");
+    requireNear(ordinary_result.concentration[1], 1.0, 2.0e-15,
+                "scheduled decimal steps did not cover the requested interval");
+
+    const double tiny_step = std::numeric_limits<double>::denorm_min();
+    SolveOptions tiny;
+    tiny.final_time = 2.0 * tiny_step;
+    tiny.time_step = tiny_step;
+    tiny.max_steps = 2;
+    const auto tiny_result = solve(problem, tiny);
+    require(tiny_result.time == tiny.final_time && tiny_result.diagnostics.steps == 2,
+            "canonical transport skipped a representable subnormal step");
+    require(tiny_result.diagnostics.maximum_time_step == tiny_step,
+            "canonical transport changed the requested subnormal step");
+    require(tiny_result.concentration[1] == tiny.final_time,
+            "canonical transport did not integrate both subnormal source steps");
+
+    SolveOptions rounded_ratio;
+    rounded_ratio.final_time = 0.9375291778124752;
+    rounded_ratio.time_step = 0.09375291778124752;
+    rounded_ratio.max_steps = 11;
+    const auto rounded_result = solve(problem, rounded_ratio);
+    require(
+        rounded_result.time == rounded_ratio.final_time && rounded_result.diagnostics.steps == 11,
+        "canonical transport rounded an exact-float step ratio down");
+    require(rounded_result.diagnostics.maximum_time_step <= rounded_ratio.time_step,
+            "canonical transport exact-float remainder exceeded the requested ceiling");
 }
 
 void boundaryIsAppliedBeforeFirstStencilAndCornersAreDeterministic() {
@@ -309,8 +473,12 @@ int main() {
         {"variable-field conservation", conservativeFluxesPreserveMassWithVariableFields},
         {"conservative advection equation", conservativeAdvectionIncludesVelocityDivergence},
         {"reaction composition and convergence", reactionsComposeAndConvergeInTime},
+        {"canonical spatial grid convergence", canonicalSolveHasSecondOrderSpatialGridConvergence},
+        {"heterogeneous coefficients and mixed boundaries",
+         heterogeneousCoefficientsAndMixedBoundariesConverge},
         {"harmonic diffusion", diffusionUsesHarmonicFaceCoefficient},
         {"exact final time", finalTimeIsExactAndLastStepIsShortened},
+        {"bounded planned time schedule", plannedScheduleNeverExceedsRequestedStep},
         {"boundary and corner policy",
          boundaryIsAppliedBeforeFirstStencilAndCornersAreDeterministic},
         {"loud rejection", unsupportedAndUncertifiedModelsFailLoudly},

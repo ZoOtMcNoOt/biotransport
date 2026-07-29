@@ -1,5 +1,6 @@
 #include "../test_support/science_test.hpp"
 #include <algorithm>
+#include <array>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/solvers/nernst_planck_solver.hpp>
 #include <cmath>
@@ -39,6 +40,64 @@ double centroid(const std::vector<double>& concentration, const StructuredMesh& 
         moment += weight * concentration[i] * mesh.x(i);
     }
     return moment / amount;
+}
+
+double diffusionEigenmodeError(int cells) {
+    constexpr double domain_length_m = 1.0e-3;
+    constexpr double diffusivity_m2_s = 1.0e-9;
+    constexpr double final_time_s = 20.0;
+    constexpr double mean_concentration = 2.0;
+    constexpr double amplitude = 0.5;
+
+    StructuredMesh mesh(cells, 0.0, domain_length_m);
+    NernstPlanckSolver solver(mesh, IonSpecies("verification ion", 1, diffusivity_m2_s), 300.0);
+    std::vector<double> initial(mesh.numNodes());
+    for (int i = 0; i <= cells; ++i) {
+        initial[static_cast<std::size_t>(i)] =
+            mean_concentration + amplitude * std::cos(M_PI * mesh.x(i) / domain_length_m);
+    }
+    solver.setInitialCondition(initial);
+
+    // Zero potential reduces Nernst-Planck to diffusion.  The cosine mode
+    // independently satisfies the solver's default zero-total-flux boundaries.
+    // The explicit ceiling scales as h^2.  The extra h/L factor makes
+    // dt=O(h^3), so first-order time error is asymptotically smaller than the
+    // fitted finite-volume spatial error measured here.
+    const double requested_dt_s =
+        0.1 * solver.maximumStableTimeStep() * (mesh.dx() / domain_length_m);
+    const int steps = static_cast<int>(std::ceil(final_time_s / requested_dt_s));
+    const double dt_s = final_time_s / static_cast<double>(steps);
+    solver.solve(dt_s, steps);
+
+    const double exact_decay = std::exp(-diffusivity_m2_s * M_PI * M_PI * final_time_s /
+                                        (domain_length_m * domain_length_m));
+    double weighted_squared_error = 0.0;
+    for (int i = 0; i <= cells; ++i) {
+        const double exact = mean_concentration +
+                             amplitude * exact_decay * std::cos(M_PI * mesh.x(i) / domain_length_m);
+        const double difference = solver.solution()[static_cast<std::size_t>(i)] - exact;
+        const double weight = (i == 0 || i == cells) ? 0.5 : 1.0;
+        weighted_squared_error += weight * difference * difference;
+    }
+    return std::sqrt(weighted_squared_error / static_cast<double>(cells));
+}
+
+void testDiffusionLimitConvergesAgainstNeumannEigenmode() {
+    const std::array<int, 3> cell_counts{20, 40, 80};
+    std::array<double, 3> errors{};
+    for (std::size_t level = 0; level < cell_counts.size(); ++level) {
+        errors[level] = diffusionEigenmodeError(cell_counts[level]);
+    }
+
+    const double coarse_order = std::log(errors[0] / errors[1]) / std::log(2.0);
+    const double fine_order = std::log(errors[1] / errors[2]) / std::log(2.0);
+    science_test::report("Nernst-Planck diffusion-limit order (20 to 40)", coarse_order);
+    science_test::report("Nernst-Planck diffusion-limit order (40 to 80)", fine_order);
+    SCIENCE_REQUIRE(errors[2] < errors[1] && errors[1] < errors[0],
+                    "Neumann eigenmode error must decrease under spatial refinement");
+    SCIENCE_REQUIRE(coarse_order > 1.8 && fine_order > 1.8,
+                    "fitted finite-volume diffusion limit must approach second order in space "
+                    "when temporal error is suppressed");
 }
 
 void testBoltzmannEquilibriumHasZeroFlux() {
@@ -295,7 +354,9 @@ void testUnsupportedCouplingAndInvalidInputsFailLoudly() {
 int main() {
     return science_test::runSuite(
         "Nernst-Planck electrochemistry",
-        {{"Boltzmann equilibrium has zero fitted flux", testBoltzmannEquilibriumHasZeroFlux},
+        {{"diffusion limit has second-order spatial convergence",
+          testDiffusionLimitConvergesAgainstNeumannEigenmode},
+         {"Boltzmann equilibrium has zero fitted flux", testBoltzmannEquilibriumHasZeroFlux},
          {"nonuniform potential conserves ionic amount", testNonuniformPotentialConservesAmount},
          {"two-dimensional sealed domain conserves ionic amount",
           testTwoDimensionalSealedDomainConservesAmount},

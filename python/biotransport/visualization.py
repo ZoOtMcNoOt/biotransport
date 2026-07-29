@@ -8,7 +8,7 @@ These functions are intentionally beginner-friendly:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import matplotlib.pyplot as plt
 from numpy.typing import ArrayLike
@@ -51,7 +51,7 @@ def plot_1d_solution(
     if ax is None:
         fig, ax = plt.subplots(figsize=(10, 6))
     else:
-        fig = ax.figure
+        fig = cast("Figure", ax.figure)
 
     ax.plot(x, y, "b-")
     if title:
@@ -89,7 +89,7 @@ def plot_2d_solution(
     if ax is None:
         fig, ax = plt.subplots(figsize=(10, 8))
     else:
-        fig = ax.figure
+        fig = cast("Figure", ax.figure)
 
     contour = ax.contourf(X, Y, Z, 50, cmap="viridis")
     fig.colorbar(contour, ax=ax, label=colorbar_label)
@@ -129,7 +129,7 @@ def plot_2d_surface(
         fig = plt.figure(figsize=(12, 10))
         ax = fig.add_subplot(111, projection="3d")
     else:
-        fig = ax.figure
+        fig = cast("Figure", ax.figure)
 
     surf = ax.plot_surface(X, Y, Z, cmap="viridis", edgecolor="none")
 
@@ -335,11 +335,13 @@ def plot(
     """Universal plotting function - the simplest way to visualize results.
 
     Automatically detects 1D vs 2D and chooses the right plot type.
-    Can accept either (mesh, solution) or just a RunResult.
+    Accepts ``(mesh, values)`` or ``(mesh, result)``. Solver results do not
+    retain their mesh, so a result cannot be plotted by itself.
 
     Args:
-        mesh_or_result: Either a mesh or a RunResult from bt.solve()
-        solution: Solution values (optional if mesh_or_result is a RunResult)
+        mesh_or_result: A structured mesh
+        solution: Field values or an object exposing ``concentration`` or
+            ``solution`` data
         title: Plot title (optional)
         kind: Plot type - 'auto' (default), 'contour', 'surface', or 'line'
         show: Whether to call plt.show() (default True)
@@ -349,29 +351,53 @@ def plot(
         Matplotlib figure
 
     Examples:
-        >>> # From a result
+        >>> # Plot a canonical result
         >>> result = bt.solve(problem, t=0.1)
-        >>> bt.plot(mesh, result.solution())
+        >>> bt.plot(mesh, result, show=False)
 
         >>> # 3D surface plot
         >>> bt.plot(mesh, solution, kind='surface')
     """
-    # Handle RunResult input
-    if hasattr(mesh_or_result, "solution") and solution is None:
-        raise ValueError(
-            "When passing a RunResult, you still need the mesh. "
-            "Use: bt.plot(mesh, result.solution())"
-        )
+    if not isinstance(kind, str):
+        raise TypeError("kind must be a string")
+    normalized_kind = kind.casefold()
+    if not isinstance(show, bool):
+        raise TypeError("show must be a boolean")
+    if solution is None:
+        if hasattr(mesh_or_result, "concentration") or hasattr(
+            mesh_or_result, "solution"
+        ):
+            raise ValueError(
+                "A solver result does not retain its mesh. "
+                "Pass both objects: bt.plot(mesh, result)."
+            )
+        raise TypeError("solution values or a solver result are required")
+    if not hasattr(mesh_or_result, "is_1d") or not callable(mesh_or_result.is_1d):
+        raise TypeError("mesh_or_result must be a structured mesh")
+
+    values = solution
+    if hasattr(solution, "concentration"):
+        candidate = solution.concentration
+        values = candidate() if callable(candidate) else candidate
+    elif hasattr(solution, "solution"):
+        candidate = solution.solution
+        values = candidate() if callable(candidate) else candidate
 
     mesh = mesh_or_result
-
-    if mesh.is_1d():
-        fig = plot_1d_solution(mesh, solution, title=title)
+    is_1d = bool(mesh.is_1d())
+    if is_1d:
+        if normalized_kind not in {"auto", "line"}:
+            raise ValueError("a 1D mesh supports kind='auto' or kind='line'")
+        fig = plot_1d_solution(mesh, values, title=title, **kwargs)
     else:
-        if kind == "surface":
-            fig = plot_2d_surface(mesh, solution, title=title, **kwargs)
+        if normalized_kind not in {"auto", "contour", "surface"}:
+            raise ValueError(
+                "a 2D mesh supports kind='auto', kind='contour', or kind='surface'"
+            )
+        if normalized_kind == "surface":
+            fig = plot_2d_surface(mesh, values, title=title, **kwargs)
         else:
-            fig = plot_2d_solution(mesh, solution, title=title, **kwargs)
+            fig = plot_2d_solution(mesh, values, title=title, **kwargs)
 
     if show:
         plt.show()
