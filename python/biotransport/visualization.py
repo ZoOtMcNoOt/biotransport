@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, cast
 
 import matplotlib.pyplot as plt
+import numpy as np
 from numpy.typing import ArrayLike
 
 from .mesh_utils import as_1d, as_2d, x_nodes, xy_grid
@@ -323,40 +324,53 @@ def plot_2d(
     return fig
 
 
+def _field_values(source):
+    """Extract plottable values from a result-like object or return it unchanged."""
+    if hasattr(source, "field") and not isinstance(source, np.ndarray):
+        return source.field
+    if hasattr(source, "concentration"):
+        candidate = source.concentration
+        return candidate() if callable(candidate) else candidate
+    if hasattr(source, "solution"):
+        candidate = source.solution
+        return candidate() if callable(candidate) else candidate
+    return source
+
+
 def plot(
     mesh_or_result,
     solution=None,
     *,
     title: str | None = None,
     kind: str = "auto",
-    show: bool = True,
+    show: bool = False,
     **kwargs,
 ):
     """Universal plotting function - the simplest way to visualize results.
 
     Automatically detects 1D vs 2D and chooses the right plot type.
-    Accepts ``(mesh, values)`` or ``(mesh, result)``. Solver results do not
-    retain their mesh, so a result cannot be plotted by itself.
+    Accepts a :class:`~biotransport.Result` (or any result that carries its
+    mesh) on its own, or ``(mesh, values)`` / ``(mesh, result)``.
 
     Args:
-        mesh_or_result: A structured mesh
-        solution: Field values or an object exposing ``concentration`` or
-            ``solution`` data
+        mesh_or_result: A result carrying its mesh, or a structured mesh
+        solution: Field values or an object exposing ``field``,
+            ``concentration`` or ``solution`` data (when a mesh was given)
         title: Plot title (optional)
         kind: Plot type - 'auto' (default), 'contour', 'surface', or 'line'
-        show: Whether to call plt.show() (default True)
+        show: Whether to call ``plt.show()`` (default False; the figure is
+            returned so callers can add to it first)
         **kwargs: Additional arguments passed to underlying plot functions
 
     Returns:
         Matplotlib figure
 
     Examples:
-        >>> # Plot a canonical result
-        >>> result = bt.solve(problem, t=0.1)
-        >>> bt.plot(mesh, result, show=False)
+        >>> result = bt.solve(problem, end_time=0.1)
+        >>> bt.plot(result)            # or result.plot()
 
-        >>> # 3D surface plot
-        >>> bt.plot(mesh, solution, kind='surface')
+        >>> # 3D surface plot of raw values on a mesh
+        >>> bt.plot(mesh, values, kind='surface')
     """
     if not isinstance(kind, str):
         raise TypeError("kind must be a string")
@@ -364,26 +378,29 @@ def plot(
     if not isinstance(show, bool):
         raise TypeError("show must be a boolean")
     if solution is None:
-        if hasattr(mesh_or_result, "concentration") or hasattr(
+        mesh = getattr(mesh_or_result, "mesh", None)
+        if mesh is not None and (
+            hasattr(mesh_or_result, "field") or hasattr(mesh_or_result, "concentration")
+        ):
+            source = mesh_or_result
+        elif hasattr(mesh_or_result, "concentration") or hasattr(
             mesh_or_result, "solution"
         ):
             raise ValueError(
-                "A solver result does not retain its mesh. "
+                "This result does not carry its mesh. "
                 "Pass both objects: bt.plot(mesh, result)."
             )
-        raise TypeError("solution values or a solver result are required")
-    if not hasattr(mesh_or_result, "is_1d") or not callable(mesh_or_result.is_1d):
-        raise TypeError("mesh_or_result must be a structured mesh")
+        else:
+            raise TypeError("solution values or a solver result are required")
+    else:
+        mesh = mesh_or_result
+        source = solution
+    if not hasattr(mesh, "is_1d") or not callable(mesh.is_1d):
+        raise TypeError(
+            "mesh_or_result must be a structured mesh or a result that carries one"
+        )
 
-    values = solution
-    if hasattr(solution, "concentration"):
-        candidate = solution.concentration
-        values = candidate() if callable(candidate) else candidate
-    elif hasattr(solution, "solution"):
-        candidate = solution.solution
-        values = candidate() if callable(candidate) else candidate
-
-    mesh = mesh_or_result
+    values = _field_values(source)
     is_1d = bool(mesh.is_1d())
     if is_1d:
         if normalized_kind not in {"auto", "line"}:

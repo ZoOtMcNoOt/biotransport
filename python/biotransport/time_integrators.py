@@ -23,10 +23,9 @@ Example:
 """
 
 import math
-import warnings
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import Any, Callable, Optional, Union, cast, overload
+from typing import Any, Callable, Optional, cast
 
 import numpy as np
 
@@ -53,18 +52,6 @@ _PROBLEM_CONTRACT_METHODS = (
     "has_reaction",
     "has_advection",
 )
-
-
-class _OmittedMethod:
-    """Sentinel that distinguishes omission from an explicit method value."""
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        return "<omitted>"
-
-
-_OMITTED_METHOD = _OmittedMethod()
 
 
 def _finite_real_scalar(value: object, name: str) -> float:
@@ -857,8 +844,8 @@ class RK4Integrator(_LegacyDiffusionIntegrator):
     .. warning::
        This is a legacy compatibility wrapper with a Python time loop.  Prefer
        :func:`biotransport.solve` or ``integrate(method="euler")`` for native
-       execution and the complete transport operator.  Omitting ``method``
-       temporarily warns and preserves historical RK4 behavior.
+       execution and the complete transport operator.  ``integrate`` requires
+       ``method``, so the algorithm is always an explicit choice.
 
     This integrator uses method of lines: discretize in space first,
     then integrate the resulting ODE system in time using RK4.
@@ -1033,8 +1020,8 @@ class HeunIntegrator(_LegacyDiffusionIntegrator):
     .. warning::
        This is a legacy compatibility wrapper with a Python time loop.  Prefer
        :func:`biotransport.solve` or ``integrate(method="euler")`` for native
-       execution and the complete transport operator.  Omitting ``method``
-       temporarily warns and preserves historical RK4 behavior.
+       execution and the complete transport operator.  ``integrate`` requires
+       ``method``, so the algorithm is always an explicit choice.
 
     Within its supported uniform-diffusion contract, this offers:
     - 2nd-order time accuracy (error ~ O(dt²))
@@ -1175,46 +1162,26 @@ class HeunIntegrator(_LegacyDiffusionIntegrator):
         )
 
 
-@overload
-def integrate(
-    problem: TransportProblem,
-    t_end: float,
-    *,
-    dt: Optional[float] = None,
-) -> IntegrationResult: ...
-
-
-@overload
 def integrate(
     problem: TransportProblem,
     t_end: float,
     *,
     method: str,
     dt: Optional[float] = None,
-) -> IntegrationResult: ...
-
-
-def integrate(
-    problem: TransportProblem,
-    t_end: float,
-    *,
-    method: Union[str, _OmittedMethod] = _OMITTED_METHOD,
-    dt: Optional[float] = None,
 ) -> IntegrationResult:
     """Dispatch to canonical Euler or limited legacy Python integrators.
 
-    For compatibility, omitting ``method`` currently selects legacy ``"rk4"``
-    and emits :class:`FutureWarning`; a future release will default to native
-    ``"euler"``.  Pass ``method="rk4"`` to preserve the legacy behavior
-    explicitly.  ``method="euler"`` uses the canonical C++ transport solver
-    and preserves every configured problem term.  ``"heun"`` and ``"rk4"``
-    accept only 1D uniform diffusion with Dirichlet conditions at both ends.
+    ``method`` is required so the algorithm is always chosen explicitly.
+    ``method="euler"`` uses the canonical C++ transport solver and preserves
+    every configured problem term.  ``"heun"`` and ``"rk4"`` are legacy Python
+    reference integrators that accept only 1D uniform diffusion with Dirichlet
+    conditions at both ends.
 
     Args:
         problem: The transport problem to solve
         t_end: End time
-        method: Integration method. Omission currently warns and selects
-            legacy ``"rk4"``. Pass ``"euler"`` for canonical native execution.
+        method: ``"euler"`` (canonical native), ``"heun"`` or ``"rk4"``
+            (legacy Python reference).
         dt: Time step (uses method-specific stable dt if not provided)
 
     Returns:
@@ -1225,20 +1192,9 @@ def integrate(
         >>> assert result.stats["method"] == "euler"
         >>> print(f"Final solution: {result.solution}")
     """
-    if method is _OMITTED_METHOD:
-        warnings.warn(
-            "integrate() without method currently uses legacy RK4; a future "
-            "release will default to native Euler. Pass method='rk4' to preserve "
-            "legacy behavior, or call biotransport.solve() for native full-physics "
-            "integration.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        normalized_method = "rk4"
-    else:
-        if not isinstance(method, str):
-            raise TypeError("method must be a string")
-        normalized_method = method.strip().lower()
+    if not isinstance(method, str):
+        raise TypeError("method must be a string")
+    normalized_method = method.strip().lower()
     if normalized_method not in {"euler", "heun", "rk4"}:
         raise ValueError(
             f"Unknown integration method: {method}. Choose from: 'euler', 'heun', 'rk4'"

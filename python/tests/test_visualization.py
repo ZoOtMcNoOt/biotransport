@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
+import types
+
 import pytest
 
 import biotransport as bt
@@ -48,11 +50,20 @@ def test_plot_accepts_result_with_callable_concentration() -> None:
         plt.close(figure)
 
 
-def test_plot_result_only_error_explicitly_names_missing_mesh() -> None:
+def test_plot_accepts_a_result_that_carries_its_mesh() -> None:
     mesh = bt.mesh_1d(4, 0.0, 1.0)
+    result = _canonical_result(mesh)
+
+    figure = bt.plot(result, show=False)
+    assert figure.axes[0].lines[0].get_ydata().tolist() == result.concentration.tolist()
+    assert result.plot(show=False) is not None
+
+
+def test_plot_result_without_mesh_error_explicitly_names_the_fix() -> None:
+    meshless = types.SimpleNamespace(concentration=np.zeros(5))
 
     with pytest.raises(ValueError, match=r"bt\.plot\(mesh, result\)"):
-        bt.plot(_canonical_result(mesh), show=False)
+        bt.plot(meshless, show=False)
 
 
 @pytest.mark.parametrize(

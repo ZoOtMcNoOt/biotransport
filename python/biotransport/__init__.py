@@ -151,6 +151,7 @@ from .mesh_utils import (
     mesh_2d,
 )
 from . import run as _run_module
+from .results import Result, Snapshots
 from .run import CheckpointResult, run_checkpoints, solve
 from ._deprecation import (
     ROOT_DEPRECATED,
@@ -410,6 +411,8 @@ __all__ = [
     # ========== Core (most commonly used) ==========
     "Problem",  # The main problem builder (alias for TransportProblem)
     "solve",  # Simplest way to run a simulation
+    "Result",  # What every solve returns
+    "Snapshots",  # Fields recorded at save_times
     "plot",  # Simplest way to visualize results
     "mesh_1d",  # Create 1D mesh
     "mesh_2d",  # Create 2D mesh

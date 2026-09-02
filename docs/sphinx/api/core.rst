@@ -13,6 +13,12 @@ Problem construction
 
 .. autofunction:: solve
 
+.. autoclass:: biotransport.results.Result
+   :members:
+
+.. autoclass:: biotransport.results.Snapshots
+   :members:
+
 .. autoclass:: TransportResult
    :members:
 

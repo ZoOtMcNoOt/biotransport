@@ -149,8 +149,8 @@ accelerators must preserve the documented scientific result within stated
 tolerances.
 
 The friendly `solve()` path and explicit `integrate(method="euler")` execute
-the canonical C++ solver. Omitting `integrate()`'s method temporarily warns and
-preserves historical RK4 behavior. Python sensitivity/convergence
+the canonical C++ solver. `integrate()` requires `method`, so the algorithm is
+always an explicit choice. Python sensitivity/convergence
 orchestration remains Python by design. Legacy adaptive, Heun/RK4 diffusion,
 Newton, and pulsatile reference paths are discoverable in the Python numerical
 registry and are not presented as native-performance APIs.

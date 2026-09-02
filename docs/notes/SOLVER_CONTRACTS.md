@@ -187,7 +187,7 @@ corresponding `SolverContract` rather than scraping this summary table.
 |---|---|---|---|
 | `python.canonical.adapters` | `biotransport.run` | native adapter | Retain canonical `solve`/`run`; replace segmented checkpoints with native saved-time support when available. |
 | `python.legacy.adaptive_diffusion` | `biotransport.adaptive` | mixed Python/native | Legacy 1D Dirichlet diffusion only; port the controller or deprecate after a native adaptive API. |
-| `python.legacy.time_integrators` | `biotransport.time_integrators` | mixed Python/native | Explicit `integrate(method="euler")` is native; an omitted method temporarily warns and preserves historical RK4. Heun/RK4 diffusion and generic stages remain legacy/reference paths. |
+| `python.legacy.time_integrators` | `biotransport.time_integrators` | mixed Python/native | `integrate` requires `method`; `method="euler"` is native. Heun/RK4 diffusion and generic stages remain legacy/reference paths. |
 | `python.native_backed.high_order` | `biotransport.high_order` | mixed Python/native | Retain compiled stencil, diffusion, and RK-stage orchestration; generic RHS callbacks still cross into Python and remain a reference surface. |
 | `python.reference.newton` | `biotransport.newton_raphson` | Python reference | Retain with explicit backend; iteration exhaustion returns `converged=False` and must be checked. |
 | `python.reference.pulsatile_diffusion` | `biotransport.pulsatile` | Python reference | Warning-emitting compatibility path pending native time-dependent boundaries, then deprecate. |

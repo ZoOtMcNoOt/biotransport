@@ -148,10 +148,10 @@ def test_problem_aliases_resolve_to_the_problem_builder() -> None:
 
 
 def test_transport_result_solution_alias_warns_and_matches_concentration() -> None:
-    result = bt.solve(_problem(), end_time=0.01)
+    native = bt.solve(_problem(), end_time=0.01).native
     with pytest.warns(BioTransportDeprecationWarning, match="concentration"):
-        legacy = result.solution
-    np.testing.assert_array_equal(legacy, result.concentration)
+        legacy = native.solution
+    np.testing.assert_array_equal(legacy, native.concentration)
 
 
 def test_nernst_planck_neumann_spelling_warns_and_installs_the_same_flux() -> None:

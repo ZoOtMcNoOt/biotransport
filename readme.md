@@ -93,7 +93,21 @@ result = bt.solve(problem, end_time=0.10, time_step=1.0e-3)
 ```
 
 The step is honored unless it exceeds the solver's explicit stability limit, in which case the
-solve raises an exception. `t` and `dt` remain compatibility aliases for `end_time` and `time_step`.
+solve raises an exception. The older `t` and `dt` spellings still work but emit a
+`BioTransportDeprecationWarning`; see `docs/notes/DEPRECATION_POLICY.md`.
+
+`solve` returns a `Result` that carries the final field, the exact time, the step count, the
+solver diagnostics, a copy of the mesh, and the identifier of the scientific contract that
+produced it. To record the field at intermediate times in the same call, pass `save_times`; the
+C++ solver partitions its step schedule so every snapshot lands exactly on the requested clock and
+every configured term (including a time-dependent reaction) is preserved:
+
+```python
+result = bt.solve(problem, end_time=0.10, save_times=[0.02, 0.05, 0.10])
+result.snapshots[0.05]        # NumPy array at t = 0.05
+result.snapshots.stacked()    # (3, n_nodes) array
+result.plot(title="t = 0.10") # the result knows its mesh
+```
 
 For discovery without a flat wall of class names, many native solver objects are grouped into thin
 namespaces: `bt.diffusion`, `bt.electrochem`, `bt.flow`, and `bt.applications`. These modules only

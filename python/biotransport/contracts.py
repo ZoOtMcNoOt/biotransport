@@ -2121,8 +2121,8 @@ _PYTHON_NUMERICAL_CONTRACTS: Final[tuple[PythonNumericalContract, ...]] = (
         ),
         disposition=(
             "Keep the generic stages as transparent reference utilities. Explicit "
-            "method='euler' uses the native path; an omitted method temporarily warns "
-            "and preserves historical RK4 behavior. Port or eventually deprecate the "
+            "method='euler' uses the native path; method is required so the algorithm "
+            "is always an explicit choice. Port or eventually deprecate the "
             "legacy Python diffusion wrappers."
         ),
         exclusions=(

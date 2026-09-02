@@ -7,7 +7,7 @@ mesh = bt.StructuredMesh(10, 0.0, 1.0)
 problem = bt.TransportProblem(mesh).diffusivity(0.1).initial_condition(1.0)
 options = bt.SolveOptions.until(0.01)
 native_result: bt.TransportResult = bt.solve_transport(problem, options)
-python_result: bt.TransportResult = bt.solve(problem, end_time=0.01)
+python_result: bt.Result = bt.solve(problem, end_time=0.01)
 steps: int = python_result.diagnostics.steps
 field = native_result.concentration
 checkpoint_result: bt.CheckpointResult = bt.run_checkpoints(

@@ -21,6 +21,11 @@ Friendly native adapters
 The primary :func:`solve` adapter and result diagnostics are documented on
 :doc:`core`.
 
+``run_checkpoints`` is deprecated: :func:`solve` accepts ``save_times`` and
+returns the recorded fields as ``result.snapshots`` while preserving every
+configured term. The legacy helper remains available for one deprecation
+window and warns on use.
+
 .. autofunction:: run_checkpoints
 
 .. autoclass:: CheckpointResult
@@ -38,10 +43,10 @@ Python reference and legacy time surfaces
 -----------------------------------------
 
 These APIs have separate :class:`PythonNumericalContract` records and do not
-claim native performance.  Explicit ``integrate(method="euler")`` uses the
-canonical native Euler path.  Omitting ``method`` temporarily emits a
-``FutureWarning`` and preserves historical RK4 behavior; explicit Heun/RK4
-diffusion remains a legacy path.
+claim native performance.  ``integrate`` requires ``method``:
+``integrate(method="euler")`` uses the canonical native Euler path, while
+``"heun"`` and ``"rk4"`` are legacy Python reference integrators for 1D uniform
+diffusion with Dirichlet ends.
 
 .. autoclass:: AdaptiveTimeStepper
    :members:

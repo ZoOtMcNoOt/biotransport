@@ -9,6 +9,13 @@ releases may retire spellings under the documented
 ## [Unreleased]
 
 ### Added
+- `biotransport.Result` and `biotransport.Snapshots`: `bt.solve` now returns a
+  `Result` carrying the field(s), exact time, step count, diagnostics, a copy
+  of the mesh, the contract identifier, and `snapshots`; `result.plot()` and
+  `result.as_grid()` work without the original mesh object.
+- `bt.solve(..., save_times=[...])` records the field at absolute times in one
+  call, preserving every configured term; `result.snapshots[t]` returns each
+  snapshot. `bt.plot(result)` accepts a result on its own.
 - `SolveOptions.save_times`: the canonical C++ solver records the field at
   requested absolute times in one call. Each save time partitions the step
   schedule so the field is captured exactly at that clock, and the reaction
@@ -34,6 +41,11 @@ releases may retire spellings under the documented
   snapshot test.
 
 ### Changed
+- `bt.plot` no longer calls `plt.show()` by default (`show=False`); it returns
+  the figure so callers can add to it before showing.
+- `bt.integrate` requires `method=` (`"euler"`, `"heun"` or `"rk4"`). Omitting
+  it previously selected legacy RK4 with a `FutureWarning`; the algorithm is
+  now always an explicit choice.
 - The Neumann keyword on `Problem.neumann`, `DiffusionSolver.set_neumann_boundary`
   and `ReactionDiffusionSolver.set_neumann_boundary` is now `normal_derivative`
   (it was `flux`, although the value is the outward-normal derivative). No
@@ -48,6 +60,8 @@ releases may retire spellings under the documented
   intersphinx inventories when building without network access.
 
 ### Deprecated
+- `bt.solve(problem, t=..., dt=...)`: use `end_time=` and `time_step=`.
+- `bt.run_checkpoints(...)`: use `bt.solve(..., save_times=[...]).snapshots`.
 - `TransportResult.solution`: use `TransportResult.concentration`.
 - `NernstPlanckSolver.set_neumann_boundary` and
   `MultiIonSolver.set_neumann_boundary`: use `set_outward_flux_boundary`; the

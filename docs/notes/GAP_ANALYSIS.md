@@ -132,8 +132,8 @@ adaptive refinement.
 - A stable implicit method can still be inaccurate. “Unconditionally stable”
   is never permission to skip a temporal study.
 - General Python callbacks cross the Python/C++ boundary and can be slower than
-  fully native kernels. Explicit `integrate(method="euler")` is native; an
-  omitted method temporarily warns and preserves historical RK4 behavior.
+  fully native kernels. `integrate` requires `method`; `method="euler"` is
+  native.
   Legacy Heun/RK4, adaptive, Newton, and pulsatile references are identified
   separately in the Python numerical registry. No uncontrolled speedup claim
   should be inferred.

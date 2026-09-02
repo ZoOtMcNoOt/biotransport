@@ -974,11 +974,8 @@ class TestIntegrateFunction:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        with pytest.warns(FutureWarning, match="method='rk4'.*biotransport.solve"):
-            result = bt.integrate(problem, t_end=0.01, dt=0.005)
-
-        assert result.stats["method"] == "rk4"
-        assert "diagnostics" not in result.stats
+        with pytest.raises(TypeError, match="method"):
+            bt.integrate(problem, t_end=0.01, dt=0.005)  # type: ignore[call-arg]
 
     def test_integrate_euler(self):
         """Explicit Euler selects the canonical native solver."""

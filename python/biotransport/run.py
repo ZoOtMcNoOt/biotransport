@@ -19,6 +19,11 @@ from ._core import (
     TransportResult,
     solve_transport,
 )
+from ._deprecation import deprecated_callable, warn_deprecated
+from .results import Result, Snapshots
+
+#: Identifier of the scientific contract behind :func:`solve`.
+CANONICAL_CONTRACT_ID = "transport.canonical_explicit"
 
 
 @dataclass(frozen=True)
@@ -164,19 +169,56 @@ def _owned_finite_real_array(value: object, name: str) -> np.ndarray:
     return result
 
 
+def _wrap_transport_result(native: TransportResult) -> Result:
+    """Present a native ``TransportResult`` through the shared :class:`Result`."""
+    diagnostics = native.diagnostics
+    return Result(
+        fields={"concentration": native.concentration},
+        time=native.time,
+        steps=int(diagnostics.steps),
+        diagnostics=diagnostics,
+        mesh=native.mesh,
+        contract=CANONICAL_CONTRACT_ID,
+        snapshots=Snapshots(
+            tuple(native.snapshot_times), tuple(native.snapshot_fields)
+        ),
+        native=native,
+    )
+
+
+def _validated_save_times(save_times: object, final_time: float) -> list[float]:
+    if save_times is None:
+        return []
+    if isinstance(save_times, (str, bytes)):
+        raise TypeError("save_times must be a sequence of real times")
+    try:
+        raw = list(save_times)  # type: ignore[call-overload]
+    except TypeError as error:
+        raise TypeError("save_times must be a sequence of real times") from error
+    values = [
+        _finite_real(value, f"save_times[{index}]") for index, value in enumerate(raw)
+    ]
+    if any(value < 0.0 or value > final_time for value in values):
+        raise ValueError("save_times must lie within [0, end_time]")
+    if any(later <= earlier for earlier, later in zip(values, values[1:])):
+        raise ValueError("save_times must be strictly increasing")
+    return values
+
+
 def solve(
     problem: TransportProblem,
     end_time: float | None = None,
     *,
-    t: float | None = None,
     time_step: float | None = None,
-    dt: float | None = None,
+    save_times: Sequence[float] | None = None,
     safety_factor: float = 0.8,
     reaction_step_fraction: float = 0.1,
     max_steps: int = 10_000_000,
     check_finite: bool = True,
     method: str = "conservative",
-) -> TransportResult:
+    t: float | None = None,
+    dt: float | None = None,
+) -> Result:
     """Solve a scalar transport problem entirely in the C++ core.
 
     Parameters
@@ -189,22 +231,41 @@ def solve(
         Maximum explicit step. When omitted, the C++ solver selects a certified
         transport-stable step. Custom reactions require either this argument or
         a declared derivative bound.
+    save_times:
+        Absolute times in ``[0, end_time]``, strictly increasing, at which the
+        field is recorded. The C++ solver partitions its step schedule so each
+        snapshot is captured exactly at that clock, and every configured term
+        (including a time-dependent reaction) is preserved. The snapshots are
+        returned as ``result.snapshots``.
     safety_factor:
         Fraction of the certified explicit stability limit used automatically.
     reaction_step_fraction:
         Accuracy guard relative to a known reaction timescale.
 
+    Returns
+    -------
+    Result
+        ``result.concentration`` (the final field), ``result.time`` (exactly
+        ``end_time``), ``result.steps``, ``result.diagnostics``, ``result.mesh``,
+        ``result.snapshots`` and ``result.plot()``.
+
     Notes
     -----
-    ``t`` and ``dt`` remain as compatibility aliases. ``method`` accepts
-    ``"conservative"`` or ``"explicit"``; other algorithms are exposed through
-    their specialized APIs until they share this scientific contract.
+    ``t`` and ``dt`` are deprecated spellings of ``end_time`` and ``time_step``
+    and emit :class:`~biotransport.BioTransportDeprecationWarning`. ``method``
+    accepts ``"conservative"`` or ``"explicit"``; other algorithms are exposed
+    through their specialized APIs until they share this scientific contract.
     """
     if not isinstance(problem, TransportProblem):
         raise TypeError("problem must be a TransportProblem")
     if end_time is not None and t is not None:
         raise TypeError("Pass either end_time or t, not both")
-    if end_time is None:
+    if end_time is None and t is not None:
+        warn_deprecated(
+            "solve(t=...)",
+            "solve(end_time=...)",
+            reason="end_time is the one spelling for the requested end time",
+        )
         end_time = t
     if end_time is None:
         raise TypeError("end_time is required")
@@ -214,13 +275,19 @@ def solve(
 
     if time_step is not None and dt is not None:
         raise TypeError("Pass either time_step or dt, not both")
-    if time_step is None:
+    if time_step is None and dt is not None:
+        warn_deprecated(
+            "solve(dt=...)",
+            "solve(time_step=...)",
+            reason="time_step is the one spelling for the maximum explicit step",
+        )
         time_step = dt
     requested_step = 0.0
     if time_step is not None:
         requested_step = _finite_real(time_step, "time_step")
         if requested_step <= 0.0:
             raise ValueError("time_step must be positive when provided")
+    save_time_values = _validated_save_times(save_times, final_time)
 
     if not isinstance(method, str):
         raise TypeError("method must be a string")
@@ -252,14 +319,25 @@ def solve(
     options.reaction_step_fraction = reaction_fraction
     options.max_steps = step_limit
     options.check_finite = check_finite
-    return solve_transport(problem, options)
+    options.save_times = save_time_values
+    return _wrap_transport_result(solve_transport(problem, options))
 
 
-def run(problem: TransportProblem, t_end: float, **kwargs) -> TransportResult:
-    """Compatibility alias for :func:`solve`; computation remains in C++."""
+def run(problem: TransportProblem, t_end: float, **kwargs) -> Result:
+    """Deprecated alias for :func:`solve`; computation remains in C++."""
     return solve(problem, end_time=t_end, **kwargs)
 
 
+@deprecated_callable(
+    "bt.solve(problem, end_time=..., save_times=[...]).snapshots",
+    reason=(
+        "save_times keeps every configured term (reaction, advection, variable "
+        "diffusivity), passes the absolute time to the reaction, and lands on each "
+        "snapshot inside the C++ solver; run_checkpoints only supported uniform "
+        "diffusion"
+    ),
+    name="biotransport.run_checkpoints",
+)
 def run_checkpoints(
     mesh,
     checkpoints: Sequence[float],

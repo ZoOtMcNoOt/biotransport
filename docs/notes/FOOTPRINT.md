@@ -169,7 +169,7 @@ symbols are owned by `PythonNumericalContract` records:
 
 | Surface | Backend and disposition |
 |---|---|
-| Canonical `solve`/`run` | Retained thin native adapter; explicit `integrate(method="euler")` also selects native Euler, while an omitted method temporarily warns and preserves historical RK4. |
+| Canonical `solve`/`run` | Retained thin native adapter; `integrate` requires `method`, and `method="euler"` selects native Euler. |
 | `run_checkpoints` | Retained native-segment orchestrator with per-segment diagnostics and cumulative step limits; replace with native solve-at-times when available. |
 | Adaptive and legacy Heun/RK4 diffusion | Mixed Python/native compatibility paths; port the controller/loop or deprecate after native replacements. |
 | High-order operators/diffusion | Retain compiled kernels; generic Python Runge--Kutta remains a reference utility. |
