@@ -280,6 +280,11 @@ private:
                     throw std::invalid_argument("Robin coefficients a and b cannot both be zero");
                 }
                 return;
+            case BoundaryType::OUTWARD_FLUX:
+                throw std::invalid_argument(
+                    "OUTWARD_FLUX prescribes a physical flux; this solver's Neumann condition "
+                    "is the outward-normal derivative dc/dn. Use neumann(-flux / D) or a solver "
+                    "that implements flux boundaries.");
         }
         throw std::invalid_argument("Unsupported boundary-condition type");
     }
@@ -287,6 +292,10 @@ private:
     static double boundaryValueFromInterior(const BoundaryCondition& bc, double interior,
                                             double spacing) {
         switch (bc.type) {
+            case BoundaryType::OUTWARD_FLUX:
+                throw std::invalid_argument(
+                    "OUTWARD_FLUX boundaries are rejected before stepping by "
+                    "validateBoundaryCondition");
             case BoundaryType::DIRICHLET:
                 return bc.value;
             case BoundaryType::NEUMANN:

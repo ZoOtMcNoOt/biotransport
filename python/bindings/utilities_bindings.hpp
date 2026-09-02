@@ -1,7 +1,7 @@
 /**
  * @file utilities_bindings.hpp
  * @brief Python bindings for utility modules
- * 
+ *
  * This module provides bindings for:
  * - dimensionless submodule (Re, Sc, Pe, Bi, Fo, Sh)
  * - analytical submodule (canonical solutions for verification)
@@ -22,5 +22,5 @@ namespace bindings {
  */
 void register_utilities_bindings(py::module_& m);
 
-} // namespace bindings
-} // namespace biotransport
+}  // namespace bindings
+}  // namespace biotransport

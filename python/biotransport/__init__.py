@@ -279,7 +279,7 @@ Problem = TransportProblem
 # ``AdvectionDiffusionProblem`` aliases are deprecated and resolve through
 # ``__getattr__`` (see ``biotransport._deprecation.ROOT_DEPRECATED``).
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     # ========== Tier 0: the canonical path ==========

@@ -7,14 +7,19 @@ file(GLOB_RECURSE BIOTRANSPORT_TEST_SOURCES CONFIGURE_DEPENDS
      ${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp
      ${CMAKE_CURRENT_SOURCE_DIR}/physics/*.cpp)
 foreach(test_source IN LISTS BIOTRANSPORT_TEST_SOURCES)
-    file(STRINGS ${test_source} cassert_includes REGEX "^#include <cassert>")
-    if(cassert_includes)
-        message(FATAL_ERROR
-            "${test_source} includes <cassert>; assert() is compiled out under NDEBUG. "
-            "Use SCIENCE_REQUIRE from cpp/tests/test_support/science_test.hpp instead.")
-    endif()
+  file(STRINGS ${test_source} cassert_includes REGEX "^#include <cassert>")
+  if(cassert_includes)
+    message(
+      FATAL_ERROR
+        "${test_source} includes <cassert>; assert() is compiled out under NDEBUG. "
+        "Use SCIENCE_REQUIRE from cpp/tests/test_support/science_test.hpp instead."
+    )
+  endif()
 endforeach()
 unset(BIOTRANSPORT_TEST_SOURCES)
+
+# Every test target in this directory compiles with the strict warning set.
+link_libraries(biotransport_warnings)
 
 add_executable(test_mesh core/test_mesh.cpp)
 target_link_libraries(test_mesh PRIVATE biotransport)
@@ -28,7 +33,8 @@ target_link_libraries(test_analytical PRIVATE biotransport)
 add_executable(test_balance_accounting core/test_balance_accounting.cpp)
 target_link_libraries(test_balance_accounting PRIVATE biotransport)
 
-add_executable(test_nonuniform_diffusion_science core/test_nonuniform_diffusion_science.cpp)
+add_executable(test_nonuniform_diffusion_science
+               core/test_nonuniform_diffusion_science.cpp)
 target_link_libraries(test_nonuniform_diffusion_science PRIVATE biotransport)
 
 add_executable(test_diffusion physics/test_diffusion.cpp)
@@ -37,34 +43,44 @@ target_link_libraries(test_diffusion PRIVATE biotransport)
 add_executable(test_diffusion_2d physics/test_diffusion_2d.cpp)
 target_link_libraries(test_diffusion_2d PRIVATE biotransport)
 
-add_executable(test_logistic_reaction_diffusion physics/test_logistic_reaction_diffusion.cpp)
+add_executable(test_logistic_reaction_diffusion
+               physics/test_logistic_reaction_diffusion.cpp)
 target_link_libraries(test_logistic_reaction_diffusion PRIVATE biotransport)
 
 add_executable(test_diffusion_1d_neumann physics/test_diffusion_1d_neumann.cpp)
 target_link_libraries(test_diffusion_1d_neumann PRIVATE biotransport)
 
-add_executable(test_linear_reaction_diffusion physics/test_linear_reaction_diffusion.cpp)
+add_executable(test_linear_reaction_diffusion
+               physics/test_linear_reaction_diffusion.cpp)
 target_link_libraries(test_linear_reaction_diffusion PRIVATE biotransport)
 
 add_executable(test_boundary_corners physics/test_boundary_corners.cpp)
 target_link_libraries(test_boundary_corners PRIVATE biotransport)
 
-add_executable(test_michaelis_menten_reaction_diffusion physics/test_michaelis_menten_reaction_diffusion.cpp)
-target_link_libraries(test_michaelis_menten_reaction_diffusion PRIVATE biotransport)
+add_executable(test_michaelis_menten_reaction_diffusion
+               physics/test_michaelis_menten_reaction_diffusion.cpp)
+target_link_libraries(test_michaelis_menten_reaction_diffusion
+                      PRIVATE biotransport)
 
-add_executable(test_constant_source_reaction_diffusion physics/test_constant_source_reaction_diffusion.cpp)
-target_link_libraries(test_constant_source_reaction_diffusion PRIVATE biotransport)
+add_executable(test_constant_source_reaction_diffusion
+               physics/test_constant_source_reaction_diffusion.cpp)
+target_link_libraries(test_constant_source_reaction_diffusion
+                      PRIVATE biotransport)
 
 add_executable(test_explicit_fd_run physics/test_explicit_fd_run.cpp)
 target_link_libraries(test_explicit_fd_run PRIVATE biotransport)
 
-add_executable(test_explicit_fd_run_constant_source physics/test_explicit_fd_run_constant_source.cpp)
+add_executable(test_explicit_fd_run_constant_source
+               physics/test_explicit_fd_run_constant_source.cpp)
 target_link_libraries(test_explicit_fd_run_constant_source PRIVATE biotransport)
 
-add_executable(test_explicit_fd_run_michaelis_menten physics/test_explicit_fd_run_michaelis_menten.cpp)
-target_link_libraries(test_explicit_fd_run_michaelis_menten PRIVATE biotransport)
+add_executable(test_explicit_fd_run_michaelis_menten
+               physics/test_explicit_fd_run_michaelis_menten.cpp)
+target_link_libraries(test_explicit_fd_run_michaelis_menten
+                      PRIVATE biotransport)
 
-add_executable(test_explicit_fd_run_logistic physics/test_explicit_fd_run_logistic.cpp)
+add_executable(test_explicit_fd_run_logistic
+               physics/test_explicit_fd_run_logistic.cpp)
 target_link_libraries(test_explicit_fd_run_logistic PRIVATE biotransport)
 
 add_executable(test_advection_diffusion physics/test_advection_diffusion.cpp)
@@ -76,7 +92,8 @@ target_link_libraries(test_fail_loud_science PRIVATE biotransport)
 add_executable(test_darcy_science physics/test_darcy_science.cpp)
 target_link_libraries(test_darcy_science PRIVATE biotransport)
 
-add_executable(test_legacy_reaction_safety physics/test_legacy_reaction_safety.cpp)
+add_executable(test_legacy_reaction_safety
+               physics/test_legacy_reaction_safety.cpp)
 target_link_libraries(test_legacy_reaction_safety PRIVATE biotransport)
 
 add_executable(test_stokes physics/test_stokes.cpp)
@@ -85,7 +102,8 @@ target_link_libraries(test_stokes PRIVATE biotransport)
 add_executable(test_navier_stokes physics/test_navier_stokes.cpp)
 target_link_libraries(test_navier_stokes PRIVATE biotransport)
 
-add_executable(test_transport_solver_science physics/test_transport_solver_science.cpp)
+add_executable(test_transport_solver_science
+               physics/test_transport_solver_science.cpp)
 target_link_libraries(test_transport_solver_science PRIVATE biotransport)
 
 add_executable(test_cylindrical_science core/test_cylindrical_science.cpp)
@@ -100,70 +118,99 @@ target_link_libraries(test_bioheat_science PRIVATE biotransport)
 add_executable(test_electrochem_membrane physics/test_electrochem_membrane.cpp)
 target_link_libraries(test_electrochem_membrane PRIVATE biotransport)
 
-add_executable(test_electrochem_nernst_planck physics/test_electrochem_nernst_planck.cpp)
+add_executable(test_electrochem_nernst_planck
+               physics/test_electrochem_nernst_planck.cpp)
 target_link_libraries(test_electrochem_nernst_planck PRIVATE biotransport)
 
-add_executable(test_multispecies_conservative physics/test_multispecies_conservative.cpp)
+add_executable(test_multispecies_conservative
+               physics/test_multispecies_conservative.cpp)
 target_link_libraries(test_multispecies_conservative PRIVATE biotransport)
 
-add_executable(test_multispecies_gray_scott physics/test_multispecies_gray_scott.cpp)
+add_executable(test_multispecies_gray_scott
+               physics/test_multispecies_gray_scott.cpp)
 target_link_libraries(test_multispecies_gray_scott PRIVATE biotransport)
 
-add_executable(test_multispecies_kinetics physics/test_multispecies_kinetics.cpp)
+add_executable(test_multispecies_kinetics
+               physics/test_multispecies_kinetics.cpp)
 target_link_libraries(test_multispecies_kinetics PRIVATE biotransport)
 
 add_executable(test_rheology_science physics/test_rheology_science.cpp)
 target_link_libraries(test_rheology_science PRIVATE biotransport)
 
-add_executable(test_specialized_diffusion_science physics/test_specialized_diffusion_science.cpp)
+add_executable(test_specialized_diffusion_science
+               physics/test_specialized_diffusion_science.cpp)
 target_link_libraries(test_specialized_diffusion_science PRIVATE biotransport)
 
-add_executable(test_tumor_drug_delivery_science physics/test_tumor_drug_delivery_science.cpp)
+add_executable(test_tumor_drug_delivery_science
+               physics/test_tumor_drug_delivery_science.cpp)
 target_link_libraries(test_tumor_drug_delivery_science PRIVATE biotransport)
 
 add_test(NAME biotransport.test_mesh COMMAND test_mesh)
 add_test(NAME biotransport.test_dimensionless COMMAND test_dimensionless)
 add_test(NAME biotransport.test_analytical COMMAND test_analytical)
-add_test(NAME biotransport.test_balance_accounting COMMAND test_balance_accounting)
-add_test(NAME biotransport.test_nonuniform_diffusion_science COMMAND test_nonuniform_diffusion_science)
+add_test(NAME biotransport.test_balance_accounting
+         COMMAND test_balance_accounting)
+add_test(NAME biotransport.test_nonuniform_diffusion_science
+         COMMAND test_nonuniform_diffusion_science)
 add_test(NAME biotransport.test_diffusion COMMAND test_diffusion)
 add_test(NAME biotransport.test_diffusion_2d COMMAND test_diffusion_2d)
-add_test(NAME biotransport.test_logistic_reaction_diffusion COMMAND test_logistic_reaction_diffusion)
+add_test(NAME biotransport.test_logistic_reaction_diffusion
+         COMMAND test_logistic_reaction_diffusion)
 
-add_test(NAME biotransport.test_diffusion_1d_neumann COMMAND test_diffusion_1d_neumann)
-add_test(NAME biotransport.test_linear_reaction_diffusion COMMAND test_linear_reaction_diffusion)
+add_test(NAME biotransport.test_diffusion_1d_neumann
+         COMMAND test_diffusion_1d_neumann)
+add_test(NAME biotransport.test_linear_reaction_diffusion
+         COMMAND test_linear_reaction_diffusion)
 add_test(NAME biotransport.test_boundary_corners COMMAND test_boundary_corners)
-add_test(NAME biotransport.test_michaelis_menten_reaction_diffusion COMMAND test_michaelis_menten_reaction_diffusion)
-add_test(NAME biotransport.test_constant_source_reaction_diffusion COMMAND test_constant_source_reaction_diffusion)
+add_test(NAME biotransport.test_michaelis_menten_reaction_diffusion
+         COMMAND test_michaelis_menten_reaction_diffusion)
+add_test(NAME biotransport.test_constant_source_reaction_diffusion
+         COMMAND test_constant_source_reaction_diffusion)
 add_test(NAME biotransport.test_explicit_fd_run COMMAND test_explicit_fd_run)
 
-add_test(NAME biotransport.test_explicit_fd_run_constant_source COMMAND test_explicit_fd_run_constant_source)
+add_test(NAME biotransport.test_explicit_fd_run_constant_source
+         COMMAND test_explicit_fd_run_constant_source)
 
-add_test(NAME biotransport.test_explicit_fd_run_michaelis_menten COMMAND test_explicit_fd_run_michaelis_menten)
+add_test(NAME biotransport.test_explicit_fd_run_michaelis_menten
+         COMMAND test_explicit_fd_run_michaelis_menten)
 
-add_test(NAME biotransport.test_explicit_fd_run_logistic COMMAND test_explicit_fd_run_logistic)
+add_test(NAME biotransport.test_explicit_fd_run_logistic
+         COMMAND test_explicit_fd_run_logistic)
 
-add_test(NAME biotransport.test_advection_diffusion COMMAND test_advection_diffusion)
+add_test(NAME biotransport.test_advection_diffusion
+         COMMAND test_advection_diffusion)
 
-add_test(NAME biotransport.test_fail_loud_science COMMAND test_fail_loud_science)
+add_test(NAME biotransport.test_fail_loud_science
+         COMMAND test_fail_loud_science)
 
 add_test(NAME biotransport.test_darcy_science COMMAND test_darcy_science)
 
-add_test(NAME biotransport.test_legacy_reaction_safety COMMAND test_legacy_reaction_safety)
+add_test(NAME biotransport.test_legacy_reaction_safety
+         COMMAND test_legacy_reaction_safety)
 
 add_test(NAME biotransport.test_stokes COMMAND test_stokes)
 
 add_test(NAME biotransport.test_navier_stokes COMMAND test_navier_stokes)
 
-add_test(NAME biotransport.test_transport_solver_science COMMAND test_transport_solver_science)
-add_test(NAME biotransport.test_cylindrical_science COMMAND test_cylindrical_science)
-add_test(NAME biotransport.test_high_order_integrators COMMAND test_high_order_integrators)
+add_test(NAME biotransport.test_transport_solver_science
+         COMMAND test_transport_solver_science)
+add_test(NAME biotransport.test_cylindrical_science
+         COMMAND test_cylindrical_science)
+add_test(NAME biotransport.test_high_order_integrators
+         COMMAND test_high_order_integrators)
 add_test(NAME biotransport.test_bioheat_science COMMAND test_bioheat_science)
-add_test(NAME biotransport.test_electrochem_membrane COMMAND test_electrochem_membrane)
-add_test(NAME biotransport.test_electrochem_nernst_planck COMMAND test_electrochem_nernst_planck)
-add_test(NAME biotransport.test_multispecies_conservative COMMAND test_multispecies_conservative)
-add_test(NAME biotransport.test_multispecies_gray_scott COMMAND test_multispecies_gray_scott)
-add_test(NAME biotransport.test_multispecies_kinetics COMMAND test_multispecies_kinetics)
+add_test(NAME biotransport.test_electrochem_membrane
+         COMMAND test_electrochem_membrane)
+add_test(NAME biotransport.test_electrochem_nernst_planck
+         COMMAND test_electrochem_nernst_planck)
+add_test(NAME biotransport.test_multispecies_conservative
+         COMMAND test_multispecies_conservative)
+add_test(NAME biotransport.test_multispecies_gray_scott
+         COMMAND test_multispecies_gray_scott)
+add_test(NAME biotransport.test_multispecies_kinetics
+         COMMAND test_multispecies_kinetics)
 add_test(NAME biotransport.test_rheology_science COMMAND test_rheology_science)
-add_test(NAME biotransport.test_specialized_diffusion_science COMMAND test_specialized_diffusion_science)
-add_test(NAME biotransport.test_tumor_drug_delivery_science COMMAND test_tumor_drug_delivery_science)
+add_test(NAME biotransport.test_specialized_diffusion_science
+         COMMAND test_specialized_diffusion_science)
+add_test(NAME biotransport.test_tumor_drug_delivery_science
+         COMMAND test_tumor_drug_delivery_science)

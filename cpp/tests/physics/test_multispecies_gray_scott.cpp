@@ -74,7 +74,7 @@ void testPeriodicDiffusionConservesSumAndPositivity() {
     std::vector<float> u(nodes);
     std::vector<float> v(nodes, 0.0f);
     for (std::size_t p = 0; p < nodes; ++p) {
-        u[p] = static_cast<float>(0.1 + 0.8 * ((37 * p + 11) % 101) / 100.0);
+        u[p] = static_cast<float>(0.1 + 0.8 * static_cast<double>((37 * p + 11) % 101) / 100.0);
     }
     const double initial_sum = std::accumulate(u.begin(), u.end(), 0.0);
 

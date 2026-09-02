@@ -14,7 +14,7 @@ set(BINDING_SOURCES
 list(APPEND BINDING_SOURCES transport_bindings.cpp)
 
 pybind11_add_module(_core ${BINDING_SOURCES})
-target_link_libraries(_core PRIVATE biotransport)
+target_link_libraries(_core PRIVATE biotransport biotransport_warnings)
 
 if(POLICY CMP0177)
   cmake_policy(SET CMP0177 NEW)

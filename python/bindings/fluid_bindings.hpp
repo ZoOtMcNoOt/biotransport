@@ -1,7 +1,7 @@
 /**
  * @file fluid_bindings.hpp
  * @brief Python bindings for fluid dynamics solvers
- * 
+ *
  * This module provides bindings for:
  * - DarcyFlowSolver (porous media)
  * - StokesSolver (viscous flow)
@@ -24,5 +24,5 @@ namespace bindings {
  */
 void register_fluid_bindings(py::module_& m);
 
-} // namespace bindings
-} // namespace biotransport
+}  // namespace bindings
+}  // namespace biotransport

@@ -97,8 +97,9 @@ adaptive refinement.
   propagation, and standardized-regression screening for scalar quantities of
   interest. It does not perform calibration, infer distributions, or establish
   causality.
-- `BalanceLedger` and `reconcile_balances` provide unit-aware arithmetic for
-  amount, energy, and volume inventories and paired transfers. They are generic
+- `biotransport.balance` (`BalanceLedger`, `reconcile_balances`,
+  `balance_residual`) provides unit-aware arithmetic for amount, energy, and
+  volume inventories and paired transfers. They are generic
   accounting objects; solvers do not yet automatically populate a unified
   cross-model result ledger or couple PDEs through it.
 - `biotransport.reproducibility` writes canonical, fingerprinted manifests with
@@ -111,7 +112,7 @@ adaptive refinement.
 
 | Priority | Capability | Status | What landed | What remains open |
 |---|---|---|---|---|
-| P0 | Native and Python numerical contracts | **Closed (scoped)** | Immutable native-solver and separate Python-numerical registries, exact public-symbol ownership, backend/disposition disclosure, current test references, exclusions, and warnings. | Keep both registries synchronized, port or deprecate the explicitly legacy Python loops, and strengthen low-evidence entries without inflating labels. |
+| P0 | Native and Python numerical contracts | **Closed (scoped)** | Immutable native-solver and separate Python-numerical registries, exact public-symbol ownership, backend/disposition disclosure, current test references, exclusions, and warnings. The legacy Python loops now live under `biotransport.reference` with deprecated root spellings, and the shared `solve_until` lifecycle has its own adapter contract. | Keep both registries synchronized, port or retire the reference loops once native replacements exist, and strengthen low-evidence entries without inflating labels. |
 | P0 | Canonical conservative scalar contract | **Closed (scoped)** | Equation/sign/boundary/stability/balance tests plus always-on smooth diffusion, heterogeneous mixed-boundary upwind, and reaction-time refinement evidence. | Extend evidence only when claiming new dimensions, schemes, coefficient tensors, or boundary semantics; current first-order time/upwind limits remain explicit. |
 | P0 | Independent specialized benchmarks | **Partial** | Darcy interface/velocity evidence, manufactured Navier--Stokes and bioheat spatial studies with time error suppressed, a separate bioheat temporal study, Nernst--Planck diffusion-limit spatial refinement with time error suppressed, and cylindrical radial/angular operator orders now complement focused invariants. | Broad spatial **and** temporal asymptotic evidence is still absent for many 3D, nonsmooth, coupled, and alternative-boundary configurations. |
 | P0 | Fail-loud public numerical surfaces | **Closed (scoped)** | Current native solvers and governed Python numerical/workflow modules reject or explicitly diagnose invalid, unsupported, unstable, non-finite, singular, ill-conditioned, or exhausted cases. Python Newton exhaustion returns `converged=False` by contract rather than pretending success. | Maintain adversarial coverage for every new public numerical symbol; replace remaining legacy Python loops with native kernels or deprecate them. |
@@ -134,9 +135,9 @@ adaptive refinement.
 - General Python callbacks cross the Python/C++ boundary and can be slower than
   fully native kernels. `integrate` requires `method`; `method="euler"` is
   native.
-  Legacy Heun/RK4, adaptive, Newton, and pulsatile references are identified
-  separately in the Python numerical registry. No uncontrolled speedup claim
-  should be inferred.
+  Legacy Heun/RK4, adaptive, Newton, and pulsatile references live in
+  `biotransport.reference` and are identified separately in the Python
+  numerical registry. No uncontrolled speedup claim should be inferred.
 - The canonical scalar method is first order in time and first order for
   advection. Higher-order or specialized methods carry separate contracts.
 - The native explicit RK4 stage reduction is fail-loud for non-representable

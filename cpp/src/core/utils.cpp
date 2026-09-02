@@ -32,7 +32,9 @@ bool writeCsv1D(const std::string& filename, const std::vector<double>& x,
 
 bool writeCsv2D(const std::string& filename, const std::vector<double>& x,
                 const std::vector<double>& y, const std::vector<double>& solution, int nx, int ny) {
-    if (x.size() != nx || y.size() != ny || solution.size() != nx * ny) {
+    if (nx < 0 || ny < 0 || x.size() != static_cast<std::size_t>(nx) ||
+        y.size() != static_cast<std::size_t>(ny) ||
+        solution.size() != static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny)) {
         std::cerr << "Error: Inconsistent dimensions in writeCsv2D" << std::endl;
         return false;
     }
@@ -67,7 +69,7 @@ double l2Norm(const std::vector<double>& a, const std::vector<double>& b) {
         sum += diff * diff;
     }
 
-    return std::sqrt(sum / a.size());
+    return std::sqrt(sum / static_cast<double>(a.size()));
 }
 
 double maxDifference(const std::vector<double>& a, const std::vector<double>& b) {

@@ -177,15 +177,16 @@ struct IonSpecies {
 
     /**
      * @brief Create an ion species.
-     * @param name Species identifier
-     * @param valence Ion charge number
-     * @param diffusivity Diffusion coefficient [m²/s]
+     * @param species_name Species identifier
+     * @param species_valence Ion charge number
+     * @param species_diffusivity Diffusion coefficient [m²/s]
      * @param temperature Temperature [K] for mobility calculation (default 310K body temp)
      */
-    IonSpecies(const std::string& name, int valence, double diffusivity, double temperature = 310.0)
-        : name(name),
-          valence(valence),
-          diffusivity(diffusivity),
+    IonSpecies(const std::string& species_name, int species_valence, double species_diffusivity,
+               double temperature = 310.0)
+        : name(species_name),
+          valence(species_valence),
+          diffusivity(species_diffusivity),
           mobility(0.0),
           mobility_temperature(temperature) {
         if (name.empty()) {

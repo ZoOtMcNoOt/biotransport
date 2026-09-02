@@ -185,8 +185,9 @@ corresponding `SolverContract` rather than scraping this summary table.
 
 | Contract ID | Governed module | Backend | Disposition boundary |
 |---|---|---|---|
-| `python.canonical.adapters` | `biotransport.run` | native adapter | Retain canonical `solve`/`run`; replace segmented checkpoints with native saved-time support when available. |
-| `python.legacy.adaptive_diffusion` | `biotransport.adaptive` | mixed Python/native | Legacy 1D Dirichlet diffusion only; port the controller or deprecate after a native adaptive API. |
+| `python.canonical.adapters` | `biotransport.run` | native adapter | Retain canonical `solve` (returns `Result`; `save_times` uses the native schedule). `run` and `run_checkpoints` are deprecated. |
+| `python.native_adapter.stepping` | `biotransport.stepping` | native adapter | Shared `solve_until` lifecycle and fluent boundary verbs over the native stepping classes; discretization and stability certificates stay native. |
+| `python.legacy.adaptive_diffusion` | `biotransport.adaptive` (exposed as `bt.reference`) | mixed Python/native | Legacy 1D Dirichlet diffusion only; port the controller or deprecate after a native adaptive API. |
 | `python.legacy.time_integrators` | `biotransport.time_integrators` | mixed Python/native | `integrate` requires `method`; `method="euler"` is native. Heun/RK4 diffusion and generic stages remain legacy/reference paths. |
 | `python.native_backed.high_order` | `biotransport.high_order` | mixed Python/native | Retain compiled stencil, diffusion, and RK-stage orchestration; generic RHS callbacks still cross into Python and remain a reference surface. |
 | `python.reference.newton` | `biotransport.newton_raphson` | Python reference | Retain with explicit backend; iteration exhaustion returns `converged=False` and must be checked. |

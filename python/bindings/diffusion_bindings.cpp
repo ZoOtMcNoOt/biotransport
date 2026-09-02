@@ -876,7 +876,7 @@ void register_diffusion_bindings(py::module_& m) {
              py::overload_cast<TransportProblem::ReactionFunc, double>(&TransportProblem::reaction),
              py::arg("function"), py::arg("max_abs_dc"),
              py::return_value_policy::reference_internal,
-             "Replace the reaction and provide an upper bound for |dR/dc| in 1/time.")
+             "Replace the reaction and provide an upper bound for abs(dR/dc) in 1/time.")
         .def("add_reaction",
              py::overload_cast<TransportProblem::ReactionFunc>(&TransportProblem::addReaction),
              py::arg("function"), py::return_value_policy::reference_internal,
@@ -887,7 +887,7 @@ void register_diffusion_bindings(py::module_& m) {
                  &TransportProblem::addReaction),
              py::arg("function"), py::arg("max_abs_dc"),
              py::return_value_policy::reference_internal,
-             "Add a reaction and its upper bound for |dR/dc| in 1/time.")
+             "Add a reaction and its upper bound for abs(dR/dc) in 1/time.")
         .def("linear_decay", &TransportProblem::linearDecay, py::arg("k"),
              py::return_value_policy::reference_internal,
              "Replace the reaction with first-order decay R=-k*c")
@@ -960,9 +960,9 @@ void register_diffusion_bindings(py::module_& m) {
         .def("has_reaction", &TransportProblem::hasReaction,
              "Whether any reaction term is configured")
         .def("reaction_stability_bound_known", &TransportProblem::reactionStabilityBoundKnown,
-             "Whether an explicit |dR/dc| stability bound is available")
+             "Whether an explicit abs(dR/dc) stability bound is available")
         .def("reaction_stability_rate_bound", &TransportProblem::reactionStabilityRateBound,
-             "Return the configured |dR/dc| bound in 1/time")
+             "Return the configured abs(dR/dc) bound in 1/time")
         .def("initial",
              [](const TransportProblem& prob) -> py::array_t<double> {
                  const std::vector<double>& vec = prob.initial();
@@ -1428,7 +1428,7 @@ per unit time.)doc")
                            R"(Represents an ion species with transport properties.
 
         Automatically computes electrical mobility from diffusion coefficient
-        using the Einstein relation: μ = |z|FD/(RT)
+        using the Einstein relation: mu = abs(z) F D / (R T)
 
         Example:
             >>> Na = bt.IonSpecies("Na+", valence=1, diffusivity=1.33e-9)

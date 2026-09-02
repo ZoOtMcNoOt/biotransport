@@ -26,12 +26,14 @@ add_library(biotransport ${SOURCES})
 add_library(biotransport::biotransport ALIAS biotransport)
 set_target_properties(biotransport PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(biotransport PUBLIC cxx_std_17)
+target_link_libraries(biotransport
+                      PRIVATE $<BUILD_INTERFACE:biotransport_warnings>)
 
 # Public headers and compiled sources both throw typed exceptions. MSVC needs
-# /EHsc for correct C++ stack unwinding; propagate it to native consumers and
-# to the Python extension that links this target.
-target_compile_options(
-  biotransport PUBLIC $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/EHsc>)
+# /EHsc for correct C++ stack unwinding; propagate it to native consumers and to
+# the Python extension that links this target.
+target_compile_options(biotransport
+                       PUBLIC $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/EHsc>)
 
 # Set include directories for users of the library
 target_include_directories(

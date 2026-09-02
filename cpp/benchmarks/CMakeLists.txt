@@ -10,16 +10,14 @@ if(Git_FOUND)
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     RESULT_VARIABLE BIOTRANSPORT_BENCH_GIT_RESULT
     OUTPUT_VARIABLE BIOTRANSPORT_BENCH_GIT_OUTPUT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET)
+    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
   if(BIOTRANSPORT_BENCH_GIT_RESULT EQUAL 0)
     set(BIOTRANSPORT_BENCH_GIT_REVISION "${BIOTRANSPORT_BENCH_GIT_OUTPUT}")
     execute_process(
       COMMAND "${GIT_EXECUTABLE}" status --porcelain
       WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
       OUTPUT_VARIABLE BIOTRANSPORT_BENCH_GIT_STATUS
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-      ERROR_QUIET)
+      OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
     if(NOT BIOTRANSPORT_BENCH_GIT_STATUS STREQUAL "")
       set(BIOTRANSPORT_BENCH_GIT_DIRTY 1)
     endif()
@@ -30,10 +28,13 @@ function(biotransport_escape_cxx_string output value)
   string(REPLACE "\\" "\\\\" escaped "${value}")
   string(REPLACE "\"" "\\\"" escaped "${escaped}")
   string(REPLACE "\n" " " escaped "${escaped}")
-  set(${output} "${escaped}" PARENT_SCOPE)
+  set(${output}
+      "${escaped}"
+      PARENT_SCOPE)
 endfunction()
 
-biotransport_escape_cxx_string(BIOTRANSPORT_BENCH_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+biotransport_escape_cxx_string(BIOTRANSPORT_BENCH_CXX_FLAGS
+                               "${CMAKE_CXX_FLAGS}")
 biotransport_escape_cxx_string(BIOTRANSPORT_BENCH_CXX_FLAGS_DEBUG
                                "${CMAKE_CXX_FLAGS_DEBUG}")
 biotransport_escape_cxx_string(BIOTRANSPORT_BENCH_CXX_FLAGS_RELEASE
@@ -58,9 +59,8 @@ biotransport_escape_cxx_string(BIOTRANSPORT_BENCH_SYSTEM_PROCESSOR
 configure_file(bench_build_config.hpp.in bench_build_config.hpp @ONLY)
 
 add_library(bench_utils INTERFACE)
-target_include_directories(
-  bench_utils
-  INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(bench_utils INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                                 "${CMAKE_CURRENT_BINARY_DIR}")
 
 function(add_biotransport_benchmark target source)
   add_executable(${target} ${source})
@@ -68,8 +68,8 @@ function(add_biotransport_benchmark target source)
   if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     target_compile_options(${target} PRIVATE /EHsc)
   endif()
-  target_compile_definitions(
-    ${target} PRIVATE BIOTRANSPORT_BENCH_BUILD_TYPE="$<CONFIG>")
+  target_compile_definitions(${target}
+                             PRIVATE BIOTRANSPORT_BENCH_BUILD_TYPE="$<CONFIG>")
 endfunction()
 
 add_biotransport_benchmark(bench_diffusion_2d bench_diffusion_2d.cpp)

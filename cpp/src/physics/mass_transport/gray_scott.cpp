@@ -197,7 +197,7 @@ GrayScottRunResult GrayScottSolver::simulate(const std::vector<float>& u0,
             }
             last_check_u = u;
             last_check_v = v;
-            stable_this_check = stable_tol > 0.0 && max_diff < stable_tol;
+            stable_this_check = stable_tol > 0.0 && static_cast<double>(max_diff) < stable_tol;
         }
 
         if (step % steps_between_frames == 0 || step == total_steps) {

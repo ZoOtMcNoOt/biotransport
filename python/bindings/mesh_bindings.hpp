@@ -1,7 +1,7 @@
 /**
  * @file mesh_bindings.hpp
  * @brief Python bindings for mesh-related classes
- * 
+ *
  * This module provides bindings for:
  * - StructuredMesh (1D/2D Cartesian grids)
  * - CylindricalMesh (radial/axisymmetric/3D cylindrical)
@@ -23,5 +23,5 @@ namespace bindings {
  */
 void register_mesh_bindings(py::module_& m);
 
-} // namespace bindings
-} // namespace biotransport
+}  // namespace bindings
+}  // namespace biotransport

@@ -8,6 +8,14 @@ releases may retire spellings under the documented
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-02
+
+The first release of the intuitive API: one `Result`, one time vocabulary
+(`end_time`, `time_step`, `save_times`), one boundary vocabulary on every
+object, and a tiered root namespace. Retired spellings keep working for one
+deprecation window and warn with their replacement; see
+`docs/sphinx/migration.rst`.
+
 ### Added
 - `biotransport.Result` and `biotransport.Snapshots`: `bt.solve` now returns a
   `Result` carrying the field(s), exact time, step count, diagnostics, a copy
@@ -58,6 +66,14 @@ releases may retire spellings under the documented
 - `biotransport.BioTransportDeprecationWarning` and a table-driven deprecation
   mechanism (`biotransport/_deprecation.py`) with a written policy
   (`docs/notes/DEPRECATION_POLICY.md`).
+- `docs/sphinx/migration.rst`, an upgrade guide listing every retired spelling
+  and its replacement, and `CONTRIBUTING.md` with the development loop.
+- A `biotransport_warnings` CMake interface target (`-Wall -Wextra -Wpedantic
+  -Wshadow -Wconversion ...`, `/W4` on MSVC) linked privately by the library,
+  the Python extension and the tests; `BIOTRANSPORT_WERROR=ON` turns it into
+  errors and the native Debug CI job builds that way. The cheap warnings it
+  found (an unhandled `OUTWARD_FLUX` switch case, shadowed constructor
+  parameters, signed/unsigned comparisons, a float promotion) are fixed.
 - Bitwise golden fixtures for every native solver (`python/tests/golden/`) so
   refactors can prove the numerics did not move.
 - Stub-versus-runtime parity test for `biotransport._core` and a public-surface
@@ -93,7 +109,14 @@ releases may retire spellings under the documented
   their checks also execute in Release builds, and the test CMake configuration
   rejects any test that includes `<cassert>`.
 - The Sphinx configuration honours `BIOTRANSPORT_DOCS_OFFLINE=1` to skip
-  intersphinx inventories when building without network access.
+  intersphinx inventories when building without network access, and documents
+  the compiled extension for real instead of mocking it (native signatures and
+  docstrings now render); `BIOTRANSPORT_DOCS_MOCK_CORE=1` restores the mock.
+- The pytest configuration moved from `pytest.ini` into `pyproject.toml`, the
+  CI lint job runs the pre-commit hooks, and the unreferenced `dev.sh`,
+  `Dockerfile`, `docker-compose.yml` and `environment.yml` were removed.
+- Version 0.2.0 across `pyproject.toml`, CMake, the package, Sphinx and
+  Doxygen; the project description no longer leads with "high-performance".
 
 ### Deprecated
 - Root-level spellings of the Python reference numerics (`bt.integrate`,

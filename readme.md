@@ -18,6 +18,9 @@ problem once, solve every configured term in the C++ core, and report what the n
 and cannot certify. The canonical API currently targets conservative, explicit transport on 1D and
 2D Cartesian structured meshes.
 
+Upgrading from 0.1? Retired spellings still work and warn with their replacement; the full list is in
+`CHANGELOG.md` and the migration guide (`docs/sphinx/migration.rst`).
+
 The repository also contains older and specialized solvers. They remain available for development,
 but they do **not** automatically inherit the verification claims of the canonical `Problem` / `solve`
 path.

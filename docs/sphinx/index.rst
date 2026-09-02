@@ -16,6 +16,7 @@ not biological or clinical validation.
    :caption: Contents:
 
    getting_started
+   migration
    science_contract
    api/index
    examples

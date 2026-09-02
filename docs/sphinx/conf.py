@@ -11,8 +11,8 @@ sys.path.insert(0, os.path.abspath("../../python"))
 project = "BioTransport"
 copyright = "2026, BioTransport Authors"
 author = "BioTransport Authors"
-version = "0.1.0"
-release = "0.1.0"
+version = "0.2.0"
+release = "0.2.0"
 
 # -- General configuration ---------------------------------------------------
 extensions = [
@@ -85,10 +85,10 @@ html_theme_options = {
 }
 
 # -- Options for autodoc -----------------------------------------------------
-# Mock imports for C++ extension module
-autodoc_mock_imports = ["biotransport._core._core"]
-
-# Suppress warnings for mocked objects (C++ extension not available during doc build)
-suppress_warnings = [
-    "autodoc.mocked_object",
-]
+# The compiled extension is imported for real so native docstrings and
+# signatures appear in the rendered API; build the package before the docs.
+# Set BIOTRANSPORT_DOCS_MOCK_CORE=1 to fall back to mocking when no build is
+# available (native members then render without signatures).
+if os.environ.get("BIOTRANSPORT_DOCS_MOCK_CORE"):
+    autodoc_mock_imports = ["biotransport._core._core"]
+    suppress_warnings = ["autodoc.mocked_object"]

@@ -175,7 +175,7 @@ void register_utilities_bindings(py::module_& m) {
     // Complex modulus utilities — dynamic viscoelasticity
     analytical_mod.def("complex_modulus_magnitude", &analytical::complex_modulus_magnitude,
                        py::arg("G1"), py::arg("G2"),
-                       "Complex modulus magnitude |G*| = √(G₁² + G₂²).");
+                       "Complex modulus magnitude abs(G*) = sqrt(G1^2 + G2^2).");
 
     analytical_mod.def(
         "loss_tangent", &analytical::loss_tangent, py::arg("G1"), py::arg("G2"),

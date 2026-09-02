@@ -60,10 +60,9 @@ does not extend :class:`Problem` to arbitrary geometry:
        mesh,
        [1.0e-9, 1.0e-9, 5.0e-10, 2.0e-10, 2.0e-10],
    )
-   solver.set_dirichlet_boundary(bt.Boundary.Left, 1.0)
-   solver.set_neumann_boundary(bt.Boundary.Right, 0.0)
    solver.set_initial_condition([1.0, 0.5, 0.1, 0.0, 0.0])
-   solver.solve_until(3600.0, 0.9 * solver.max_stable_time_step())
+   solver.dirichlet(bt.Boundary.Left, 1.0).neumann(bt.Boundary.Right, 0.0)
+   result = solver.solve_until(3600.0)   # step chosen from the solver's own bound
 
 This solver is diffusion-only and fixed 1D.  It does not provide unstructured
 meshes, AMR, moving meshes, nonuniform 2D/3D, advection, or reaction.  Read
@@ -116,7 +115,46 @@ The C++ core advances every configured term together:
 
 ``result.time`` is the exact requested final time.  ``result.concentration`` is
 an owned NumPy copy of the returned C++ field, and ``result.diagnostics``
-exposes stability, mass, and extrema information.
+exposes stability, mass, and extrema information.  Pass ``save_times=[...]`` to
+record the field at intermediate clocks in the same call
+(``result.snapshots[t]``), and ``result.plot()`` or ``result.write_vtk(path)``
+to look at it.
+
+
+Stepping solvers share one lifecycle
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The specialized native solvers (explicit and implicit diffusion, reaction--
+diffusion, advection--diffusion, multi-species, Nernst--Planck, the nonuniform
+1D slice) are configured object-by-object, but they all advance the same way:
+
+.. code-block:: python
+
+   solver = bt.DiffusionSolver(mesh, 1.0e-9)
+   solver.set_initial_condition(bt.gaussian(mesh, center=0.5, width=0.08))
+   for side in bt.sides(mesh):
+       solver.neumann(side, 0.0)
+   result = solver.solve_until(10.0, save_times=[2.0, 5.0])
+
+``solve_until`` returns the same :class:`Result` as :func:`solve`.  It chooses
+the time step only when the solver certifies its own stability limit; the
+Crank--Nicolson, ADI, implicit and legacy reaction/advection classes require
+``time_step=`` and never guess.  The fluent ``dirichlet``, ``neumann``,
+``robin``, ``boundary`` and ``outward_flux`` verbs forward to each class's own
+setters and refuse conditions the class does not implement.
+
+
+Finding your way around
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``biotransport.__all__`` names the canonical path and a handful of namespaces:
+``bt.diffusion``, ``bt.electrochem``, ``bt.flow`` and ``bt.applications`` for
+the specialized native solvers, ``bt.balance`` for dimensioned accounting,
+``bt.reference`` for the Python reference numerics, and the workflow modules
+``units``, ``provenance``, ``analysis``, ``convergence``, ``contracts`` and
+``reproducibility``.  Every specialized class is still reachable directly from
+the root (``bt.DiffusionSolver``); the namespaces only organize the API.  See
+:doc:`migration` if you are upgrading from 0.1.
 
 
 Choosing a specialized solver
@@ -172,8 +210,9 @@ workflow should also record:
 * a frozen, fingerprinted manifest through
   ``biotransport.reproducibility``.
 
-The top-level :class:`BalanceLedger` API can reconcile caller-supplied amount,
-energy, and volume exchanges, but it does not infer them from solver fields or
+The :class:`BalanceLedger` API (grouped with its helpers in
+:mod:`biotransport.balance`) can reconcile caller-supplied amount, energy, and
+volume exchanges, but it does not infer them from solver fields or
 couple PDEs automatically.  A closed ledger, sourced parameter manifest, and
 reproducible JSON file are useful evidence components; none is biological or
 clinical validation.

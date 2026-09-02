@@ -137,8 +137,12 @@ typing information. Public convenience re-exports live in
 `python/biotransport/__init__.py`.
 
 The discoverable `biotransport.diffusion`, `biotransport.electrochem`,
-`biotransport.flow`, and `biotransport.applications` modules organize native
-objects. They do not create alternative solver kernels.
+`biotransport.flow`, `biotransport.applications`, `biotransport.balance`, and
+`biotransport.reference` modules organize existing objects, and
+`biotransport.stepping` installs the shared `solve_until` lifecycle and fluent
+boundary verbs on the native stepping classes. None of them creates an
+alternative solver kernel. `biotransport.__all__` names the canonical path and
+these namespaces; every specialized native class remains a root attribute.
 
 ### Scientific workflow modules
 
@@ -151,8 +155,9 @@ objects. They do not create alternative solver kernels.
 | `biotransport.reproducibility` | Canonical JSON, frozen configs, SHA-256 fingerprints, method/seed/build metadata, convergence/balance records, and atomic manifest I/O. | A manifest is not authentication, durable archival, FAIR compliance, or validation. |
 | `biotransport.config` | Validated application configuration dataclasses and parameter-provenance attachment. | Current bundled values remain illustrative/unprovenanced. |
 
-Native `BalanceLedger` objects are top-level Python bindings because the same
-accounting implementation is shared with C++. Callers must still integrate
+Native `BalanceLedger` objects are Python bindings (grouped in
+`biotransport.balance`) because the same accounting implementation is shared
+with C++. Callers must still integrate
 fields, sources, and boundary fluxes over compatible domains before entering
 amounts. Full automatic solver-result ledger coupling is not implemented.
 
@@ -169,9 +174,10 @@ symbols are owned by `PythonNumericalContract` records:
 
 | Surface | Backend and disposition |
 |---|---|
-| Canonical `solve`/`run` | Retained thin native adapter; `integrate` requires `method`, and `method="euler"` selects native Euler. |
-| `run_checkpoints` | Retained native-segment orchestrator with per-segment diagnostics and cumulative step limits; replace with native solve-at-times when available. |
-| Adaptive and legacy Heun/RK4 diffusion | Mixed Python/native compatibility paths; port the controller/loop or deprecate after native replacements. |
+| Canonical `solve` | Retained thin native adapter returning `Result`; `save_times` forwards to the native solve-at-times schedule. `run` is a deprecated alias. |
+| `run_checkpoints` | Deprecated in favour of `solve(save_times=...)`; the legacy segment orchestrator remains for one deprecation window. |
+| `stepping.solve_until` | Retained Python time orchestration over native steps; the discretization and stability certificate stay with each native class. |
+| Adaptive and legacy Heun/RK4 diffusion (`bt.reference`) | Mixed Python/native compatibility paths; root spellings are deprecated, `integrate` requires `method`, and `method="euler"` selects native Euler. Port the controller/loop or retire after native replacements. |
 | High-order operators/diffusion | Retain compiled kernels; generic Python Runge--Kutta remains a reference utility. |
 | Newton/nonlinear diffusion | Retained, explicitly labeled Python reference implementation; port hot residual/Jacobian kernels before performance claims. |
 | Pulsatile diffusion | Warning-emitting Python reference pending native time-dependent boundaries, then deprecate. |
