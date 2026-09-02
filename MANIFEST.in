@@ -2,7 +2,6 @@ include CMakeLists.txt
 include LICENSE
 include readme.md
 include pyproject.toml
-include pytest.ini
 include run_examples.py
 include setup.py
 
