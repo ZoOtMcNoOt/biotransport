@@ -1,5 +1,21 @@
 # C++ tests for biotransport
 
+# Configure-time guard: assert() is compiled out under NDEBUG, so a test that
+# relies on <cassert> is vacuous in Release builds.  Every test must use the
+# science_test harness (cpp/tests/test_support/science_test.hpp) instead.
+file(GLOB_RECURSE BIOTRANSPORT_TEST_SOURCES CONFIGURE_DEPENDS
+     ${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp
+     ${CMAKE_CURRENT_SOURCE_DIR}/physics/*.cpp)
+foreach(test_source IN LISTS BIOTRANSPORT_TEST_SOURCES)
+    file(STRINGS ${test_source} cassert_includes REGEX "^#include <cassert>")
+    if(cassert_includes)
+        message(FATAL_ERROR
+            "${test_source} includes <cassert>; assert() is compiled out under NDEBUG. "
+            "Use SCIENCE_REQUIRE from cpp/tests/test_support/science_test.hpp instead.")
+    endif()
+endforeach()
+unset(BIOTRANSPORT_TEST_SOURCES)
+
 add_executable(test_mesh core/test_mesh.cpp)
 target_link_libraries(test_mesh PRIVATE biotransport)
 

@@ -1,8 +1,9 @@
+#include "../test_support/science_test.hpp"
+#include <algorithm>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/solvers/explicit_fd.hpp>
-#include <cassert>
 #include <cmath>
-#include <iostream>
+#include <string>
 #include <vector>
 
 using namespace biotransport;
@@ -22,8 +23,6 @@ static double computeMass2D(const StructuredMesh& mesh, const std::vector<double
 }
 
 void testDiffusion2DNeumannMassConservation() {
-    std::cout << "Testing 2D diffusion (Neumann=0) mass conservation..." << std::endl;
-
     StructuredMesh mesh(40, 25, 0.0, 1.0, 0.0, 1.0);
 
     const double D = 0.01;
@@ -63,14 +62,13 @@ void testDiffusion2DNeumannMassConservation() {
     // With zero flux, mass should be approximately conserved.
     const double rel_err =
         std::abs(final_mass - initial_mass) / std::max(1e-12, std::abs(initial_mass));
-    assert(rel_err < 5e-3);
-
-    std::cout << "2D Neumann mass conservation test passed!" << std::endl;
+    science_test::report("relative mass change", rel_err);
+    SCIENCE_REQUIRE(rel_err < 5e-3,
+                    "zero-flux 2D diffusion must conserve mass to <0.5% relative error; actual=" +
+                        science_test::number(rel_err));
 }
 
 void testDiffusion2DDirichletBoundaryPinned() {
-    std::cout << "Testing 2D diffusion Dirichlet boundary pinning..." << std::endl;
-
     StructuredMesh mesh(20, 20, 0.0, 1.0, 0.0, 1.0);
 
     const double D = 0.05;
@@ -95,21 +93,21 @@ void testDiffusion2DDirichletBoundaryPinned() {
     const auto& u = result.solution;
 
     for (int j = 0; j <= mesh.ny(); ++j) {
-        assert(std::abs(u[mesh.index(0, j)] - 0.0) < 1e-12);
-        assert(std::abs(u[mesh.index(mesh.nx(), j)] - 0.0) < 1e-12);
+        SCIENCE_REQUIRE_NEAR(u[mesh.index(0, j)], 0.0, 1e-12, 0.0,
+                             "left Dirichlet wall at row " + std::to_string(j));
+        SCIENCE_REQUIRE_NEAR(u[mesh.index(mesh.nx(), j)], 0.0, 1e-12, 0.0,
+                             "right Dirichlet wall at row " + std::to_string(j));
     }
     for (int i = 0; i <= mesh.nx(); ++i) {
-        assert(std::abs(u[mesh.index(i, 0)] - 0.0) < 1e-12);
-        assert(std::abs(u[mesh.index(i, mesh.ny())] - 0.0) < 1e-12);
+        SCIENCE_REQUIRE_NEAR(u[mesh.index(i, 0)], 0.0, 1e-12, 0.0,
+                             "bottom Dirichlet wall at column " + std::to_string(i));
+        SCIENCE_REQUIRE_NEAR(u[mesh.index(i, mesh.ny())], 0.0, 1e-12, 0.0,
+                             "top Dirichlet wall at column " + std::to_string(i));
     }
-
-    std::cout << "2D Dirichlet boundary pinning test passed!" << std::endl;
 }
 
 int main() {
-    testDiffusion2DNeumannMassConservation();
-    testDiffusion2DDirichletBoundaryPinned();
-
-    std::cout << "All 2D diffusion tests passed!" << std::endl;
-    return 0;
+    return science_test::runSuite(
+        "2D diffusion", {{"zero-flux mass conservation", testDiffusion2DNeumannMassConservation},
+                         {"Dirichlet boundary pinning", testDiffusion2DDirichletBoundaryPinned}});
 }

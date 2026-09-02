@@ -1,15 +1,12 @@
+#include "../test_support/science_test.hpp"
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/solvers/explicit_fd.hpp>
-#include <cassert>
 #include <cmath>
-#include <iostream>
 #include <vector>
 
 using namespace biotransport;
 
 void testConstantSource1DMatchesODEForUniformField() {
-    std::cout << "Testing constant-source reaction-diffusion (1D) vs ODE..." << std::endl;
-
     StructuredMesh mesh(200, 0.0, 1.0);
 
     const double D = 1e-12;  // effectively no diffusion
@@ -35,15 +32,12 @@ void testConstantSource1DMatchesODEForUniformField() {
     const auto& u = result.solution;
     const int mid = mesh.nx() / 2;
 
-    const double err = std::abs(u[mid] - u_exact);
-    assert(err < 5e-3);
-
-    std::cout << "Constant-source ODE agreement test passed!" << std::endl;
+    SCIENCE_REQUIRE_NEAR(u[mid], u_exact, 5e-3, 0.0,
+                         "midpoint concentration vs constant-source ODE u0 + S*t");
 }
 
 int main() {
-    testConstantSource1DMatchesODEForUniformField();
-
-    std::cout << "All constant-source reaction-diffusion tests passed!" << std::endl;
-    return 0;
+    return science_test::runSuite("constant-source reaction-diffusion",
+                                  {{"uniform field matches constant-source ODE",
+                                    testConstantSource1DMatchesODEForUniformField}});
 }

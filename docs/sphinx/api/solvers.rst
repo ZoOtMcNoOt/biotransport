@@ -21,8 +21,6 @@ Friendly native adapters
 The primary :func:`solve` adapter and result diagnostics are documented on
 :doc:`core`.
 
-.. autofunction:: run
-
 .. autofunction:: run_checkpoints
 
 .. autoclass:: CheckpointResult

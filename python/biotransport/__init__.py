@@ -150,7 +150,15 @@ from .mesh_utils import (
     mesh_1d,
     mesh_2d,
 )
-from .run import CheckpointResult, run, run_checkpoints, solve
+from . import run as _run_module
+from .run import CheckpointResult, run_checkpoints, solve
+from ._deprecation import (
+    ROOT_DEPRECATED,
+    ROOT_LAZY,
+    BioTransportDeprecationWarning,
+    deprecated_callable,
+    module_getattr,
+)
 from .visualization import (
     plot_1d_solution,
     plot_2d_solution,
@@ -310,13 +318,27 @@ from .units import Dimension, Quantity, Unit, convert, quantity
 # User-friendly aliases
 # ============================================================================
 
+# Retired root-level spellings (see docs/notes/DEPRECATION_POLICY.md) resolve
+# lazily through PEP 562 and warn on every access.
+__getattr__ = module_getattr(__name__, ROOT_DEPRECATED, ROOT_LAZY)
+
+# ``run`` shares its name with the submodule that defines ``solve``, so it is
+# kept as an eager wrapper that warns on every call and forwards unchanged.
+run = deprecated_callable(
+    "bt.solve(problem, end_time=...)",
+    reason=(
+        "run() was a compatibility alias; solve() is the single canonical entry "
+        "point and executes the same C++ solver"
+    ),
+    name="biotransport.run",
+)(_run_module.run)
+
 # "Problem" is the simplest, most intuitive name
 Problem = TransportProblem
 
-# Backward-compatible aliases for legacy code
-DiffusionProblem = TransportProblem
-LinearReactionDiffusionProblem = TransportProblem
-AdvectionDiffusionProblem = TransportProblem
+# The legacy ``DiffusionProblem`` / ``LinearReactionDiffusionProblem`` /
+# ``AdvectionDiffusionProblem`` aliases are deprecated and resolve through
+# ``__getattr__`` (see ``biotransport._deprecation.ROOT_DEPRECATED``).
 
 __version__ = "0.1.0"
 
@@ -416,9 +438,9 @@ __all__ = [
     "SolveDiagnostics",
     "TransportResult",
     "solve_transport",
-    "run",
     "run_checkpoints",
     "CheckpointResult",
+    "BioTransportDeprecationWarning",
     # ========== Adaptive time-stepping ==========
     "AdaptiveTimeStepper",
     "AdaptiveTimeStepperConfig",
@@ -566,10 +588,6 @@ __all__ = [
     "TumorDrugDeliveryConfig",
     "BioheatCryotherapyConfig",
     "get_parameter_ranges",
-    # ========== Legacy aliases ==========
-    "DiffusionProblem",
-    "LinearReactionDiffusionProblem",
-    "AdvectionDiffusionProblem",
     # ========== Multi-species reaction-diffusion ==========
     "MultiSpeciesSolver",
     "LotkaVolterraReaction",

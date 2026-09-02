@@ -1,8 +1,8 @@
+#include "../test_support/science_test.hpp"
+#include <algorithm>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/solvers/explicit_fd.hpp>
-#include <cassert>
 #include <cmath>
-#include <iostream>
 #include <numeric>
 #include <vector>
 
@@ -39,9 +39,6 @@ static double solveMichaelisMentenODE(double u0, double vmax, double km, double 
 }
 
 void testExplicitFDMichaelisMenten1DUniformDecay() {
-    std::cout << "Testing ExplicitFD.run(TransportProblem with michaelisMenten) uniform MM decay..."
-              << std::endl;
-
     StructuredMesh mesh(60, 0.0, 1.0);
 
     const double D = 0.1;
@@ -64,29 +61,30 @@ void testExplicitFDMichaelisMenten1DUniformDecay() {
     ExplicitFD solver;
     const auto result = solver.safetyFactor(0.4).run(problem, t_end);
 
-    assert(result.stats.dt > 0.0);
-    assert(result.stats.steps > 0);
-    assert(std::abs(result.stats.t_end - t_end) < 1e-15);
+    SCIENCE_REQUIRE(result.stats.dt > 0.0, "chosen time step must be positive");
+    SCIENCE_REQUIRE(result.stats.steps > 0, "solver must take at least one step");
+    SCIENCE_REQUIRE_NEAR(result.stats.t_end, t_end, 1e-15, 0.0, "reported end time");
 
     // Field should remain (approximately) uniform and decay toward expected ODE solution.
     const auto& u = result.solution;
     for (double v : u) {
-        assert(std::abs(v - expected) < 2e-2);
+        SCIENCE_REQUIRE_NEAR(v, expected, 2e-2, 0.0, "nodal concentration vs Michaelis-Menten ODE");
     }
 
     // Summary stats should reflect decay.
-    assert(result.stats.u_max_final <= result.stats.u_max_initial + 1e-12);
-    assert(result.stats.u_min_final >= -1e-12);
+    SCIENCE_REQUIRE(result.stats.u_max_final <= result.stats.u_max_initial + 1e-12,
+                    "Michaelis-Menten decay must not raise the field maximum");
+    SCIENCE_REQUIRE(result.stats.u_min_final >= -1e-12,
+                    "Michaelis-Menten decay must not produce negative concentration");
 
     // Average matches expected.
     const double sum = std::accumulate(u.begin(), u.end(), 0.0);
     const double avg = sum / static_cast<double>(u.size());
-    assert(std::abs(avg - expected) < 1e-2);
-
-    std::cout << "ExplicitFD Michaelis–Menten run test passed!" << std::endl;
+    SCIENCE_REQUIRE_NEAR(avg, expected, 1e-2, 0.0, "spatial average vs Michaelis-Menten ODE");
 }
 
 int main() {
-    testExplicitFDMichaelisMenten1DUniformDecay();
-    return 0;
+    return science_test::runSuite("ExplicitFD Michaelis-Menten",
+                                  {{"uniform field matches Michaelis-Menten ODE",
+                                    testExplicitFDMichaelisMenten1DUniformDecay}});
 }

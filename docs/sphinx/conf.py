@@ -44,12 +44,16 @@ autodoc_default_options = {
 }
 autodoc_typehints = "description"
 
-# Intersphinx mapping
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-    "numpy": ("https://numpy.org/doc/stable", None),
-    "matplotlib": ("https://matplotlib.org/stable", None),
-}
+# Intersphinx mapping. Set BIOTRANSPORT_DOCS_OFFLINE=1 to build without network
+# access; unreachable inventories otherwise emit warnings that fail a -W build.
+if os.environ.get("BIOTRANSPORT_DOCS_OFFLINE"):
+    intersphinx_mapping = {}
+else:
+    intersphinx_mapping = {
+        "python": ("https://docs.python.org/3", None),
+        "numpy": ("https://numpy.org/doc/stable", None),
+        "matplotlib": ("https://matplotlib.org/stable", None),
+    }
 
 # MyST parser for Markdown support
 myst_enable_extensions = [

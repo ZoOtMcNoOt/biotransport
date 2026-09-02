@@ -1,13 +1,10 @@
+#include "../test_support/science_test.hpp"
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/solvers/explicit_fd.hpp>
-#include <cassert>
 #include <cmath>
-#include <iostream>
 #include <vector>
 
 void testExplicitFDRunUsesStableDtAndPinsDirichlet() {
-    std::cout << "Testing ExplicitFD().run(DiffusionProblem, t_end)..." << std::endl;
-
     biotransport::StructuredMesh mesh(100, 0.0, 1.0);
 
     const double D = 1e-2;
@@ -25,20 +22,19 @@ void testExplicitFDRunUsesStableDtAndPinsDirichlet() {
     auto result = runner.run(problem, t_end);
 
     // dt should be positive and conservative.
-    assert(result.stats.dt > 0.0);
-    assert(result.stats.steps > 0);
-    assert(std::abs(result.stats.t_end - t_end) < 1e-12);
+    SCIENCE_REQUIRE(result.stats.dt > 0.0, "chosen time step must be positive");
+    SCIENCE_REQUIRE(result.stats.steps > 0, "solver must take at least one step");
+    SCIENCE_REQUIRE_NEAR(result.stats.t_end, t_end, 1e-12, 0.0, "reported end time");
 
     // Boundary pins.
-    assert(std::abs(result.solution[mesh.index(0)] - 0.0) < 1e-12);
-    assert(std::abs(result.solution[mesh.index(mesh.nx())] - 0.0) < 1e-12);
-
-    std::cout << "ExplicitFD run test passed!" << std::endl;
+    SCIENCE_REQUIRE_NEAR(result.solution[mesh.index(0)], 0.0, 1e-12, 0.0,
+                         "left Dirichlet boundary value");
+    SCIENCE_REQUIRE_NEAR(result.solution[mesh.index(mesh.nx())], 0.0, 1e-12, 0.0,
+                         "right Dirichlet boundary value");
 }
 
 int main() {
-    testExplicitFDRunUsesStableDtAndPinsDirichlet();
-
-    std::cout << "All ExplicitFD run tests passed!" << std::endl;
-    return 0;
+    return science_test::runSuite("ExplicitFD run",
+                                  {{"stable dt and pinned Dirichlet boundaries",
+                                    testExplicitFDRunUsesStableDtAndPinsDirichlet}});
 }

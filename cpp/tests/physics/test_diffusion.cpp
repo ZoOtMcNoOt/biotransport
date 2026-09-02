@@ -1,17 +1,15 @@
+#include "../test_support/science_test.hpp"
+#include <algorithm>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/core/utils.hpp>
 #include <biotransport/solvers/explicit_fd.hpp>
-#include <cassert>
 #include <cmath>
-#include <iostream>
 #include <vector>
 
 using namespace biotransport;
 
 // Test the diffusion solver with a known analytical solution
 void testDiffusion1D() {
-    std::cout << "Testing 1D diffusion solver..." << std::endl;
-
     // Create a 1D mesh
     StructuredMesh mesh(100, 0.0, 1.0);
 
@@ -48,11 +46,14 @@ void testDiffusion1D() {
         initial_mass += initial[i] * mesh.dx();
         final_mass += solution[i] * mesh.dx();
     }
-    assert(std::abs(final_mass - initial_mass) < 0.1);  // Some loss expected due to boundaries
+    // Some loss expected due to boundaries
+    SCIENCE_REQUIRE_NEAR(final_mass, initial_mass, 0.1, 0.0,
+                         "final mass vs initial mass (Dirichlet walls)");
 
     // - Symmetry (since initial condition and BCs are symmetric)
     for (int i = 0; i <= mesh.nx() / 2; ++i) {
-        assert(std::abs(solution[i] - solution[mesh.nx() - i]) < 1e-6);
+        SCIENCE_REQUIRE_NEAR(solution[i], solution[mesh.nx() - i], 1e-6, 0.0,
+                             "mirror symmetry of diffusion solution at node " + std::to_string(i));
     }
 
     // - Peak value decreased from initial
@@ -60,15 +61,11 @@ void testDiffusion1D() {
     for (int i = 0; i <= mesh.nx(); ++i) {
         max_val = std::max(max_val, solution[i]);
     }
-    assert(max_val < 1.0);
-
-    std::cout << "1D diffusion tests passed!" << std::endl;
+    SCIENCE_REQUIRE(max_val < 1.0, "diffusion must reduce the peak below the initial plateau");
 }
 
 // Test the reaction-diffusion solver with a simple decay reaction
 void testReactionDiffusion1D() {
-    std::cout << "Testing 1D reaction-diffusion solver..." << std::endl;
-
     // Create a 1D mesh
     StructuredMesh mesh(100, 0.0, 1.0);
 
@@ -109,11 +106,13 @@ void testReactionDiffusion1D() {
         initial_mass += initial[i] * mesh.dx();
         final_mass += solution[i] * mesh.dx();
     }
-    assert(final_mass < initial_mass);  // Mass should decrease due to decay
+    SCIENCE_REQUIRE(final_mass < initial_mass, "linear decay must reduce total mass");
 
     // - Symmetry (since initial condition and BCs are symmetric)
     for (int i = 0; i <= mesh.nx() / 2; ++i) {
-        assert(std::abs(solution[i] - solution[mesh.nx() - i]) < 1e-6);
+        SCIENCE_REQUIRE_NEAR(
+            solution[i], solution[mesh.nx() - i], 1e-6, 0.0,
+            "mirror symmetry of reaction-diffusion solution at node " + std::to_string(i));
     }
 
     // - Peak value decreased from initial
@@ -121,16 +120,12 @@ void testReactionDiffusion1D() {
     for (int i = 0; i <= mesh.nx(); ++i) {
         max_val = std::max(max_val, solution[i]);
     }
-    assert(max_val < 1.0);
-
-    std::cout << "1D reaction-diffusion tests passed!" << std::endl;
+    SCIENCE_REQUIRE(max_val < 1.0,
+                    "reaction-diffusion must reduce the peak below the initial plateau");
 }
 
 int main() {
-    // Run tests
-    testDiffusion1D();
-    testReactionDiffusion1D();
-
-    std::cout << "All diffusion tests passed!" << std::endl;
-    return 0;
+    return science_test::runSuite(
+        "1D diffusion",
+        {{"1D diffusion", testDiffusion1D}, {"1D reaction-diffusion", testReactionDiffusion1D}});
 }

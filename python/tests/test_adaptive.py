@@ -111,7 +111,7 @@ class TestAdaptiveTimeStepper:
     def simple_problem(self):
         """Create a simple 1D diffusion problem for testing."""
         mesh = bt.mesh_1d(20)  # 20 cells = 21 nodes
-        problem = bt.DiffusionProblem(mesh)
+        problem = bt.Problem(mesh)
         problem.diffusivity(1e-3)
 
         # Gaussian initial condition
@@ -436,7 +436,7 @@ class TestAdaptiveTimeStepper2D:
     def simple_2d_problem(self):
         """Create a simple 2D diffusion problem."""
         mesh = bt.mesh_2d(10, 10)  # 10x10 cells = 11x11 nodes
-        problem = bt.DiffusionProblem(mesh)
+        problem = bt.Problem(mesh)
         problem.diffusivity(1e-3)
 
         # Uniform initial condition
@@ -623,7 +623,7 @@ class TestSolveAdaptive:
     def test_solve_adaptive_basic(self):
         """Test basic solve_adaptive call."""
         mesh = bt.mesh_1d(20)  # 20 cells = 21 nodes
-        problem = bt.DiffusionProblem(mesh)
+        problem = bt.Problem(mesh)
         problem.diffusivity(1e-3)
 
         x = np.linspace(0.0, 1.0, 21)
@@ -641,7 +641,7 @@ class TestSolveAdaptive:
     def test_solve_adaptive_with_tolerance(self):
         """Test solve_adaptive respects tolerance."""
         mesh = bt.mesh_1d(20)  # 20 cells = 21 nodes
-        problem = bt.DiffusionProblem(mesh)
+        problem = bt.Problem(mesh)
         problem.diffusivity(1e-3)
 
         u0 = np.ones(21) * 0.5
@@ -664,7 +664,7 @@ class TestAdaptiveIntegration:
     def test_diffusion_decay(self):
         """Test that adaptive stepper correctly simulates diffusion decay."""
         mesh = bt.mesh_1d(50)  # 50 cells = 51 nodes
-        problem = bt.DiffusionProblem(mesh)
+        problem = bt.Problem(mesh)
         problem.diffusivity(0.01)
 
         # Sinusoidal initial condition (known analytical solution)
@@ -690,7 +690,7 @@ class TestAdaptiveIntegration:
     def test_neumann_problem_is_rejected(self):
         """Natural boundaries are delegated to the canonical solver."""
         mesh = bt.mesh_1d(50)  # 50 cells = 51 nodes
-        problem = bt.DiffusionProblem(mesh)
+        problem = bt.Problem(mesh)
         problem.diffusivity(0.01)
 
         # Non-uniform initial condition

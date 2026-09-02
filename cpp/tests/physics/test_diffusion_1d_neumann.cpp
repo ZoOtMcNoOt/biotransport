@@ -1,8 +1,8 @@
+#include "../test_support/science_test.hpp"
+#include <algorithm>
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/solvers/explicit_fd.hpp>
-#include <cassert>
 #include <cmath>
-#include <iostream>
 #include <vector>
 
 using namespace biotransport;
@@ -16,8 +16,6 @@ static double computeMass1D(const StructuredMesh& mesh, const std::vector<double
 }
 
 void testDiffusion1DNeumannMassConservation() {
-    std::cout << "Testing 1D diffusion (Neumann=0) mass conservation..." << std::endl;
-
     StructuredMesh mesh(200, 0.0, 1.0);
 
     const double D = 0.02;
@@ -48,14 +46,14 @@ void testDiffusion1DNeumannMassConservation() {
     const double m1 = computeMass1D(mesh, result.solution);
 
     const double rel_err = std::abs(m1 - m0) / std::max(1e-12, std::abs(m0));
-    assert(rel_err < 5e-3);
-
-    std::cout << "1D Neumann mass conservation test passed!" << std::endl;
+    science_test::report("relative mass change", rel_err);
+    SCIENCE_REQUIRE(rel_err < 5e-3,
+                    "zero-flux 1D diffusion must conserve mass to <0.5% relative error; actual=" +
+                        science_test::number(rel_err));
 }
 
 int main() {
-    testDiffusion1DNeumannMassConservation();
-
-    std::cout << "All 1D Neumann diffusion tests passed!" << std::endl;
-    return 0;
+    return science_test::runSuite(
+        "1D Neumann diffusion",
+        {{"zero-flux mass conservation", testDiffusion1DNeumannMassConservation}});
 }

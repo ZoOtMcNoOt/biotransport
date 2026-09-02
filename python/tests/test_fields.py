@@ -347,7 +347,7 @@ class TestSpatialFieldIntegration:
         )
 
         # This should work with the solver
-        problem = bt.DiffusionProblem(mesh)
+        problem = bt.Problem(mesh)
         problem.diffusivity_field(D)
 
         # Check field was set (build returns list, not numpy array)

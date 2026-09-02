@@ -1,15 +1,12 @@
+#include "../test_support/science_test.hpp"
 #include <biotransport/core/mesh/structured_mesh.hpp>
 #include <biotransport/solvers/explicit_fd.hpp>
-#include <cassert>
 #include <cmath>
-#include <iostream>
 #include <vector>
 
 using namespace biotransport;
 
 void testNeumannSideDoesNotOverrideDirichletCorners() {
-    std::cout << "Testing boundary corner precedence (Dirichlet top/bottom)..." << std::endl;
-
     StructuredMesh mesh(10, 10, 0.0, 1.0, 0.0, 1.0);
 
     std::vector<double> initial(mesh.numNodes(), 1.0);
@@ -30,19 +27,17 @@ void testNeumannSideDoesNotOverrideDirichletCorners() {
     const auto& u = result.solution;
 
     // Bottom corners should be bottom Dirichlet.
-    assert(std::abs(u[mesh.index(0, 0)] - 2.5) < 1e-12);
-    assert(std::abs(u[mesh.index(mesh.nx(), 0)] - 2.5) < 1e-12);
+    SCIENCE_REQUIRE_NEAR(u[mesh.index(0, 0)], 2.5, 1e-12, 0.0, "bottom-left corner value");
+    SCIENCE_REQUIRE_NEAR(u[mesh.index(mesh.nx(), 0)], 2.5, 1e-12, 0.0, "bottom-right corner value");
 
     // Top corners should be top Dirichlet.
-    assert(std::abs(u[mesh.index(0, mesh.ny())] + 1.0) < 1e-12);
-    assert(std::abs(u[mesh.index(mesh.nx(), mesh.ny())] + 1.0) < 1e-12);
-
-    std::cout << "Boundary corner precedence test passed!" << std::endl;
+    SCIENCE_REQUIRE_NEAR(u[mesh.index(0, mesh.ny())], -1.0, 1e-12, 0.0, "top-left corner value");
+    SCIENCE_REQUIRE_NEAR(u[mesh.index(mesh.nx(), mesh.ny())], -1.0, 1e-12, 0.0,
+                         "top-right corner value");
 }
 
 int main() {
-    testNeumannSideDoesNotOverrideDirichletCorners();
-
-    std::cout << "All boundary corner tests passed!" << std::endl;
-    return 0;
+    return science_test::runSuite("boundary corner precedence",
+                                  {{"Neumann sides do not override Dirichlet corners",
+                                    testNeumannSideDoesNotOverrideDirichletCorners}});
 }
