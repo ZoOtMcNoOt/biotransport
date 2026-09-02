@@ -271,6 +271,109 @@ def mesh_2d(
     return StructuredMesh(nx, ny, x_min, x_max, y_min, y_max)
 
 
+def mesh_3d(
+    nx: int,
+    ny: int,
+    nz: int,
+    x_min: float = 0.0,
+    x_max: float = 1.0,
+    y_min: float = 0.0,
+    y_max: float = 1.0,
+    z_min: float = 0.0,
+    z_max: float = 1.0,
+):
+    """Create a 3D Cartesian mesh with nx × ny × nz cells.
+
+    This is a convenience wrapper for StructuredMesh3D with the same argument
+    order and validation as :func:`mesh_1d` and :func:`mesh_2d`.
+
+    Args:
+        nx, ny, nz: Number of cells along each axis
+        x_min, x_max, y_min, y_max, z_min, z_max: Domain bounds (default unit cube)
+
+    Returns:
+        StructuredMesh3D: A 3D mesh ready for the 3D solvers
+
+    Example:
+        >>> mesh = mesh_3d(20, 20, 20)                     # unit cube
+        >>> mesh = mesh_3d(40, 20, 10, x_max=0.04, y_max=0.02, z_max=0.01)
+    """
+    from ._core import StructuredMesh3D
+
+    nx = _positive_cell_count(nx, "nx")
+    ny = _positive_cell_count(ny, "ny")
+    nz = _positive_cell_count(nz, "nz")
+    bounds = {}
+    for name, value in (
+        ("x_min", x_min),
+        ("x_max", x_max),
+        ("y_min", y_min),
+        ("y_max", y_max),
+        ("z_min", z_min),
+        ("z_max", z_max),
+    ):
+        bounds[name] = _finite_float(value, name)
+    for axis in "xyz":
+        if bounds[f"{axis}_max"] <= bounds[f"{axis}_min"]:
+            raise ValueError(f"{axis}_max must be greater than {axis}_min")
+
+    return StructuredMesh3D(
+        nx,
+        ny,
+        nz,
+        bounds["x_min"],
+        bounds["x_max"],
+        bounds["y_min"],
+        bounds["y_max"],
+        bounds["z_min"],
+        bounds["z_max"],
+    )
+
+
+def sides(mesh) -> tuple:
+    """Return the boundary identifiers of a Cartesian mesh in canonical order.
+
+    Use it to apply one condition to every side without spelling the enum::
+
+        for side in bt.sides(mesh):
+            solver.neumann(side, 0.0)
+
+    Returns ``(Left, Right)`` for a 1D :class:`StructuredMesh` or
+    :class:`NonuniformMesh1D`, ``(Left, Right, Bottom, Top)`` for a 2D
+    :class:`StructuredMesh`, and the six :class:`Boundary3D` faces
+    ``(XMin, XMax, YMin, YMax, ZMin, ZMax)`` for a :class:`StructuredMesh3D`.
+    Cylindrical meshes are rejected: their solvers name axis, wall, and end
+    conditions explicitly.
+    """
+    from ._core import (
+        Boundary,
+        Boundary3D,
+        NonuniformMesh1D,
+        StructuredMesh,
+        StructuredMesh3D,
+    )
+
+    if isinstance(mesh, StructuredMesh3D):
+        return (
+            Boundary3D.XMin,
+            Boundary3D.XMax,
+            Boundary3D.YMin,
+            Boundary3D.YMax,
+            Boundary3D.ZMin,
+            Boundary3D.ZMax,
+        )
+    if isinstance(mesh, NonuniformMesh1D):
+        return (Boundary.Left, Boundary.Right)
+    if isinstance(mesh, StructuredMesh):
+        if mesh.is_1d():
+            return (Boundary.Left, Boundary.Right)
+        return (Boundary.Left, Boundary.Right, Boundary.Bottom, Boundary.Top)
+    raise TypeError(
+        "sides() supports StructuredMesh, StructuredMesh3D and NonuniformMesh1D; "
+        "cylindrical solvers name their axis, wall and end conditions explicitly"
+    )
+
+
 # ===========================================================================
 # Cylindrical mesh helpers
 # ===========================================================================

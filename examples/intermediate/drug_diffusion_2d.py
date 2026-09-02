@@ -43,10 +43,7 @@ decay_rate = np.log(2.0) / (illustrative_half_life_hours * 3600.0)
 
 # Initial condition: Gaussian drug bolus in center
 # gaussian() creates a symmetric 2D Gaussian centered at (center, center)
-initial_condition = np.asarray(
-    bt.gaussian(mesh, center=0.0, width=0.15, amplitude=1.0),
-    dtype=np.float64,
-)
+initial_condition = bt.gaussian(mesh, center=0.0, width=0.15, amplitude=1.0)
 
 # Setup problem with no-flux boundaries (drug stays in domain)
 problem = (

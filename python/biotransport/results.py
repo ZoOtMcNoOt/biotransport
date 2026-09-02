@@ -205,6 +205,18 @@ class Result:
 
         return plot(self, **kwargs)
 
+    def write_vtk(self, filename: Any, *, title: str = "BioTransport Export"):
+        """Write every field of this result to a VTK legacy file.
+
+        Delegates to :func:`biotransport.write_vtk` with the result's own mesh
+        and returns the written :class:`pathlib.Path`.
+        """
+        from .vtk_export import write_vtk
+
+        if self.mesh is None:
+            raise ValueError("this result does not carry its mesh")
+        return write_vtk(self.mesh, dict(self.fields), filename, title=title)
+
     def __repr__(self) -> str:
         return (
             f"Result(contract={self.contract!r}, time={self.time!r}, steps={self.steps}, "

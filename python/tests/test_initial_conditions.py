@@ -16,12 +16,13 @@ from biotransport.initial_conditions import (
 class TestGaussian:
     """Tests for gaussian initial condition."""
 
-    def test_gaussian_1d_returns_list(self):
-        """Test 1D Gaussian returns a list."""
+    def test_gaussian_1d_returns_array(self):
+        """Test 1D Gaussian returns a flat float64 array."""
         mesh = bt.mesh_1d(50)  # 50 cells = 51 nodes
         ic = gaussian(mesh, amplitude=1.0, width=0.1)
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
+        assert ic.dtype == np.float64 and ic.ndim == 1
         assert len(ic) == 51
 
     def test_gaussian_1d_default_center(self):
@@ -54,11 +55,12 @@ class TestGaussian:
         assert np.max(ic_arr) == pytest.approx(5.0, rel=0.01)
 
     def test_gaussian_2d_returns_flat_list(self):
-        """Test 2D Gaussian returns flattened list."""
+        """Test 2D Gaussian returns a flattened array."""
         mesh = bt.mesh_2d(20, 20)  # 20x20 cells = 21x21 nodes
         ic = gaussian(mesh, amplitude=1.0, width=0.1)
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
+        assert ic.dtype == np.float64 and ic.ndim == 1
         assert len(ic) == 21 * 21
 
     def test_gaussian_2d_custom_center(self):
@@ -116,12 +118,13 @@ class TestGaussian:
 class TestStep:
     """Tests for step initial condition."""
 
-    def test_step_1d_returns_list(self):
-        """Test step returns a list."""
+    def test_step_1d_returns_array(self):
+        """Test step returns a flat float64 array."""
         mesh = bt.mesh_1d(100)
         ic = step(mesh)
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
+        assert ic.dtype == np.float64 and ic.ndim == 1
         assert len(ic) == 101
 
     def test_step_1d_basic(self):
@@ -173,12 +176,13 @@ class TestStep:
 class TestUniform:
     """Tests for uniform initial condition."""
 
-    def test_uniform_1d_returns_list(self):
-        """Test uniform returns a list."""
+    def test_uniform_1d_returns_array(self):
+        """Test uniform returns a flat float64 array."""
         mesh = bt.mesh_1d(50)
         ic = uniform(mesh, value=3.14)
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
+        assert ic.dtype == np.float64 and ic.ndim == 1
         assert len(ic) == 51
 
     def test_uniform_1d_values(self):
@@ -243,14 +247,15 @@ class TestUniform:
 class TestCircle:
     """Tests for circle initial condition (2D only)."""
 
-    def test_circle_returns_list(self):
-        """Test circle returns a list."""
+    def test_circle_returns_array(self):
+        """Test circle returns a flat float64 array."""
         mesh = bt.mesh_2d(20, 20)
         ic = circle(
             mesh, center_x=0.5, center_y=0.5, radius=0.2, inside=1.0, outside=0.0
         )
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
+        assert ic.dtype == np.float64 and ic.ndim == 1
         assert len(ic) == 21 * 21
 
     def test_circle_has_both_values(self):
@@ -313,12 +318,13 @@ class TestCircle:
 class TestSinusoidal:
     """Tests for sinusoidal initial condition (1D only)."""
 
-    def test_sinusoidal_returns_list(self):
-        """Test sinusoidal returns a list."""
+    def test_sinusoidal_returns_array(self):
+        """Test sinusoidal returns a flat float64 array."""
         mesh = bt.mesh_1d(100)
         ic = sinusoidal(mesh, periods=1, amplitude=1.0)
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
+        assert ic.dtype == np.float64 and ic.ndim == 1
         assert len(ic) == 101
 
     def test_sinusoidal_amplitude(self):

@@ -43,6 +43,13 @@ releases may retire spellings under the documented
 - `mesh()` on `DiffusionSolver`, the explicit reaction-diffusion family,
   `AdvectionDiffusionSolver`, `CrankNicolsonDiffusion`, `ADIDiffusion2D` and
   `ADIDiffusion3D`.
+- `bt.mesh_3d(nx, ny, nz, ...)` mirrors `mesh_1d`/`mesh_2d` for `StructuredMesh3D`,
+  and `bt.sides(mesh)` returns a mesh's boundary identifiers in canonical
+  order so one loop applies a condition to every side.
+- `bt.plot(..., save_to=path)` saves the figure in the same call, and
+  `Result.write_vtk(filename)` exports every field of a result with its own
+  mesh. Matplotlib is now imported lazily, so `import biotransport` no longer
+  loads a plotting backend.
 - `biotransport.BioTransportDeprecationWarning` and a table-driven deprecation
   mechanism (`biotransport/_deprecation.py`) with a written policy
   (`docs/notes/DEPRECATION_POLICY.md`).
@@ -52,6 +59,13 @@ releases may retire spellings under the documented
   snapshot test.
 
 ### Changed
+- The initial-condition helpers (`gaussian`, `step`, `uniform`, `circle`,
+  `sinusoidal`), `layered_1d` and `SpatialField.build()` return flat `float64`
+  NumPy arrays instead of Python lists. The native bindings accept both, and
+  arrays compose with ordinary arithmetic; code that relied on list methods
+  should call `.tolist()`.
+- The second argument of `bt.plot` is named `values`; `solution=` still works
+  with a deprecation warning.
 - `bt.plot` no longer calls `plt.show()` by default (`show=False`); it returns
   the figure so callers can add to it before showing.
 - `bt.integrate` requires `method=` (`"euler"`, `"heun"` or `"rk4"`). Omitting
@@ -71,6 +85,9 @@ releases may retire spellings under the documented
   intersphinx inventories when building without network access.
 
 ### Deprecated
+- `plot_1d_solution`, `plot_2d_solution`, `plot_2d_surface`, `plot_field`,
+  `plot_1d` and `plot_2d`: use `bt.plot(mesh, values, kind=..., save_to=...)`.
+- `SpatialField.build_array()`: `build()` returns the same array.
 - `solve_until(..., maximum_dt=...)` on `MultiSpeciesSolver` and
   `NonuniformDiffusion1D`: the keyword is now `time_step`.
 - `bt.solve(problem, t=..., dt=...)`: use `end_time=` and `time_step=`.

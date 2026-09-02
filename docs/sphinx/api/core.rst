@@ -35,6 +35,8 @@ Meshes and fields
 
 .. autofunction:: mesh_2d
 
+.. autofunction:: mesh_3d
+
 .. autoclass:: SpatialField
    :members:
 

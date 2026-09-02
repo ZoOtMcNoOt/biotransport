@@ -1,7 +1,10 @@
 """Initial condition helper functions.
 
 These functions create common initial conditions for transport problems,
-reducing boilerplate and making code more readable.
+reducing boilerplate and making code more readable. Every helper returns a
+flat, C-ordered ``float64`` NumPy array with one value per mesh node, so the
+result can be combined with ordinary array arithmetic and passed directly to
+``Problem.initial_condition`` or any native ``set_initial_condition``.
 
 Example:
     >>> import biotransport as bt
@@ -9,7 +12,7 @@ Example:
     >>> problem = (
     ...     bt.Problem(mesh)
     ...     .diffusivity(0.01)
-    ...     .initial(bt.gaussian(mesh, center=0.5, width=0.1))
+    ...     .initial_condition(bt.gaussian(mesh, center=0.5, width=0.1))
     ... )
 """
 
@@ -60,11 +63,11 @@ def _require_structured_mesh(mesh) -> bool:
     return bool(is_1d())
 
 
-def _finite_values(values: np.ndarray, name: str) -> list[float]:
-    flattened = np.asarray(values, dtype=np.float64).reshape(-1, order="C")
+def _finite_values(values: np.ndarray, name: str) -> np.ndarray:
+    flattened = np.array(values, dtype=np.float64, order="C", copy=True).reshape(-1)
     if not np.all(np.isfinite(flattened)):
         raise ValueError(f"{name} parameters produced non-finite values")
-    return flattened.tolist()
+    return flattened
 
 
 def gaussian(
@@ -75,7 +78,7 @@ def gaussian(
     *,
     center_x: float | None = None,
     center_y: float | None = None,
-):
+) -> np.ndarray:
     """Create a Gaussian (bell curve) initial condition.
 
     For 1D: exp(-((x - center)^2) / (2 * width^2))
@@ -90,7 +93,7 @@ def gaussian(
         center_y: Y center for 2D (overrides center)
 
     Returns:
-        list: Initial condition values for all mesh nodes
+        numpy.ndarray: Initial condition values for all mesh nodes (flat, C order)
 
     Example:
         >>> ic = bt.gaussian(mesh, center=0.5, width=0.1)  # 1D
@@ -136,7 +139,9 @@ def gaussian(
     return _finite_values(values, "gaussian")
 
 
-def step(mesh, position: float = 0.5, left: float = 1.0, right: float = 0.0):
+def step(
+    mesh, position: float = 0.5, left: float = 1.0, right: float = 0.0
+) -> np.ndarray:
     """Create a step function initial condition (1D only).
 
     Value is `left` for x < position, `right` for x >= position.
@@ -148,7 +153,7 @@ def step(mesh, position: float = 0.5, left: float = 1.0, right: float = 0.0):
         right: Value for x >= position (default 0.0)
 
     Returns:
-        list: Initial condition values
+        numpy.ndarray: Initial condition values (flat, one per node)
 
     Example:
         >>> ic = bt.step(mesh, position=0.3, left=1.0, right=0.0)
@@ -164,7 +169,7 @@ def step(mesh, position: float = 0.5, left: float = 1.0, right: float = 0.0):
     return _finite_values(values, "step")
 
 
-def uniform(mesh, value: float = 0.0):
+def uniform(mesh, value: float = 0.0) -> np.ndarray:
     """Create a uniform (constant) initial condition.
 
     Args:
@@ -173,14 +178,14 @@ def uniform(mesh, value: float = 0.0):
         value: Constant value everywhere (default 0.0)
 
     Returns:
-        list: Initial condition values
+        numpy.ndarray: Initial condition values (flat, one per node)
 
     Example:
         >>> ic = bt.uniform(mesh, 1.0)
     """
     node_count = _validated_node_count(mesh)
     value = _finite_float(value, "value")
-    return [value] * node_count
+    return np.full(node_count, value, dtype=np.float64)
 
 
 def circle(
@@ -190,7 +195,7 @@ def circle(
     radius: float = 0.2,
     inside: float = 1.0,
     outside: float = 0.0,
-):
+) -> np.ndarray:
     """Create a circular initial condition (2D only).
 
     Value is `inside` within the circle, `outside` elsewhere.
@@ -204,7 +209,7 @@ def circle(
         outside: Value outside circle (default 0.0)
 
     Returns:
-        list: Initial condition values
+        numpy.ndarray: Initial condition values (flat, one per node)
 
     Example:
         >>> ic = bt.circle(mesh, center_x=0.5, center_y=0.5, radius=0.1)
@@ -226,7 +231,9 @@ def circle(
     return _finite_values(values, "circle")
 
 
-def sinusoidal(mesh, periods: float = 1.0, amplitude: float = 1.0, offset: float = 0.0):
+def sinusoidal(
+    mesh, periods: float = 1.0, amplitude: float = 1.0, offset: float = 0.0
+) -> np.ndarray:
     """Create a sinusoidal initial condition (1D only).
 
     Creates sin(2π * periods * x / L) where L is the domain length.
@@ -238,7 +245,7 @@ def sinusoidal(mesh, periods: float = 1.0, amplitude: float = 1.0, offset: float
         offset: Vertical offset (default 0.0)
 
     Returns:
-        list: Initial condition values
+        numpy.ndarray: Initial condition values (flat, one per node)
 
     Example:
         >>> ic = bt.sinusoidal(mesh, periods=2, amplitude=0.5)

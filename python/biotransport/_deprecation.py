@@ -248,7 +248,15 @@ _ROOT_DEPRECATED: dict[str, DeprecatedName] = {
 #: resolves to the target object.
 ROOT_DEPRECATED: Mapping[str, DeprecatedName] = MappingProxyType(_ROOT_DEPRECATED)
 
-_ROOT_LAZY: dict[str, str] = {}
+_ROOT_LAZY: dict[str, str] = {
+    # Deprecated plot spellings: resolve silently, warn when called.
+    "plot_1d_solution": "biotransport.visualization:plot_1d_solution",
+    "plot_2d_solution": "biotransport.visualization:plot_2d_solution",
+    "plot_2d_surface": "biotransport.visualization:plot_2d_surface",
+    "plot_field": "biotransport.visualization:plot_field",
+    "plot_1d": "biotransport.visualization:plot_1d",
+    "plot_2d": "biotransport.visualization:plot_2d",
+}
 
 #: Root-level names that resolve silently on demand without being part of
 #: ``biotransport.__all__``.  Populated when the namespace is tiered.

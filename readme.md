@@ -121,6 +121,12 @@ solver.dirichlet(bt.Boundary.Left, 1.0).neumann(bt.Boundary.Right, 0.0)
 result = solver.solve_until(600.0, save_times=[60.0, 300.0])
 ```
 
+Mesh helpers follow one pattern for every dimension: `mesh_1d`, `mesh_2d` and `mesh_3d` take cell
+counts and bounds, `sides(mesh)` returns the boundary identifiers in canonical order, and the
+initial-condition helpers (`gaussian`, `step`, `uniform`, `circle`, `sinusoidal`) return NumPy arrays
+you can combine before handing them to a problem or solver. `bt.plot(mesh, values, save_to="c.png")`
+renders any field and saves it in one call.
+
 For discovery without a flat wall of class names, many native solver objects are grouped into thin
 namespaces: `bt.diffusion`, `bt.electrochem`, `bt.flow`, and `bt.applications`. These modules only
 organize the API; numerical work still runs in the C++ core. Application configuration objects also

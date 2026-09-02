@@ -169,15 +169,11 @@ Visualization
 
 .. currentmodule:: biotransport
 
-.. autofunction:: plot_1d_solution
-
-.. autofunction:: plot_2d_solution
-
-.. autofunction:: plot_2d_surface
-
-.. autofunction:: plot_field
-
 .. autofunction:: plot
+
+``plot_1d_solution``, ``plot_2d_solution``, ``plot_2d_surface``, ``plot_field``,
+``plot_1d`` and ``plot_2d`` are deprecated spellings of :func:`plot`; each warns
+and forwards, and they are removed in 0.4.0.
 
 
 Mesh utilities
@@ -192,6 +188,8 @@ Mesh utilities
 .. autofunction:: as_1d
 
 .. autofunction:: as_2d
+
+.. autofunction:: sides
 
 
 File utilities

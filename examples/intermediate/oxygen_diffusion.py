@@ -126,14 +126,14 @@ final_fig = plot_with_vessels(
 final_fig.savefig(bt.get_result_path("oxygen_steady_state.png", EXAMPLE_NAME))
 
 # Create 3D surface plot of the steady-state solution
-surface_fig = bt.plot_field(
+bt.plot(
     mesh,
     solution,
     title=f"Oxygen Concentration Profile (t = {current_time:.1f}s)",
     kind="surface",
     zlabel="Concentration",
+    save_to=bt.get_result_path("oxygen_3d.png", EXAMPLE_NAME),
 )
-surface_fig.savefig(bt.get_result_path("oxygen_3d.png", EXAMPLE_NAME))
 
 # Plot a cross-section through the middle of the domain
 mid_y = ny // 2

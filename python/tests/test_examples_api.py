@@ -203,6 +203,7 @@ def test_plot_examples_only_forward_supported_keywords() -> None:
         "ylabel",
         "colorbar_label",
         "zlabel",
+        "save_to",
     }
     failures: list[str] = []
     for path, _, tree in _example_sources():

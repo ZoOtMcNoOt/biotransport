@@ -21,6 +21,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from ._deprecation import deprecated_callable
+
 from .mesh_utils import r_nodes, rz_grid, x_nodes, xy_grid, y_nodes, z_nodes
 
 
@@ -283,26 +285,28 @@ class SpatialField:
 
         return self
 
-    def build(self) -> list:
-        """Build and return the field as a Python list.
+    def build(self) -> np.ndarray:
+        """Build and return the field as a flat ``float64`` NumPy array.
 
-        Returns:
-            Field values as a list (suitable for TransportProblem methods)
-        """
-        return self._field.tolist()
-
-    def build_array(self) -> np.ndarray:
-        """Build and return the field as a NumPy array.
-
-        Returns:
-            Field values as a 1D numpy array
+        The array is an independent copy, so later builder edits do not change
+        it. It can be passed directly to ``Problem`` field methods and to the
+        native solvers.
         """
         return self._field.copy()
+
+    @deprecated_callable(
+        "SpatialField.build()",
+        reason="build() now returns the same NumPy array",
+        name="SpatialField.build_array",
+    )
+    def build_array(self) -> np.ndarray:
+        """Deprecated alias of :meth:`build`."""
+        return self.build()
 
 
 def layered_1d(
     mesh, layers: list[Tuple[float, float, float]], default: float = 0.0
-) -> list:
+) -> np.ndarray:
     """Create a 1D layered field with different values in different regions.
 
     Convenience function for creating piecewise constant fields in 1D.
@@ -313,7 +317,7 @@ def layered_1d(
         default: Default value outside all layers
 
     Returns:
-        Field as a list suitable for TransportProblem methods
+        Field as a flat NumPy array suitable for TransportProblem methods
 
     Example:
         >>> D_field = layered_1d(mesh, [

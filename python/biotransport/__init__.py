@@ -149,6 +149,8 @@ from .mesh_utils import (
     rz_grid,
     mesh_1d,
     mesh_2d,
+    mesh_3d,
+    sides,
 )
 from . import run as _run_module
 from .results import Result, Snapshots
@@ -162,15 +164,7 @@ from ._deprecation import (
     deprecated_callable,
     module_getattr,
 )
-from .visualization import (
-    plot_1d_solution,
-    plot_2d_solution,
-    plot_2d_surface,
-    plot_field,
-    plot_1d,
-    plot_2d,
-    plot,
-)
+from .visualization import plot
 
 # Spatial field builders
 from .fields import SpatialField, layered_1d
@@ -421,6 +415,8 @@ __all__ = [
     "plot",  # Simplest way to visualize results
     "mesh_1d",  # Create 1D mesh
     "mesh_2d",  # Create 2D mesh
+    "mesh_3d",  # Create 3D mesh
+    "sides",  # Boundary identifiers of a mesh in canonical order
     "x_nodes",  # Get x coordinates from mesh
     "y_nodes",  # Get y coordinates from mesh
     "xy_grid",  # Get 2D meshgrid
@@ -501,13 +497,6 @@ __all__ = [
     "RungeKuttaResult",
     "integrate_explicit_runge_kutta",
     "verify_order_of_accuracy",
-    # ========== Plotting variants ==========
-    "plot_field",
-    "plot_1d",
-    "plot_2d",
-    "plot_1d_solution",
-    "plot_2d_solution",
-    "plot_2d_surface",
     # ========== Mesh utilities ==========
     "r_nodes",
     "z_nodes",

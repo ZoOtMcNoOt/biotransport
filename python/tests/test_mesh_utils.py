@@ -403,3 +403,80 @@ class TestCylindricalMesh:
             rz_grid(radial)
         with pytest.raises(ValueError, match="3D"):
             rz_grid(full)
+
+
+class TestMesh3d:
+    """Tests for the mesh_3d convenience wrapper."""
+
+    def test_mesh_3d_basic(self):
+        mesh = bt.mesh_3d(4, 3, 2, 0.0, 4.0, 0.0, 3.0, 0.0, 2.0)
+        assert isinstance(mesh, bt.StructuredMesh3D)
+        assert (mesh.nx(), mesh.ny(), mesh.nz()) == (4, 3, 2)
+        assert mesh.num_nodes() == 5 * 4 * 3
+        assert mesh.dx() == mesh.dy() == mesh.dz() == 1.0
+
+    def test_mesh_3d_default_unit_cube(self):
+        mesh = bt.mesh_3d(2, 2, 2)
+        assert mesh.dx() == pytest.approx(0.5)
+        assert mesh.dz() == pytest.approx(0.5)
+
+    @pytest.mark.parametrize("bad", [0, -1, 1.5, True])
+    def test_mesh_3d_rejects_bad_counts(self, bad):
+        with pytest.raises((TypeError, ValueError)):
+            bt.mesh_3d(bad, 2, 2)
+
+    @pytest.mark.parametrize(
+        "kwargs, message",
+        [
+            ({"x_min": 1.0, "x_max": 1.0}, "x_max must be greater than x_min"),
+            ({"y_min": 2.0, "y_max": 1.0}, "y_max must be greater than y_min"),
+            ({"z_max": float("nan")}, "z_max must be finite"),
+        ],
+    )
+    def test_mesh_3d_rejects_invalid_bounds(self, kwargs, message):
+        with pytest.raises(ValueError, match=message):
+            bt.mesh_3d(2, 2, 2, **kwargs)
+
+
+class TestSides:
+    """Tests for sides(mesh)."""
+
+    def test_sides_1d(self):
+        assert bt.sides(bt.mesh_1d(4)) == (bt.Boundary.Left, bt.Boundary.Right)
+
+    def test_sides_2d(self):
+        assert bt.sides(bt.mesh_2d(4, 4)) == (
+            bt.Boundary.Left,
+            bt.Boundary.Right,
+            bt.Boundary.Bottom,
+            bt.Boundary.Top,
+        )
+
+    def test_sides_3d(self):
+        assert bt.sides(bt.mesh_3d(2, 2, 2)) == (
+            bt.Boundary3D.XMin,
+            bt.Boundary3D.XMax,
+            bt.Boundary3D.YMin,
+            bt.Boundary3D.YMax,
+            bt.Boundary3D.ZMin,
+            bt.Boundary3D.ZMax,
+        )
+
+    def test_sides_nonuniform_1d(self):
+        mesh = bt.NonuniformMesh1D([0.0, 0.1, 0.5, 1.0])
+        assert bt.sides(mesh) == (bt.Boundary.Left, bt.Boundary.Right)
+
+    def test_sides_rejects_cylindrical_and_foreign_objects(self):
+        with pytest.raises(TypeError, match="cylindrical"):
+            bt.sides(bt.CylindricalMesh(4, 0.0, 1.0))
+        with pytest.raises(TypeError):
+            bt.sides(object())
+
+    def test_sides_drive_the_fluent_boundary_verbs(self):
+        mesh = bt.mesh_2d(4, 4)
+        solver = bt.DiffusionSolver(mesh, 0.01)
+        solver.set_initial_condition(bt.uniform(mesh, 1.0))
+        for side in bt.sides(mesh):
+            solver.neumann(side, 0.0)
+        result = solver.solve_until(0.05)
+        np.testing.assert_allclose(result.field, 1.0)

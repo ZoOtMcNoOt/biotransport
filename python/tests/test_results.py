@@ -181,3 +181,16 @@ def test_result_validates_its_inputs() -> None:
     result = Result({"u": np.zeros(3)}, 0.0, 0, diagnostics, mesh, "x", primary="u")
     with pytest.raises(AttributeError, match="available fields"):
         result.concentration
+
+
+def test_result_writes_its_own_fields_to_vtk(tmp_path) -> None:
+    mesh = bt.mesh_2d(3, 2)
+    problem = bt.Problem(mesh).diffusivity(0.0).initial_condition(bt.uniform(mesh, 4.0))
+    result = bt.solve(problem, end_time=0.0)
+
+    written = result.write_vtk(tmp_path / "field", title="unit test")
+
+    assert written.suffix == ".vtk" and written.exists()
+    text = written.read_text()
+    assert "unit test" in text and "concentration" in text
+    assert text.count("4") >= mesh.num_nodes()

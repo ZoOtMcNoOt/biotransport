@@ -54,9 +54,7 @@ for i in range(3):
     for j in range(3):
         center_x = 0.5 + i * 0.75
         center_y = 0.5 + j * 0.75
-        spot = np.array(
-            bt.gaussian(mesh, center=center_x, width=0.1, center_y=center_y)
-        )
+        spot = bt.gaussian(mesh, center=center_x, width=0.1, center_y=center_y)
         u0 -= 0.5 * spot  # Create spots by lowering concentration
 
 # Setup diffusion problem

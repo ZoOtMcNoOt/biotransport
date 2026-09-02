@@ -108,7 +108,7 @@ def run_advection_diffusion_1d():
     # Using the gaussian helper with center and width in domain coordinates
     x0 = 0.02
     sigma = 0.005  # 5 mm spread
-    ic = np.array(bt.gaussian(mesh, center=x0, width=sigma))
+    ic = bt.gaussian(mesh, center=x0, width=sigma)
 
     # Simulation time
     t_end = 5.0  # 5 seconds
@@ -202,7 +202,7 @@ def run_peclet_comparison():
 
     x0 = 0.02
     sigma = 0.005
-    ic = np.array(bt.gaussian(mesh, center=x0, width=sigma))
+    ic = bt.gaussian(mesh, center=x0, width=sigma)
     t_end = 1.0
 
     fig, ax = plt.subplots(figsize=(10, 6))

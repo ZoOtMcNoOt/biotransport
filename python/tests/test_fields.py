@@ -287,15 +287,22 @@ class TestSpatialFieldCylindrical:
 class TestSpatialFieldBuild:
     """Tests for SpatialField.build() method."""
 
-    def test_build_returns_list(self):
-        """Test that build returns a list (for C++ binding compatibility)."""
+    def test_build_returns_array(self):
+        """build() returns a flat float64 array the native bindings accept."""
         mesh = bt.mesh_1d(50, 0.0, 1.0)  # 50 cells = 51 nodes
         field = SpatialField(mesh).default(1.0).build()
 
-        # SpatialField.build() returns a list for compatibility with C++ bindings
-        assert isinstance(field, list)
-        assert len(field) == 51
-        assert all(v == 1.0 for v in field)
+        assert isinstance(field, np.ndarray)
+        assert field.dtype == np.float64 and field.shape == (51,)
+        assert np.all(field == 1.0)
+        bt.Problem(mesh).diffusivity_field(field)  # accepted by the C++ side
+
+    def test_build_array_is_a_deprecated_alias(self):
+        mesh = bt.mesh_1d(4, 0.0, 1.0)
+        builder = SpatialField(mesh).default(2.0)
+        with pytest.warns(bt.BioTransportDeprecationWarning, match="build_array"):
+            legacy = builder.build_array()
+        np.testing.assert_array_equal(legacy, builder.build())
 
     def test_build_returns_copy(self):
         """Test that build returns a copy, not reference."""

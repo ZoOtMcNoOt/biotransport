@@ -9,7 +9,6 @@ import types
 import pytest
 
 import biotransport as bt
-import biotransport.visualization as visualization
 
 
 def _canonical_result(mesh):
@@ -86,7 +85,7 @@ def test_plot_rejects_kind_incompatible_with_mesh_dimension(
 def test_plot_forwards_1d_labels_and_does_not_show(monkeypatch) -> None:
     mesh = bt.mesh_1d(4, 0.0, 1.0)
     calls = []
-    monkeypatch.setattr(visualization.plt, "show", lambda: calls.append("show"))
+    monkeypatch.setattr(plt, "show", lambda: calls.append("show"))
 
     figure = bt.plot(
         mesh,
@@ -108,7 +107,7 @@ def test_plot_forwards_1d_labels_and_does_not_show(monkeypatch) -> None:
 def test_plot_show_true_calls_matplotlib(monkeypatch) -> None:
     mesh = bt.mesh_1d(4, 0.0, 1.0)
     calls = []
-    monkeypatch.setattr(visualization.plt, "show", lambda: calls.append("show"))
+    monkeypatch.setattr(plt, "show", lambda: calls.append("show"))
 
     figure = bt.plot(mesh, np.zeros(mesh.num_nodes()), show=True)
     try:
@@ -129,3 +128,77 @@ def test_plot_rejects_ambiguous_control_types(keyword, value, error) -> None:
 
     with pytest.raises(error):
         bt.plot(mesh, np.zeros(mesh.num_nodes()), **{keyword: value})
+
+
+def test_plot_save_to_writes_the_figure(tmp_path) -> None:
+    mesh = bt.mesh_2d(4, 3)
+    values = bt.gaussian(mesh, center=0.5, width=0.2)
+    target = tmp_path / "field.png"
+
+    figure = bt.plot(mesh, values, kind="surface", zlabel="c", save_to=target)
+    try:
+        assert target.exists() and target.stat().st_size > 0
+        assert figure.axes[0].get_zlabel() == "c"
+    finally:
+        plt.close(figure)
+
+
+def test_plot_accepts_arrays_from_the_initial_condition_helpers() -> None:
+    mesh = bt.mesh_1d(8)
+    figure = bt.plot(mesh, bt.step(mesh, position=0.5), xlabel="x", ylabel="c")
+    try:
+        assert figure.axes[0].get_xlabel() == "x"
+        assert figure.axes[0].lines[0].get_ydata().tolist() == bt.step(mesh).tolist()
+    finally:
+        plt.close(figure)
+
+
+def test_plot_module_does_not_import_pyplot_eagerly() -> None:
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, biotransport; "
+        "sys.exit(1 if 'matplotlib.pyplot' in sys.modules else 0)"
+    )
+    completed = subprocess.run([sys.executable, "-c", code], check=False)
+    assert completed.returncode == 0, (
+        "importing biotransport imported matplotlib.pyplot"
+    )
+
+
+@pytest.mark.parametrize(
+    "name, args, kwargs",
+    [
+        ("plot_1d_solution", ("1d",), {}),
+        ("plot_1d", ("1d",), {"show_grid": False}),
+        ("plot_2d_solution", ("2d",), {}),
+        ("plot_2d", ("2d",), {}),
+        ("plot_2d_surface", ("2d",), {}),
+        ("plot_field", ("2d",), {"kind": "surface", "xlabel": "u"}),
+    ],
+)
+def test_legacy_plot_spellings_warn_and_forward(name, args, kwargs) -> None:
+    mesh = bt.mesh_1d(4) if args[0] == "1d" else bt.mesh_2d(4, 4)
+    values = bt.uniform(mesh, 1.0)
+    with pytest.warns(bt.BioTransportDeprecationWarning, match=name):
+        figure = getattr(bt, name)(mesh, values, **kwargs)
+    try:
+        assert figure.axes
+    finally:
+        plt.close(figure)
+
+
+def test_plot_solution_keyword_is_deprecated() -> None:
+    mesh = bt.mesh_1d(4)
+    with pytest.warns(bt.BioTransportDeprecationWarning, match="values"):
+        figure = bt.plot(mesh, solution=bt.uniform(mesh, 2.0))
+    try:
+        np.testing.assert_array_equal(figure.axes[0].lines[0].get_ydata(), 2.0)
+    finally:
+        plt.close(figure)
+    with (
+        pytest.raises(TypeError, match="once"),
+        pytest.warns(bt.BioTransportDeprecationWarning),
+    ):
+        bt.plot(mesh, bt.uniform(mesh, 1.0), solution=bt.uniform(mesh, 2.0))
