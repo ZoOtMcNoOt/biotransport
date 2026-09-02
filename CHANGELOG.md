@@ -32,6 +32,17 @@ releases may retire spellings under the documented
 - `time()`, `check_stability(dt)` on every explicit reaction-diffusion and
   advection-diffusion solver, and `max_stable_time_step()` on
   `DiffusionSolver`.
+- `solver.solve_until(end_time, time_step=None, *, save_times=None)` on all 19
+  transient native stepping solvers (`biotransport.stepping`), returning a
+  `Result` with `StepDiagnostics`. The time step is chosen automatically only
+  when the solver certifies a stability limit; otherwise `time_step` is
+  required, and the solver refuses to step backwards or land off the clock.
+- Fluent boundary verbs `dirichlet`, `neumann`, `robin`, `boundary` and
+  `outward_flux` on the same solvers; each forwards to the native setter or
+  refuses conditions the solver cannot honour, and returns the solver.
+- `mesh()` on `DiffusionSolver`, the explicit reaction-diffusion family,
+  `AdvectionDiffusionSolver`, `CrankNicolsonDiffusion`, `ADIDiffusion2D` and
+  `ADIDiffusion3D`.
 - `biotransport.BioTransportDeprecationWarning` and a table-driven deprecation
   mechanism (`biotransport/_deprecation.py`) with a written policy
   (`docs/notes/DEPRECATION_POLICY.md`).
@@ -60,6 +71,8 @@ releases may retire spellings under the documented
   intersphinx inventories when building without network access.
 
 ### Deprecated
+- `solve_until(..., maximum_dt=...)` on `MultiSpeciesSolver` and
+  `NonuniformDiffusion1D`: the keyword is now `time_step`.
 - `bt.solve(problem, t=..., dt=...)`: use `end_time=` and `time_step=`.
 - `bt.run_checkpoints(...)`: use `bt.solve(..., save_times=[...]).snapshots`.
 - `TransportResult.solution`: use `TransportResult.concentration`.

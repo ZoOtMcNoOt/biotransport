@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Callable, Optional, Sequence, TypeAlias, Union, overload
+from typing_extensions import Self
+
+from biotransport.results import Result
 
 import numpy as np
 import numpy.typing as npt
@@ -840,8 +843,33 @@ class NonuniformDiffusion1D:
     def check_stability(self, dt: float) -> bool: ...
     def max_stable_time_step(self) -> float: ...
     def step(self, dt: float) -> None: ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
-    def solve_until(self, final_time: float, maximum_dt: float) -> None: ...
     def solution(self) -> FloatArray: ...
     def diffusivity(self) -> FloatArray: ...
     def face_diffusivities(self) -> FloatArray: ...
@@ -1351,6 +1379,32 @@ class ImplicitDiffusion2D:
     def set_tolerance(self, tolerance: float) -> None: ...
     def set_max_iterations(self, max_iterations: int) -> None: ...
     def step(self, dt: float) -> ImplicitSolveResult: ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> ImplicitSolveResult: ...
     def solution(self) -> FloatArray: ...
     def diffusivity(self) -> FloatArray: ...
@@ -1377,6 +1431,32 @@ class ImplicitDiffusion3D:
     def set_tolerance(self, tolerance: float) -> None: ...
     def set_max_iterations(self, max_iterations: int) -> None: ...
     def step(self, dt: float) -> ImplicitSolveResult: ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> ImplicitSolveResult: ...
     def solution(self) -> FloatArray: ...
     def diffusivity(self) -> FloatArray: ...
@@ -1703,6 +1783,35 @@ class CrankNicolsonDiffusion:
     def set_tolerance(self, tol: float) -> CrankNicolsonDiffusion: ...
     def set_max_iterations(self, max_iter: int) -> CrankNicolsonDiffusion: ...
     def step(self, dt: float) -> CNSolveResult: ...
+    def mesh(self) -> StructuredMesh:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray:
         """Return an owned copy of the current flat field."""
@@ -1741,6 +1850,35 @@ class ADIDiffusion2D:
         self, boundary: Boundary, normal_derivative: float
     ) -> None: ...
     def step(self, dt: float) -> ADISolveResult: ...
+    def mesh(self) -> StructuredMesh:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> ADISolveResult: ...
     def solution(self) -> FloatArray:
         """Return an owned copy of the current flat field."""
@@ -1767,6 +1905,35 @@ class ADIDiffusion3D:
         self, boundary_id: int, normal_derivative: float
     ) -> None: ...
     def step(self, dt: float) -> ADISolveResult: ...
+    def mesh(self) -> StructuredMesh3D:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> ADISolveResult: ...
     def solution(self) -> FloatArray:
         """Return an owned copy of the current flat field."""
@@ -1854,6 +2021,35 @@ class DiffusionSolver:
     def check_stability(self, dt: float) -> bool:
         """Return whether ``dt`` satisfies the explicit stability condition."""
         ...
+    def mesh(self) -> StructuredMesh:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None:
         """Advance solution in time."""
         ...
@@ -1879,6 +2075,32 @@ class DiffusionSolver3D:
     def set_neumann_boundary(
         self, boundary: Boundary3D, normal_derivative: float
     ) -> None: ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def check_stability(self, dt: float) -> bool: ...
     def max_stable_time_step(self) -> float: ...
@@ -1911,6 +2133,32 @@ class LinearReactionDiffusionSolver3D:
     def set_neumann_boundary(
         self, boundary: Boundary3D, normal_derivative: float
     ) -> None: ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def check_stability(self, dt: float) -> bool: ...
     def max_stable_time_step(self) -> float: ...
@@ -2008,6 +2256,35 @@ class AdvectionDiffusionSolver:
     def check_stability(self, dt: float) -> bool:
         """Return whether ``dt`` satisfies the explicit stability condition."""
         ...
+    def mesh(self) -> StructuredMesh:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None:
         """Advance solution in time."""
         ...
@@ -2083,6 +2360,35 @@ class ReactionDiffusionSolver:
     def check_stability(self, dt: float) -> bool:
         """Return whether ``dt`` satisfies the explicit stability condition."""
         ...
+    def mesh(self) -> StructuredMesh:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None:
         """Solve for specified number of time steps."""
         ...
@@ -2111,6 +2417,35 @@ class ConstantSourceReactionDiffusionSolver:
     def check_stability(self, dt: float) -> bool:
         """Return whether ``dt`` satisfies the explicit stability condition."""
         ...
+    def mesh(self) -> StructuredMesh:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray: ...
 
@@ -2134,6 +2469,35 @@ class LinearReactionDiffusionSolver:
     def check_stability(self, dt: float) -> bool:
         """Return whether ``dt`` satisfies the explicit stability condition."""
         ...
+    def mesh(self) -> StructuredMesh:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray: ...
 
@@ -2161,6 +2525,35 @@ class LogisticReactionDiffusionSolver:
     def check_stability(self, dt: float) -> bool:
         """Return whether ``dt`` satisfies the explicit stability condition."""
         ...
+    def mesh(self) -> StructuredMesh:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray: ...
 
@@ -2188,6 +2581,35 @@ class MichaelisMentenReactionDiffusionSolver:
     def check_stability(self, dt: float) -> bool:
         """Return whether ``dt`` satisfies the explicit stability condition."""
         ...
+    def mesh(self) -> StructuredMesh:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray: ...
 
@@ -2217,6 +2639,35 @@ class MaskedMichaelisMentenReactionDiffusionSolver:
     def check_stability(self, dt: float) -> bool:
         """Return whether ``dt`` satisfies the explicit stability condition."""
         ...
+    def mesh(self) -> StructuredMesh:
+        """The mesh this solver was built on."""
+        ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray: ...
 
@@ -2293,10 +2744,33 @@ class MultiSpeciesSolver:
     ) -> None: ...
     def check_stability(self, dt: float) -> bool: ...
     def max_stable_time_step(self) -> float: ...
-    def solve(self, dt: float, num_steps: int) -> None: ...
-    def solve_until(self, final_time: float, maximum_dt: float) -> None:
-        """Advance exactly to an absolute model time using stable equal substeps."""
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
         ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
+    def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self, species_idx: int) -> FloatArray:
         """Return an owned flat solution copy for one species."""
         ...
@@ -3647,6 +4121,7 @@ class NernstPlanckSolver:
     def set_dirichlet_boundary(self, boundary: Boundary, value: float) -> None: ...
     @overload
     def set_dirichlet_boundary(self, boundary_id: int, value: float) -> None: ...
+    @overload
     def set_outward_flux_boundary(
         self, boundary: Boundary, outward_molar_flux: float
     ) -> None:
@@ -3656,6 +4131,12 @@ class NernstPlanckSolver:
         outward-normal derivative that ``set_neumann_boundary`` means on the
         scalar diffusion solvers.
         """
+        ...
+    @overload
+    def set_outward_flux_boundary(
+        self, boundary_id: int, outward_molar_flux: float
+    ) -> None:
+        """Prescribe the outward total molar flux on a boundary given by integer id."""
         ...
     @overload
     def set_neumann_boundary(self, boundary: Boundary, flux: float) -> None:
@@ -3668,6 +4149,32 @@ class NernstPlanckSolver:
     def check_stability(self, dt: float) -> bool: ...
     def maximum_stable_time_step(self) -> float: ...
     def recommended_time_step(self, safety: float = 0.9) -> float: ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray:
         """Return an owned concentration copy."""
@@ -3733,6 +4240,32 @@ class MultiIonSolver:
     def check_stability(self, dt: float) -> bool: ...
     def maximum_stable_time_step(self) -> float: ...
     def recommended_time_step(self, safety: float = 0.9) -> float: ...
+    # Shared stepping vocabulary installed by biotransport.stepping.
+    def solve_until(
+        self,
+        end_time: float,
+        time_step: float | None = None,
+        *,
+        save_times: Sequence[float] | None = None,
+        safety_factor: float = 0.8,
+    ) -> Result:
+        """Advance to ``end_time`` and return a :class:`biotransport.Result`."""
+        ...
+    def dirichlet(
+        self, side: Any, value: float, *, species: int | None = None
+    ) -> Self: ...
+    def neumann(
+        self, side: Any, normal_derivative: float, *, species: int | None = None
+    ) -> Self: ...
+    def robin(
+        self, side: Any, a: float, b: float, rhs: float, *, species: int | None = None
+    ) -> Self: ...
+    def boundary(
+        self, side: Any, condition: BoundaryCondition, *, species: int | None = None
+    ) -> Self: ...
+    def outward_flux(
+        self, side: Any, molar_flux: float, *, species: int | None = None
+    ) -> Self: ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def concentration(self, species: int) -> FloatArray:
         """Return an owned concentration copy."""

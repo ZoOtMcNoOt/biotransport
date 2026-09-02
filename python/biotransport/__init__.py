@@ -153,6 +153,8 @@ from .mesh_utils import (
 from . import run as _run_module
 from .results import Result, Snapshots
 from .run import CheckpointResult, run_checkpoints, solve
+from . import stepping
+from .stepping import StepDiagnostics, solve_until
 from ._deprecation import (
     ROOT_DEPRECATED,
     ROOT_LAZY,
@@ -412,6 +414,9 @@ __all__ = [
     "Problem",  # The main problem builder (alias for TransportProblem)
     "solve",  # Simplest way to run a simulation
     "Result",  # What every solve returns
+    "solve_until",  # Same verb on every native stepping solver
+    "StepDiagnostics",
+    "stepping",
     "Snapshots",  # Fields recorded at save_times
     "plot",  # Simplest way to visualize results
     "mesh_1d",  # Create 1D mesh

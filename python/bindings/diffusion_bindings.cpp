@@ -139,12 +139,18 @@ void register_diffusion_bindings(py::module_& m) {
              py::overload_cast<Boundary, const BoundaryCondition&>(
                  &DiffusionSolver::setBoundaryCondition),
              py::arg("boundary"), py::arg("bc"))
-        .def("time", &DiffusionSolver::time, "Current simulation time advanced by solve()")
-        .def("check_stability", &DiffusionSolver::checkStability, py::arg("dt"),
-             "Return whether dt satisfies the explicit stability condition")
+        .def(
+            "time", [](const DiffusionSolver& s) { return s.time(); },
+            "Current simulation time advanced by solve()")
+        .def(
+            "check_stability",
+            [](const DiffusionSolver& s, double dt) { return s.checkStability(dt); }, py::arg("dt"),
+            "Return whether dt satisfies the explicit stability condition")
         .def("max_stable_time_step", &DiffusionSolver::maxStableTimeStep,
              "Largest explicit step accepted by check_stability() for pure diffusion; "
              "infinity when the diffusivity is zero")
+        .def("mesh", &DiffusionSolver::mesh, py::return_value_policy::reference_internal,
+             "The mesh this solver was built on")
         .def("solve", &DiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution", [](const DiffusionSolver& solver) {
             return to_numpy_with_base(solver.solution(), py::cast(&solver));
@@ -188,6 +194,8 @@ void register_diffusion_bindings(py::module_& m) {
              "Set maximum iterations for implicit solve")
         .def("step", &CrankNicolsonDiffusion::step, py::arg("dt"),
              "Advance solution by one time step, returns CNSolveResult")
+        .def("mesh", &CrankNicolsonDiffusion::mesh, py::return_value_policy::reference_internal,
+             "The mesh this solver was built on")
         .def("solve", &CrankNicolsonDiffusion::solve, py::arg("dt"), py::arg("num_steps"),
              "Run solver for specified number of steps")
         .def(
@@ -240,6 +248,8 @@ void register_diffusion_bindings(py::module_& m) {
              "Set the outward-normal derivative du/dn (not physical flux)")
         .def("step", &ADIDiffusion2D::step, py::arg("dt"),
              "Advance solution by one time step, returns ADISolveResult")
+        .def("mesh", &ADIDiffusion2D::mesh, py::return_value_policy::reference_internal,
+             "The mesh this solver was built on")
         .def("solve", &ADIDiffusion2D::solve, py::arg("dt"), py::arg("num_steps"),
              "Run solver for specified number of steps")
         .def(
@@ -293,6 +303,8 @@ void register_diffusion_bindings(py::module_& m) {
             "Set outward-normal derivative by integer boundary ID")
         .def("step", &ADIDiffusion3D::step, py::arg("dt"),
              "Advance solution by one time step, returns ADISolveResult")
+        .def("mesh", &ADIDiffusion3D::mesh, py::return_value_policy::reference_internal,
+             "The mesh this solver was built on")
         .def("solve", &ADIDiffusion3D::solve, py::arg("dt"), py::arg("num_steps"),
              "Run solver for specified number of steps")
         .def(
@@ -313,9 +325,15 @@ void register_diffusion_bindings(py::module_& m) {
     py::class_<ReactionDiffusionSolver>(m, "ReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, ReactionDiffusionSolver::ReactionFunction>(),
              py::arg("mesh"), py::arg("diffusivity"), py::arg("reaction"), py::keep_alive<1, 2>())
-        .def("time", &ReactionDiffusionSolver::time, "Current simulation time advanced by solve()")
-        .def("check_stability", &ReactionDiffusionSolver::checkStability, py::arg("dt"),
-             "Return whether dt satisfies the explicit stability condition")
+        .def(
+            "time", [](const ReactionDiffusionSolver& s) { return s.time(); },
+            "Current simulation time advanced by solve()")
+        .def(
+            "check_stability",
+            [](const ReactionDiffusionSolver& s, double dt) { return s.checkStability(dt); },
+            py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
+        .def("mesh", &ReactionDiffusionSolver::mesh, py::return_value_policy::reference_internal,
+             "The mesh this solver was built on")
         .def("solve", &ReactionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution",
              [](const ReactionDiffusionSolver& solver) {
@@ -358,10 +376,15 @@ void register_diffusion_bindings(py::module_& m) {
     py::class_<LinearReactionDiffusionSolver>(m, "LinearReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double>(), py::arg("mesh"),
              py::arg("diffusivity"), py::arg("decay_rate"), py::keep_alive<1, 2>())
-        .def("time", &LinearReactionDiffusionSolver::time,
-             "Current simulation time advanced by solve()")
-        .def("check_stability", &LinearReactionDiffusionSolver::checkStability, py::arg("dt"),
-             "Return whether dt satisfies the explicit stability condition")
+        .def(
+            "time", [](const LinearReactionDiffusionSolver& s) { return s.time(); },
+            "Current simulation time advanced by solve()")
+        .def(
+            "check_stability",
+            [](const LinearReactionDiffusionSolver& s, double dt) { return s.checkStability(dt); },
+            py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
+        .def("mesh", &LinearReactionDiffusionSolver::mesh,
+             py::return_value_policy::reference_internal, "The mesh this solver was built on")
         .def("solve", &LinearReactionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution",
              [](const LinearReactionDiffusionSolver& solver) {
@@ -387,10 +410,17 @@ void register_diffusion_bindings(py::module_& m) {
         .def(py::init<const StructuredMesh&, double, double, double>(), py::arg("mesh"),
              py::arg("diffusivity"), py::arg("growth_rate"), py::arg("carrying_capacity"),
              py::keep_alive<1, 2>())
-        .def("time", &LogisticReactionDiffusionSolver::time,
-             "Current simulation time advanced by solve()")
-        .def("check_stability", &LogisticReactionDiffusionSolver::checkStability, py::arg("dt"),
-             "Return whether dt satisfies the explicit stability condition")
+        .def(
+            "time", [](const LogisticReactionDiffusionSolver& s) { return s.time(); },
+            "Current simulation time advanced by solve()")
+        .def(
+            "check_stability",
+            [](const LogisticReactionDiffusionSolver& s, double dt) {
+                return s.checkStability(dt);
+            },
+            py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
+        .def("mesh", &LogisticReactionDiffusionSolver::mesh,
+             py::return_value_policy::reference_internal, "The mesh this solver was built on")
         .def("solve", &LogisticReactionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution",
              [](const LogisticReactionDiffusionSolver& solver) {
@@ -415,10 +445,17 @@ void register_diffusion_bindings(py::module_& m) {
     py::class_<MichaelisMentenReactionDiffusionSolver>(m, "MichaelisMentenReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double, double>(), py::arg("mesh"),
              py::arg("diffusivity"), py::arg("vmax"), py::arg("km"), py::keep_alive<1, 2>())
-        .def("time", &MichaelisMentenReactionDiffusionSolver::time,
-             "Current simulation time advanced by solve()")
-        .def("check_stability", &MichaelisMentenReactionDiffusionSolver::checkStability,
-             py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
+        .def(
+            "time", [](const MichaelisMentenReactionDiffusionSolver& s) { return s.time(); },
+            "Current simulation time advanced by solve()")
+        .def(
+            "check_stability",
+            [](const MichaelisMentenReactionDiffusionSolver& s, double dt) {
+                return s.checkStability(dt);
+            },
+            py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
+        .def("mesh", &MichaelisMentenReactionDiffusionSolver::mesh,
+             py::return_value_policy::reference_internal, "The mesh this solver was built on")
         .def("solve", &MichaelisMentenReactionDiffusionSolver::solve, py::arg("dt"),
              py::arg("num_steps"))
         .def("solution",
@@ -447,10 +484,17 @@ void register_diffusion_bindings(py::module_& m) {
                       double>(),
              py::arg("mesh"), py::arg("diffusivity"), py::arg("vmax"), py::arg("km"),
              py::arg("mask"), py::arg("pinned_value"), py::keep_alive<1, 2>())
-        .def("time", &MaskedMichaelisMentenReactionDiffusionSolver::time,
-             "Current simulation time advanced by solve()")
-        .def("check_stability", &MaskedMichaelisMentenReactionDiffusionSolver::checkStability,
-             py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
+        .def(
+            "time", [](const MaskedMichaelisMentenReactionDiffusionSolver& s) { return s.time(); },
+            "Current simulation time advanced by solve()")
+        .def(
+            "check_stability",
+            [](const MaskedMichaelisMentenReactionDiffusionSolver& s, double dt) {
+                return s.checkStability(dt);
+            },
+            py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
+        .def("mesh", &MaskedMichaelisMentenReactionDiffusionSolver::mesh,
+             py::return_value_policy::reference_internal, "The mesh this solver was built on")
         .def("solve", &MaskedMichaelisMentenReactionDiffusionSolver::solve, py::arg("dt"),
              py::arg("num_steps"))
         .def("solution",
@@ -476,10 +520,17 @@ void register_diffusion_bindings(py::module_& m) {
     py::class_<ConstantSourceReactionDiffusionSolver>(m, "ConstantSourceReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double>(), py::arg("mesh"),
              py::arg("diffusivity"), py::arg("source_rate"), py::keep_alive<1, 2>())
-        .def("time", &ConstantSourceReactionDiffusionSolver::time,
-             "Current simulation time advanced by solve()")
-        .def("check_stability", &ConstantSourceReactionDiffusionSolver::checkStability,
-             py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
+        .def(
+            "time", [](const ConstantSourceReactionDiffusionSolver& s) { return s.time(); },
+            "Current simulation time advanced by solve()")
+        .def(
+            "check_stability",
+            [](const ConstantSourceReactionDiffusionSolver& s, double dt) {
+                return s.checkStability(dt);
+            },
+            py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
+        .def("mesh", &ConstantSourceReactionDiffusionSolver::mesh,
+             py::return_value_policy::reference_internal, "The mesh this solver was built on")
         .def("solve", &ConstantSourceReactionDiffusionSolver::solve, py::arg("dt"),
              py::arg("num_steps"))
         .def("solution",
@@ -740,9 +791,15 @@ void register_diffusion_bindings(py::module_& m) {
                       const std::vector<double>&, AdvectionScheme>(),
              py::arg("mesh"), py::arg("diffusivity"), py::arg("vx_field"), py::arg("vy_field"),
              py::arg("scheme") = AdvectionScheme::HYBRID, py::keep_alive<1, 2>())
-        .def("time", &AdvectionDiffusionSolver::time, "Current simulation time advanced by solve()")
-        .def("check_stability", &AdvectionDiffusionSolver::checkStability, py::arg("dt"),
-             "Return whether dt satisfies the explicit stability condition")
+        .def(
+            "time", [](const AdvectionDiffusionSolver& s) { return s.time(); },
+            "Current simulation time advanced by solve()")
+        .def(
+            "check_stability",
+            [](const AdvectionDiffusionSolver& s, double dt) { return s.checkStability(dt); },
+            py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
+        .def("mesh", &AdvectionDiffusionSolver::mesh, py::return_value_policy::reference_internal,
+             "The mesh this solver was built on")
         .def("solve", &AdvectionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("cell_peclet", &AdvectionDiffusionSolver::cellPeclet)
         .def("max_time_step", &AdvectionDiffusionSolver::maxTimeStep, py::arg("safety") = 0.4)
@@ -1458,6 +1515,13 @@ per unit time.)doc")
              py::arg("boundary"), py::arg("outward_molar_flux"),
              "Prescribe the outward total molar flux N.n [mol/(m^2 s)], positive when ions "
              "leave the domain. This is a physical flux, not a concentration derivative.")
+        .def(
+            "set_outward_flux_boundary",
+            [](NernstPlanckSolver& solver, int boundary_id, double outward_molar_flux) {
+                solver.setOutwardFluxBoundary(checkedBoundary(boundary_id), outward_molar_flux);
+            },
+            py::arg("boundary_id"), py::arg("outward_molar_flux"),
+            "Prescribe the outward total molar flux on a boundary given by integer id")
         .def(
             "set_neumann_boundary",
             [](NernstPlanckSolver& solver, Boundary boundary, double flux) {

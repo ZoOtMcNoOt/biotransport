@@ -39,6 +39,35 @@ This alpha API now returns an immutable mapping-like ``CheckpointResult`` rather
 than a mutable ``dict``; indexing and ``dict(result)`` remain supported, while
 callers that mutate the returned mapping must migrate to their own copy.
 
+Uniform stepping lifecycle
+--------------------------
+
+Every transient native stepping solver below (the explicit diffusion and
+reaction--diffusion family, advection--diffusion, Crank--Nicolson, ADI and
+implicit diffusion, the multi-species, Nernst--Planck and multi-ion solvers, and
+``NonuniformDiffusion1D``) shares one lifecycle: configure the field and
+boundaries, then call ``solver.solve_until(end_time)``.  The call returns a
+:class:`Result` whose ``diagnostics`` is a :class:`StepDiagnostics`.  A time
+step is chosen automatically only when the class certifies its own stability
+limit; the other classes require ``time_step=`` and never guess.
+
+.. code-block:: python
+
+   solver = bt.DiffusionSolver(mesh, 1.0e-9)
+   solver.set_initial_condition(initial)
+   solver.dirichlet(bt.Boundary.Left, 1.0).neumann(bt.Boundary.Right, 0.0)
+   result = solver.solve_until(600.0, save_times=[60.0, 300.0])
+   result.snapshots[300.0]
+
+The fluent verbs ``dirichlet``, ``neumann``, ``robin``, ``boundary`` and
+``outward_flux`` forward to the class's own setters and refuse conditions the
+class does not implement.
+
+.. autofunction:: solve_until
+
+.. autoclass:: StepDiagnostics
+   :members:
+
 Python reference and legacy time surfaces
 -----------------------------------------
 

@@ -109,6 +109,18 @@ result.snapshots.stacked()    # (3, n_nodes) array
 result.plot(title="t = 0.10") # the result knows its mesh
 ```
 
+The specialized native stepping solvers share the same lifecycle. Configure the field and the
+boundaries, then call `solve_until`; it returns a `Result` too, records `save_times` snapshots, and
+picks a time step automatically only when the solver certifies its own stability limit (otherwise
+`time_step=` is required and the call refuses to guess):
+
+```python
+solver = bt.DiffusionSolver(mesh, 1.0e-9)
+solver.set_initial_condition(initial)
+solver.dirichlet(bt.Boundary.Left, 1.0).neumann(bt.Boundary.Right, 0.0)
+result = solver.solve_until(600.0, save_times=[60.0, 300.0])
+```
+
 For discovery without a flat wall of class names, many native solver objects are grouped into thin
 namespaces: `bt.diffusion`, `bt.electrochem`, `bt.flow`, and `bt.applications`. These modules only
 organize the API; numerical work still runs in the C++ core. Application configuration objects also

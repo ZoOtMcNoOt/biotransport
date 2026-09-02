@@ -2006,9 +2006,9 @@ _PYTHON_NUMERICAL_CONTRACTS: Final[tuple[PythonNumericalContract, ...]] = (
             ),
         ),
         disposition=(
-            "Retain. The canonical solve is a thin native adapter. Replace segmented "
-            "checkpoint orchestration with a native solve-at-times API when that API "
-            "exists."
+            "Retain. The canonical solve is a thin native adapter and now forwards "
+            "save_times to the native solve-at-times schedule; run_checkpoints is "
+            "deprecated in favour of solve(save_times=...)."
         ),
         exclusions=(
             "run_checkpoints with reactions, advection, or variable diffusivity",
@@ -2017,6 +2017,69 @@ _PYTHON_NUMERICAL_CONTRACTS: Final[tuple[PythonNumericalContract, ...]] = (
         warnings=(
             "Checkpoint boundaries can change shortened/automatic step partitioning.",
             "Per-segment diagnostic times are durations; mapping keys are absolute times.",
+        ),
+    ),
+    PythonNumericalContract(
+        contract_id="python.native_adapter.stepping",
+        title="Shared solve_until lifecycle for native stepping solvers",
+        module="biotransport.stepping",
+        public_symbols=(
+            "solve_until",
+            "StepDiagnostics",
+            "registered_stepping_classes",
+        ),
+        category="native solver adapter",
+        backend=PythonBackend.NATIVE_ADAPTER,
+        mathematical_scope=(
+            "Time orchestration only: partitions [solver.time(), end_time] at the "
+            "requested save times and asks the registered native solver to advance "
+            "each segment with equal substeps no larger than time_step. The "
+            "discretization, stability certificate, and boundary semantics remain "
+            "those of the native class and its own contract."
+        ),
+        numerical_method=(
+            "Per segment, n = ceil(duration / time_step) equal native steps (or the "
+            "class's own native solve_until where it exists); the native clock must "
+            "agree with the target to within 64 ulp plus 4 ulp per step taken. Fluent "
+            "dirichlet/neumann/robin/boundary/"
+            "outward_flux verbs forward to the class's setters without reinterpretation."
+        ),
+        failure_policy=(
+            "Unregistered classes, end times before the current clock, non-finite or "
+            "non-positive steps, unordered save times, a drifted native clock, and "
+            "boundary kinds a class does not implement raise; an automatic time_step "
+            "is offered only when the native class exposes its own explicit stability "
+            "certificate, otherwise time_step is required."
+        ),
+        evidence=(
+            EvidenceRecord(
+                EvidenceLevel.INVARIANT,
+                "Every registered class lands exactly on end_time, matches manual "
+                "solve(dt, n) stepping, records snapshots at the requested times, and "
+                "refuses unsupported boundary kinds; classes without a certificate "
+                "require an explicit time_step.",
+                (
+                    "python/tests/test_stepping.py::test_solve_until_lands_exactly_and_matches_manual_stepping",
+                    "python/tests/test_stepping.py::test_save_times_record_snapshots_at_requested_clocks",
+                    "python/tests/test_stepping.py::test_classes_without_a_certificate_require_time_step",
+                    "python/tests/test_stepping.py::test_boundary_verbs_forward_or_refuse",
+                ),
+            ),
+        ),
+        disposition=(
+            "Retain as the Python face of every native stepping solver. Native "
+            "solve_until/report structs may replace the Python orchestration later "
+            "without changing the vocabulary."
+        ),
+        exclusions=(
+            "any stability, accuracy, or conservation claim beyond the native class's own contract",
+            "automatic time_step for classes without an explicit stability certificate",
+            "snapshots of secondary fields (only the primary field is recorded)",
+        ),
+        warnings=(
+            "Equal substeps per segment can differ from a one-shot native run when the "
+            "requested step does not divide a segment.",
+            "Result.diagnostics is a StepDiagnostics record, not the canonical SolveDiagnostics.",
         ),
     ),
     PythonNumericalContract(

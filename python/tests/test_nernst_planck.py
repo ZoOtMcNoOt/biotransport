@@ -123,7 +123,7 @@ class TestNernstPlanckSolver(unittest.TestCase):
         initial = np.full(mesh.num_nodes(), 10.0)
         solver.set_initial_condition(initial.tolist())
         outward_flux = 1e-4
-        solver.set_neumann_boundary(bt.Boundary.Right, outward_flux)
+        solver.set_outward_flux_boundary(bt.Boundary.Right, outward_flux)
         dt = 1e-4
         steps = 100
         solver.solve(dt, steps)

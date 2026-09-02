@@ -805,7 +805,7 @@ def _nernst_planck_uniform_field() -> Entries:
     solver.set_initial_condition(100.0 + 40.0 * _gaussian_1d(mesh, 5e-4, 1.5e-4))
     solver.set_uniform_field(1000.0)
     solver.set_dirichlet_boundary(core.Boundary.Left, 100.0)
-    solver.set_neumann_boundary(core.Boundary.Right, 0.0)
+    solver.set_outward_flux_boundary(core.Boundary.Right, 0.0)
     solver.solve(0.1, 20)
     return {
         "concentration": solver.solution(),
@@ -830,8 +830,8 @@ def _nernst_planck_potential_field_2d() -> Entries:
     )
     solver.set_dirichlet_boundary(0, 10.0)
     solver.set_dirichlet_boundary(1, 12.0)
-    solver.set_neumann_boundary(core.Boundary.Bottom, 0.0)
-    solver.set_neumann_boundary(core.Boundary.Top, 0.0)
+    solver.set_outward_flux_boundary(core.Boundary.Bottom, 0.0)
+    solver.set_outward_flux_boundary(core.Boundary.Top, 0.0)
     solver.solve(0.2, 15)
     return {
         "concentration": solver.solution(),
@@ -855,7 +855,7 @@ def _multi_ion_uniform_field() -> Entries:
     solver.set_dirichlet_boundary(0, core.Boundary.Left, 140.0)
     solver.set_dirichlet_boundary(0, 1, 140.0)
     solver.set_dirichlet_boundary(1, core.Boundary.Left, 140.0)
-    solver.set_neumann_boundary(1, core.Boundary.Right, 0.0)
+    solver.set_outward_flux_boundary(1, core.Boundary.Right, 0.0)
     solver.solve(0.1, 20)
     return {
         "sodium": solver.concentration(0),

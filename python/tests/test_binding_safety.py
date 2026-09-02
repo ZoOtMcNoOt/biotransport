@@ -129,7 +129,7 @@ def test_invalid_boundary_is_checked_for_coupled_solver_overloads() -> None:
     with pytest.raises(ValueError, match="between 0 .* and 3"):
         multi_species.set_dirichlet_boundary(0, 4, 0.0)
     with pytest.raises(ValueError, match="between 0 .* and 3"):
-        nernst_planck.set_neumann_boundary(-1, 0.0)
+        nernst_planck.set_outward_flux_boundary(-1, 0.0)
 
 
 def test_robin_boundary_metadata_is_exposed_without_implying_solver_support() -> None:

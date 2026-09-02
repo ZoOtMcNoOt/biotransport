@@ -113,7 +113,7 @@ def example_lotka_volterra():
     pred_history = [solver.solution(1).copy()]
 
     for target_time in np.linspace(T_final / 10.0, T_final, 10):
-        solver.solve_until(float(target_time), maximum_dt=dt)
+        solver.solve_until(float(target_time), time_step=dt)
         times.append(solver.time())
         prey_history.append(solver.solution(0).copy())
         pred_history.append(solver.solution(1).copy())
@@ -255,7 +255,7 @@ def example_sir_epidemic():
     snapshot_times = [0]
 
     for record, target_time in enumerate(np.linspace(T_final / 200.0, T_final, 200)):
-        solver.solve_until(float(target_time), maximum_dt=dt)
+        solver.solve_until(float(target_time), time_step=dt)
         t_history.append(solver.time())
         S_total.append(solver.total_mass(0))
         I_total.append(solver.total_mass(1))
@@ -385,7 +385,7 @@ def example_brusselator():
     snapshot_times = [0]
 
     for target_time in np.linspace(T_final / 5.0, T_final, 5):
-        solver.solve_until(float(target_time), maximum_dt=dt)
+        solver.solve_until(float(target_time), time_step=dt)
         X_snapshots.append(solver.solution(0).copy())
         snapshot_times.append(solver.time())
         print(
@@ -489,7 +489,7 @@ def example_signaling_cascade():
     snapshot_times = [0, 10, 25, 50, 100]
     for t_target in snapshot_times:
         if t_target > 0:
-            solver.solve_until(float(t_target), maximum_dt=dt)
+            solver.solve_until(float(t_target), time_step=dt)
 
         profiles["t"].append(solver.time())
         profiles["A"].append(solver.solution(0).copy())

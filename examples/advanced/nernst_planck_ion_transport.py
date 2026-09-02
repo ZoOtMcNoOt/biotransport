@@ -91,8 +91,8 @@ def example_1_single_ion_electromigration():
     print(f"Drift velocity v = {v_drift * 1e6:.2f} um/s")
 
     # Zero-flux boundaries (insulating walls)
-    solver.set_neumann_boundary(bt.Boundary.Left, 0.0)
-    solver.set_neumann_boundary(bt.Boundary.Right, 0.0)
+    solver.set_outward_flux_boundary(bt.Boundary.Left, 0.0)
+    solver.set_outward_flux_boundary(bt.Boundary.Right, 0.0)
 
     # Time stepping
     dt = min(1e-5, solver.recommended_time_step(0.8))
@@ -471,8 +471,8 @@ def example_4_electrophoretic_separation():
 
     # Zero-flux boundaries
     for s in range(2):
-        solver.set_neumann_boundary(s, bt.Boundary.Left, 0.0)
-        solver.set_neumann_boundary(s, bt.Boundary.Right, 0.0)
+        solver.set_outward_flux_boundary(s, bt.Boundary.Left, 0.0)
+        solver.set_outward_flux_boundary(s, bt.Boundary.Right, 0.0)
 
     # Strong electric field for separation
     E_field = 10000.0  # 10 kV/m

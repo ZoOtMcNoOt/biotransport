@@ -303,19 +303,19 @@ class TestMultiSpeciesSolver(unittest.TestCase):
         solver.set_uniform_initial_condition(1, 10.0)
         solver.set_uniform_initial_condition(2, 0.0)
 
-        solver.solve_until(1.0, maximum_dt=0.3)
+        solver.solve_until(1.0, time_step=0.3)
         self.assertEqual(solver.time(), 1.0)
-        solver.solve_until(1.125, maximum_dt=0.2)
+        solver.solve_until(1.125, time_step=0.2)
         self.assertEqual(solver.time(), 1.125)
         with self.assertRaisesRegex(ValueError, "must not precede"):
-            solver.solve_until(1.0, maximum_dt=0.1)
+            solver.solve_until(1.0, time_step=0.1)
 
         diffusive = bt.MultiSpeciesSolver(mesh, [0.1])
         x = bt.x_nodes(mesh)
         profile = 0.2 + np.exp(-40.0 * (x - 0.5) ** 2)
         diffusive.set_initial_condition(0, profile)
         initial_mass = diffusive.total_mass(0)
-        diffusive.solve_until(0.1, maximum_dt=1.0)
+        diffusive.solve_until(0.1, time_step=1.0)
         self.assertEqual(diffusive.time(), 0.1)
         self.assertAlmostEqual(diffusive.total_mass(0), initial_mass, places=14)
 
