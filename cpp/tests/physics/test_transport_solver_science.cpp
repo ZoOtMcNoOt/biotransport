@@ -515,8 +515,109 @@ void unsupportedAndUncertifiedModelsFailLoudly() {
 
 }  // namespace
 
+namespace {
+
+void saveTimesPartitionTheScheduleAndMatchOneShotSolvesBitwise() {
+    StructuredMesh mesh(20, 0.0, 1.0);
+    std::vector<double> initial(static_cast<std::size_t>(mesh.numNodes()), 0.0);
+    for (int i = 0; i <= mesh.nx(); ++i) {
+        const double x = mesh.x(i);
+        initial[static_cast<std::size_t>(mesh.index(i))] = std::exp(-std::pow((x - 0.5) / 0.1, 2));
+    }
+    TransportProblem problem(mesh);
+    problem.diffusivity(0.01)
+        .linearDecay(0.3)
+        .initialCondition(initial)
+        .dirichlet(Boundary::Left, 0.0)
+        .neumann(Boundary::Right, 0.0);
+
+    SolveOptions segmented;
+    segmented.final_time = 0.1;
+    segmented.time_step = 0.01;
+    segmented.save_times = {0.0, 0.05, 0.1};
+    const auto result = solve(problem, segmented);
+
+    require(result.snapshot_times.size() == 3 && result.snapshot_fields.size() == 3,
+            "one snapshot per requested save time was expected");
+    require(result.snapshot_times[0] == 0.0 && result.snapshot_times[1] == 0.05 &&
+                result.snapshot_times[2] == 0.1,
+            "snapshot times must be the requested absolute clocks");
+    require(result.diagnostics.steps == 10, "the partitioned schedule changed the step count");
+    require(result.snapshot_fields[2] == result.concentration,
+            "a snapshot at final_time must equal the final field");
+    require(result.snapshot_fields[0][0] == 0.0 && result.snapshot_fields[0][5] == initial[5],
+            "the t=0 snapshot must be the initial state with essential values imposed");
+    require(result.mesh.numNodes() == mesh.numNodes() && result.mesh.dx() == mesh.dx(),
+            "the result must carry a copy of the mesh");
+
+    SolveOptions one_shot_half;
+    one_shot_half.final_time = 0.05;
+    one_shot_half.time_step = 0.01;
+    require(solve(problem, one_shot_half).concentration == result.snapshot_fields[1],
+            "when the step divides the segment the snapshot must be bitwise identical to a "
+            "one-shot solve");
+
+    SolveOptions one_shot_full = one_shot_half;
+    one_shot_full.final_time = 0.1;
+    const auto full = solve(problem, one_shot_full);
+    require(full.concentration == result.concentration,
+            "save times must not change the final field when the step divides every segment");
+    require(full.snapshot_times.empty() && full.snapshot_fields.empty(),
+            "no snapshots may be recorded without save times");
+}
+
+void saveTimesPassTheAbsoluteClockToTheReaction() {
+    StructuredMesh mesh(4, 0.0, 1.0);
+    TransportProblem problem(mesh);
+    problem.diffusivity(0.0).initialCondition(0.0).reaction(
+        [](double, double, double, double time) { return time >= 0.05 ? 1.0 : 0.0; }, 0.0);
+
+    SolveOptions one_shot;
+    one_shot.final_time = 0.1;
+    one_shot.time_step = 0.01;
+    SolveOptions segmented = one_shot;
+    segmented.save_times = {0.05};
+
+    const auto direct = solve(problem, one_shot);
+    const auto partitioned = solve(problem, segmented);
+    requireNear(direct.concentration[1], 0.05, 1e-15,
+                "the switched-on source should integrate over exactly five steps");
+    require(direct.concentration == partitioned.concentration,
+            "a segment starting at a save time must hand the absolute clock to R(c,x,y,t)");
+    require(partitioned.snapshot_fields.size() == 1 && partitioned.snapshot_fields[0][1] == 0.0,
+            "before the source switches on the snapshot must still be zero");
+}
+
+void saveTimesAreValidated() {
+    StructuredMesh mesh(4, 0.0, 1.0);
+    TransportProblem problem(mesh);
+    problem.diffusivity(0.1).initialCondition(1.0);
+    SolveOptions options;
+    options.final_time = 0.1;
+
+    options.save_times = {0.05, 0.05};
+    requireThrows<std::invalid_argument>([&] { solve(problem, options); },
+                                         "repeated save times must be rejected");
+    options.save_times = {0.2};
+    requireThrows<std::invalid_argument>([&] { solve(problem, options); },
+                                         "save times beyond final_time must be rejected");
+    options.save_times = {-0.01};
+    requireThrows<std::invalid_argument>([&] { solve(problem, options); },
+                                         "negative save times must be rejected");
+    options.save_times = {0.06, 0.05};
+    requireThrows<std::invalid_argument>([&] { solve(problem, options); },
+                                         "save times must be strictly increasing");
+}
+
+}  // namespace
+
 int main() {
     const std::vector<std::pair<std::string, std::function<void()>>> tests = {
+        {"save times partition the schedule",
+         saveTimesPartitionTheScheduleAndMatchOneShotSolvesBitwise},
+        {"save times pass absolute time to the reaction",
+         saveTimesPassTheAbsoluteClockToTheReaction},
+        {"save times are validated", saveTimesAreValidated},
         {"2D manufactured quadratic", manufacturedQuadraticIsStationaryIn2D},
         {"Robin outward derivative", robinUsesOutwardDerivative},
         {"variable-field conservation", conservativeFluxesPreserveMassWithVariableFields},

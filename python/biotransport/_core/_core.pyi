@@ -228,13 +228,21 @@ ZMin: Boundary3D
 ZMax: Boundary3D
 
 class BoundaryType(Enum):
-    """Types of boundary conditions."""
+    """Types of scalar boundary conditions.
+
+    ``NEUMANN`` prescribes the outward-normal derivative of the field;
+    ``OUTWARD_FLUX`` prescribes a physical flux (positive leaving the domain).
+    They are deliberately distinct types so a derivative is never mistaken for
+    a flux.
+    """
 
     DIRICHLET = 0
     NEUMANN = 1
     ROBIN = 2
+    OUTWARD_FLUX = 3
 
 ROBIN: BoundaryType
+OUTWARD_FLUX: BoundaryType
 
 class VelocityBCType(Enum):
     """Types of velocity boundary conditions for fluid flow."""
@@ -360,6 +368,14 @@ class BoundaryCondition:
     @staticmethod
     def robin(a: float, b: float, c: float) -> BoundaryCondition:
         """Create ``a*u + b*du/dn = c``."""
+        ...
+    @staticmethod
+    def outward_flux(outward_flux: float) -> BoundaryCondition:
+        """Create a prescribed physical-flux condition, positive leaving the domain.
+
+        Distinct from :meth:`neumann`, which is a derivative. Solvers that only
+        accept derivative data reject this condition instead of reinterpreting it.
+        """
         ...
 
 class VelocityBC:
@@ -1482,11 +1498,11 @@ class TransportProblem:
         """Set Dirichlet boundary condition."""
         ...
 
-    def neumann(self, side: Boundary, flux: float) -> TransportProblem:
-        """Set the outward-normal derivative ``du/dn``.
+    def neumann(self, side: Boundary, normal_derivative: float) -> TransportProblem:
+        """Set the outward-normal derivative ``dc/dn`` on one side.
 
-        The runtime keyword remains ``flux`` for compatibility; it is not a
-        Fickian flux.
+        This is a derivative, not a Fickian flux: the outward diffusive flux is
+        ``-D * normal_derivative``.
         """
         ...
 
@@ -1560,6 +1576,13 @@ class SolveOptions:
     reaction_step_fraction: float
     max_steps: int
     check_finite: bool
+    save_times: list[float]
+    """Absolute times in ``[0, final_time]`` at which the field is recorded.
+
+    Strictly increasing. Each save time partitions the step schedule so the
+    field is captured exactly at that clock; the reaction term always receives
+    the absolute time. Empty leaves the schedule unchanged.
+    """
 
     def __init__(self) -> None: ...
     @staticmethod
@@ -1608,7 +1631,7 @@ class SolveDiagnostics:
     def final_maximum(self) -> float: ...
 
 class TransportResult:
-    """Final scalar field, exact physical time, and solve diagnostics."""
+    """Final scalar field, snapshots, exact physical time, and solve diagnostics."""
 
     @property
     def concentration(self) -> FloatArray:
@@ -1616,12 +1639,24 @@ class TransportResult:
         ...
     @property
     def solution(self) -> FloatArray:
-        """Alias returning another owned copy of ``concentration``."""
+        """Deprecated alias of ``concentration`` (warns on access)."""
         ...
     @property
     def time(self) -> float: ...
     @property
     def diagnostics(self) -> SolveDiagnostics: ...
+    @property
+    def mesh(self) -> StructuredMesh:
+        """Copy of the mesh the fields are defined on."""
+        ...
+    @property
+    def snapshot_times(self) -> FloatArray:
+        """Absolute times requested through ``SolveOptions.save_times``."""
+        ...
+    @property
+    def snapshot_fields(self) -> list[FloatArray]:
+        """Owned copies of the nodal field at each snapshot time."""
+        ...
 
 def solve_transport(
     problem: TransportProblem, options: SolveOptions
@@ -1793,15 +1828,32 @@ class DiffusionSolver:
         ...
 
     @overload
-    def set_neumann_boundary(self, boundary_id: int, flux: float) -> None: ...
+    def set_neumann_boundary(
+        self, boundary_id: int, normal_derivative: float
+    ) -> None: ...
     @overload
-    def set_neumann_boundary(self, boundary: Boundary, flux: float) -> None:
-        """Set the outward derivative ``du/dn``.
+    def set_neumann_boundary(
+        self, boundary: Boundary, normal_derivative: float
+    ) -> None:
+        """Set the outward-normal derivative ``du/dn``.
 
-        The legacy keyword ``flux`` does not denote Fickian flux.
+        This is a derivative, not a Fickian flux; the outward diffusive flux is
+        ``-D * normal_derivative``.
+        """
+        ...
+    def max_stable_time_step(self) -> float:
+        """Largest explicit step accepted by ``check_stability`` for pure diffusion.
+
+        Returns ``inf`` when the diffusivity is zero.
         """
         ...
 
+    def time(self) -> float:
+        """Current simulation time advanced by ``solve``."""
+        ...
+    def check_stability(self, dt: float) -> bool:
+        """Return whether ``dt`` satisfies the explicit stability condition."""
+        ...
     def solve(self, dt: float, num_steps: int) -> None:
         """Advance solution in time."""
         ...
@@ -1950,6 +2002,12 @@ class AdvectionDiffusionSolver:
         """Set boundary condition."""
         ...
 
+    def time(self) -> float:
+        """Current simulation time advanced by ``solve``."""
+        ...
+    def check_stability(self, dt: float) -> bool:
+        """Return whether ``dt`` satisfies the explicit stability condition."""
+        ...
     def solve(self, dt: float, num_steps: int) -> None:
         """Advance solution in time."""
         ...
@@ -2001,13 +2059,15 @@ class ReactionDiffusionSolver:
         ...
 
     @overload
-    def set_neumann_boundary(self, boundary_id: int, flux: float) -> None:
-        """Set outward ``du/dn`` by ID; ``flux`` is a legacy keyword."""
+    def set_neumann_boundary(self, boundary_id: int, normal_derivative: float) -> None:
+        """Set the outward-normal derivative ``du/dn`` by boundary ID."""
         ...
 
     @overload
-    def set_neumann_boundary(self, boundary: Boundary, flux: float) -> None:
-        """Set outward ``du/dn``; ``flux`` is a legacy keyword, not Fickian flux."""
+    def set_neumann_boundary(
+        self, boundary: Boundary, normal_derivative: float
+    ) -> None:
+        """Set the outward-normal derivative ``du/dn``; not a Fickian flux."""
         ...
 
     @overload
@@ -2017,6 +2077,12 @@ class ReactionDiffusionSolver:
         """Set boundary condition metadata."""
         ...
 
+    def time(self) -> float:
+        """Current simulation time advanced by ``solve``."""
+        ...
+    def check_stability(self, dt: float) -> bool:
+        """Return whether ``dt`` satisfies the explicit stability condition."""
+        ...
     def solve(self, dt: float, num_steps: int) -> None:
         """Solve for specified number of time steps."""
         ...
@@ -2039,6 +2105,12 @@ class ConstantSourceReactionDiffusionSolver:
     def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
     @overload
     def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None: ...
+    def time(self) -> float:
+        """Current simulation time advanced by ``solve``."""
+        ...
+    def check_stability(self, dt: float) -> bool:
+        """Return whether ``dt`` satisfies the explicit stability condition."""
+        ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray: ...
 
@@ -2056,6 +2128,12 @@ class LinearReactionDiffusionSolver:
     def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
     @overload
     def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None: ...
+    def time(self) -> float:
+        """Current simulation time advanced by ``solve``."""
+        ...
+    def check_stability(self, dt: float) -> bool:
+        """Return whether ``dt`` satisfies the explicit stability condition."""
+        ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray: ...
 
@@ -2077,6 +2155,12 @@ class LogisticReactionDiffusionSolver:
     def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
     @overload
     def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None: ...
+    def time(self) -> float:
+        """Current simulation time advanced by ``solve``."""
+        ...
+    def check_stability(self, dt: float) -> bool:
+        """Return whether ``dt`` satisfies the explicit stability condition."""
+        ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray: ...
 
@@ -2098,6 +2182,12 @@ class MichaelisMentenReactionDiffusionSolver:
     def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
     @overload
     def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None: ...
+    def time(self) -> float:
+        """Current simulation time advanced by ``solve``."""
+        ...
+    def check_stability(self, dt: float) -> bool:
+        """Return whether ``dt`` satisfies the explicit stability condition."""
+        ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray: ...
 
@@ -2121,6 +2211,12 @@ class MaskedMichaelisMentenReactionDiffusionSolver:
     def set_boundary(self, boundary_id: int, bc: BoundaryCondition) -> None: ...
     @overload
     def set_boundary(self, boundary: Boundary, bc: BoundaryCondition) -> None: ...
+    def time(self) -> float:
+        """Current simulation time advanced by ``solve``."""
+        ...
+    def check_stability(self, dt: float) -> bool:
+        """Return whether ``dt`` satisfies the explicit stability condition."""
+        ...
     def solve(self, dt: float, num_steps: int) -> None: ...
     def solution(self) -> FloatArray: ...
 
@@ -3551,13 +3647,23 @@ class NernstPlanckSolver:
     def set_dirichlet_boundary(self, boundary: Boundary, value: float) -> None: ...
     @overload
     def set_dirichlet_boundary(self, boundary_id: int, value: float) -> None: ...
+    def set_outward_flux_boundary(
+        self, boundary: Boundary, outward_molar_flux: float
+    ) -> None:
+        """Prescribe the outward total molar flux ``N·n`` [mol/(m² s)].
+
+        Positive values leave the domain. This is a physical flux, not the
+        outward-normal derivative that ``set_neumann_boundary`` means on the
+        scalar diffusion solvers.
+        """
+        ...
     @overload
     def set_neumann_boundary(self, boundary: Boundary, flux: float) -> None:
-        """Set prescribed outward total molar flux [mol/(m² s)]."""
+        """Deprecated spelling of :meth:`set_outward_flux_boundary`."""
         ...
     @overload
     def set_neumann_boundary(self, boundary_id: int, flux: float) -> None:
-        """Set prescribed outward total molar flux [mol/(m² s)]."""
+        """Deprecated spelling of :meth:`set_outward_flux_boundary`."""
         ...
     def check_stability(self, dt: float) -> bool: ...
     def maximum_stable_time_step(self) -> float: ...
@@ -3603,10 +3709,19 @@ class MultiIonSolver:
     def set_dirichlet_boundary(
         self, species: int, boundary_id: int, value: float
     ) -> None: ...
+    def set_outward_flux_boundary(
+        self, species: int, boundary: Boundary, outward_molar_flux: float
+    ) -> None:
+        """Prescribe the outward total molar flux of one species [mol/(m² s)].
+
+        Positive values leave the domain. This is a physical flux, not a
+        concentration derivative.
+        """
+        ...
     def set_neumann_boundary(
         self, species: int, boundary: Boundary, flux: float
     ) -> None:
-        """Set prescribed outward total molar flux [mol/(m² s)]."""
+        """Deprecated spelling of :meth:`set_outward_flux_boundary`."""
         ...
     def set_potential_field(self, phi: ArrayLike) -> None: ...
     def set_uniform_field(self, Ex: float, Ey: float = 0.0) -> None: ...

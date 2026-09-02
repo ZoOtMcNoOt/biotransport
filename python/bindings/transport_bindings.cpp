@@ -3,23 +3,12 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 
+#include "binding_helpers.hpp"
 #include <biotransport/solvers/transport_solver.hpp>
-#include <cstring>
 
 namespace py = pybind11;
 
 namespace biotransport::bindings {
-namespace {
-
-py::array_t<double> copyToNumpy(const std::vector<double>& values) {
-    py::array_t<double> array(values.size());
-    if (!values.empty()) {
-        std::memcpy(array.mutable_data(), values.data(), values.size() * sizeof(double));
-    }
-    return array;
-}
-
-}  // namespace
 
 void register_transport_bindings(py::module_& module) {
     py::class_<SolveOptions>(module, "SolveOptions")
@@ -30,6 +19,10 @@ void register_transport_bindings(py::module_& module) {
         .def_readwrite("reaction_step_fraction", &SolveOptions::reaction_step_fraction)
         .def_readwrite("max_steps", &SolveOptions::max_steps)
         .def_readwrite("check_finite", &SolveOptions::check_finite)
+        .def_readwrite("save_times", &SolveOptions::save_times,
+                       "Absolute times in [0, final_time] at which the field is recorded; "
+                       "strictly increasing. Each save time partitions the step schedule so the "
+                       "field is captured exactly at that clock.")
         .def_static("until", &SolveOptions::until, py::arg("final_time"));
 
     py::class_<SolveDiagnostics>(module, "SolveDiagnostics")
@@ -57,12 +50,36 @@ void register_transport_bindings(py::module_& module) {
     py::class_<TransportResult>(module, "TransportResult")
         .def_property_readonly(
             "concentration",
-            [](const TransportResult& result) { return copyToNumpy(result.concentration); })
+            [](const TransportResult& result) { return to_numpy(result.concentration); },
+            "Owned copy of the final nodal concentration field")
         .def_property_readonly(
             "solution",
-            [](const TransportResult& result) { return copyToNumpy(result.concentration); })
+            [](const TransportResult& result) {
+                warn_deprecated("TransportResult.solution", "TransportResult.concentration",
+                                "both names returned the same field; concentration is the "
+                                "single spelling used by every canonical result");
+                return to_numpy(result.concentration);
+            },
+            "Deprecated alias of ``concentration``")
         .def_readonly("time", &TransportResult::time)
-        .def_readonly("diagnostics", &TransportResult::diagnostics);
+        .def_readonly("diagnostics", &TransportResult::diagnostics)
+        .def_property_readonly(
+            "mesh", [](const TransportResult& result) { return result.mesh; },
+            "Copy of the mesh the fields are defined on")
+        .def_property_readonly(
+            "snapshot_times",
+            [](const TransportResult& result) { return to_numpy(result.snapshot_times); },
+            "Absolute times requested through SolveOptions.save_times, in order")
+        .def_property_readonly(
+            "snapshot_fields",
+            [](const TransportResult& result) {
+                py::list fields;
+                for (const auto& field : result.snapshot_fields) {
+                    fields.append(to_numpy(field));
+                }
+                return fields;
+            },
+            "Owned copies of the nodal field at each snapshot time");
 
     module.def(
         "solve_transport",
@@ -73,7 +90,8 @@ void register_transport_bindings(py::module_& module) {
         R"doc(Solve every configured scalar-transport term in the C++ core.
 
 The returned time is exactly ``options.final_time``. Unsupported physics and
-uncertified automatic reaction stepping raise before integration begins.)doc");
+uncertified automatic reaction stepping raise before integration begins.
+``options.save_times`` records the field at each requested absolute time.)doc");
 }
 
 }  // namespace biotransport::bindings

@@ -98,8 +98,35 @@ public:
             BoundaryCondition::Neumann(normal_derivative);
     }
 
-    void setNeumannBoundary(int boundary_id, double flux) {
-        setNeumannBoundary(static_cast<Boundary>(boundary_id), flux);
+    void setNeumannBoundary(int boundary_id, double normal_derivative) {
+        setNeumannBoundary(static_cast<Boundary>(boundary_id), normal_derivative);
+    }
+
+    /** @brief Current simulation time advanced by solve(). */
+    double time() const noexcept { return time_; }
+
+    /**
+     * @brief Check the explicit stability condition for a candidate step.
+     *
+     * The base check limits the total diffusion number to 0.5; derived
+     * solvers add their own restrictions through checkStabilityDerived().
+     */
+    bool checkStability(double dt) const {
+        if (!std::isfinite(dt) || dt <= 0.0) {
+            return false;
+        }
+        double total_diffusion_number = StencilOps::diffusionNumber(diffusivity_, dt, mesh_.dx());
+        if (!mesh_.is1D()) {
+            total_diffusion_number += StencilOps::diffusionNumber(diffusivity_, dt, mesh_.dy());
+        }
+        bool stable = std::isfinite(total_diffusion_number) && total_diffusion_number <= 0.5;
+
+        // Let derived class add its own stability checks
+        if (stable) {
+            stable = derived().checkStabilityDerived(dt);
+        }
+
+        return stable;
     }
 
     /**
@@ -189,27 +216,6 @@ protected:
      */
     double diffusionUpdate(int idx, double dt) const {
         return stencil_ops_.diffusionTerm(solution_, idx, diffusivity_, dt);
-    }
-
-    /**
-     * @brief Check CFL stability condition.
-     */
-    bool checkStability(double dt) const {
-        if (!std::isfinite(dt) || dt <= 0.0) {
-            return false;
-        }
-        double total_diffusion_number = StencilOps::diffusionNumber(diffusivity_, dt, mesh_.dx());
-        if (!mesh_.is1D()) {
-            total_diffusion_number += StencilOps::diffusionNumber(diffusivity_, dt, mesh_.dy());
-        }
-        bool stable = std::isfinite(total_diffusion_number) && total_diffusion_number <= 0.5;
-
-        // Let derived class add its own stability checks
-        if (stable) {
-            stable = derived().checkStabilityDerived(dt);
-        }
-
-        return stable;
     }
 
     /**

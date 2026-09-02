@@ -122,13 +122,13 @@ void register_diffusion_bindings(py::module_& m) {
              py::arg("boundary"), py::arg("value"))
         .def(
             "set_neumann_boundary",
-            [](DiffusionSolver& solver, int boundary_id, double flux) {
-                solver.setNeumannBoundary(checkedBoundary(boundary_id), flux);
+            [](DiffusionSolver& solver, int boundary_id, double normal_derivative) {
+                solver.setNeumannBoundary(checkedBoundary(boundary_id), normal_derivative);
             },
-            py::arg("boundary_id"), py::arg("flux"))
+            py::arg("boundary_id"), py::arg("normal_derivative"))
         .def("set_neumann_boundary",
              py::overload_cast<Boundary, double>(&DiffusionSolver::setNeumannBoundary),
-             py::arg("boundary"), py::arg("flux"))
+             py::arg("boundary"), py::arg("normal_derivative"))
         .def(
             "set_boundary_condition",
             [](DiffusionSolver& solver, int boundary_id, const BoundaryCondition& bc) {
@@ -139,6 +139,12 @@ void register_diffusion_bindings(py::module_& m) {
              py::overload_cast<Boundary, const BoundaryCondition&>(
                  &DiffusionSolver::setBoundaryCondition),
              py::arg("boundary"), py::arg("bc"))
+        .def("time", &DiffusionSolver::time, "Current simulation time advanced by solve()")
+        .def("check_stability", &DiffusionSolver::checkStability, py::arg("dt"),
+             "Return whether dt satisfies the explicit stability condition")
+        .def("max_stable_time_step", &DiffusionSolver::maxStableTimeStep,
+             "Largest explicit step accepted by check_stability() for pure diffusion; "
+             "infinity when the diffusivity is zero")
         .def("solve", &DiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution", [](const DiffusionSolver& solver) {
             return to_numpy_with_base(solver.solution(), py::cast(&solver));
@@ -153,9 +159,8 @@ void register_diffusion_bindings(py::module_& m) {
         .def_readonly("residual", &CNSolveResult::residual, "Final residual norm")
         .def_readonly("converged", &CNSolveResult::converged, "Whether tolerance was achieved");
 
-    py::class_<CrankNicolsonDiffusion>(
-        m, "CrankNicolsonDiffusion",
-        R"(Crank-Nicolson implicit solver for the diffusion equation.
+    py::class_<CrankNicolsonDiffusion>(m, "CrankNicolsonDiffusion",
+                                       R"(Crank-Nicolson implicit solver for the diffusion equation.
 
         The linear diffusion update is A-stable and second-order in time, but
         it is not L-stable: very large steps can produce bounded oscillations
@@ -308,6 +313,9 @@ void register_diffusion_bindings(py::module_& m) {
     py::class_<ReactionDiffusionSolver>(m, "ReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, ReactionDiffusionSolver::ReactionFunction>(),
              py::arg("mesh"), py::arg("diffusivity"), py::arg("reaction"), py::keep_alive<1, 2>())
+        .def("time", &ReactionDiffusionSolver::time, "Current simulation time advanced by solve()")
+        .def("check_stability", &ReactionDiffusionSolver::checkStability, py::arg("dt"),
+             "Return whether dt satisfies the explicit stability condition")
         .def("solve", &ReactionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution",
              [](const ReactionDiffusionSolver& solver) {
@@ -326,13 +334,13 @@ void register_diffusion_bindings(py::module_& m) {
              py::arg("boundary"), py::arg("value"))
         .def(
             "set_neumann_boundary",
-            [](ReactionDiffusionSolver& solver, int boundary_id, double flux) {
-                solver.setNeumannBoundary(checkedBoundary(boundary_id), flux);
+            [](ReactionDiffusionSolver& solver, int boundary_id, double normal_derivative) {
+                solver.setNeumannBoundary(checkedBoundary(boundary_id), normal_derivative);
             },
-            py::arg("boundary_id"), py::arg("flux"))
+            py::arg("boundary_id"), py::arg("normal_derivative"))
         .def("set_neumann_boundary",
              py::overload_cast<Boundary, double>(&ReactionDiffusionSolver::setNeumannBoundary),
-             py::arg("boundary"), py::arg("flux"))
+             py::arg("boundary"), py::arg("normal_derivative"))
         .def(
             "set_boundary",
             [](ReactionDiffusionSolver& solver, int boundary_id, const BoundaryCondition& bc) {
@@ -350,6 +358,10 @@ void register_diffusion_bindings(py::module_& m) {
     py::class_<LinearReactionDiffusionSolver>(m, "LinearReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double>(), py::arg("mesh"),
              py::arg("diffusivity"), py::arg("decay_rate"), py::keep_alive<1, 2>())
+        .def("time", &LinearReactionDiffusionSolver::time,
+             "Current simulation time advanced by solve()")
+        .def("check_stability", &LinearReactionDiffusionSolver::checkStability, py::arg("dt"),
+             "Return whether dt satisfies the explicit stability condition")
         .def("solve", &LinearReactionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution",
              [](const LinearReactionDiffusionSolver& solver) {
@@ -375,6 +387,10 @@ void register_diffusion_bindings(py::module_& m) {
         .def(py::init<const StructuredMesh&, double, double, double>(), py::arg("mesh"),
              py::arg("diffusivity"), py::arg("growth_rate"), py::arg("carrying_capacity"),
              py::keep_alive<1, 2>())
+        .def("time", &LogisticReactionDiffusionSolver::time,
+             "Current simulation time advanced by solve()")
+        .def("check_stability", &LogisticReactionDiffusionSolver::checkStability, py::arg("dt"),
+             "Return whether dt satisfies the explicit stability condition")
         .def("solve", &LogisticReactionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("solution",
              [](const LogisticReactionDiffusionSolver& solver) {
@@ -399,6 +415,10 @@ void register_diffusion_bindings(py::module_& m) {
     py::class_<MichaelisMentenReactionDiffusionSolver>(m, "MichaelisMentenReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double, double>(), py::arg("mesh"),
              py::arg("diffusivity"), py::arg("vmax"), py::arg("km"), py::keep_alive<1, 2>())
+        .def("time", &MichaelisMentenReactionDiffusionSolver::time,
+             "Current simulation time advanced by solve()")
+        .def("check_stability", &MichaelisMentenReactionDiffusionSolver::checkStability,
+             py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
         .def("solve", &MichaelisMentenReactionDiffusionSolver::solve, py::arg("dt"),
              py::arg("num_steps"))
         .def("solution",
@@ -427,6 +447,10 @@ void register_diffusion_bindings(py::module_& m) {
                       double>(),
              py::arg("mesh"), py::arg("diffusivity"), py::arg("vmax"), py::arg("km"),
              py::arg("mask"), py::arg("pinned_value"), py::keep_alive<1, 2>())
+        .def("time", &MaskedMichaelisMentenReactionDiffusionSolver::time,
+             "Current simulation time advanced by solve()")
+        .def("check_stability", &MaskedMichaelisMentenReactionDiffusionSolver::checkStability,
+             py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
         .def("solve", &MaskedMichaelisMentenReactionDiffusionSolver::solve, py::arg("dt"),
              py::arg("num_steps"))
         .def("solution",
@@ -452,6 +476,10 @@ void register_diffusion_bindings(py::module_& m) {
     py::class_<ConstantSourceReactionDiffusionSolver>(m, "ConstantSourceReactionDiffusionSolver")
         .def(py::init<const StructuredMesh&, double, double>(), py::arg("mesh"),
              py::arg("diffusivity"), py::arg("source_rate"), py::keep_alive<1, 2>())
+        .def("time", &ConstantSourceReactionDiffusionSolver::time,
+             "Current simulation time advanced by solve()")
+        .def("check_stability", &ConstantSourceReactionDiffusionSolver::checkStability,
+             py::arg("dt"), "Return whether dt satisfies the explicit stability condition")
         .def("solve", &ConstantSourceReactionDiffusionSolver::solve, py::arg("dt"),
              py::arg("num_steps"))
         .def("solution",
@@ -712,6 +740,9 @@ void register_diffusion_bindings(py::module_& m) {
                       const std::vector<double>&, AdvectionScheme>(),
              py::arg("mesh"), py::arg("diffusivity"), py::arg("vx_field"), py::arg("vy_field"),
              py::arg("scheme") = AdvectionScheme::HYBRID, py::keep_alive<1, 2>())
+        .def("time", &AdvectionDiffusionSolver::time, "Current simulation time advanced by solve()")
+        .def("check_stability", &AdvectionDiffusionSolver::checkStability, py::arg("dt"),
+             "Return whether dt satisfies the explicit stability condition")
         .def("solve", &AdvectionDiffusionSolver::solve, py::arg("dt"), py::arg("num_steps"))
         .def("cell_peclet", &AdvectionDiffusionSolver::cellPeclet)
         .def("max_time_step", &AdvectionDiffusionSolver::maxTimeStep, py::arg("safety") = 0.4)
@@ -859,7 +890,7 @@ void register_diffusion_bindings(py::module_& m) {
              py::return_value_policy::reference_internal)
         .def("dirichlet", &TransportProblem::dirichlet, py::arg("side"), py::arg("value"),
              py::return_value_policy::reference_internal)
-        .def("neumann", &TransportProblem::neumann, py::arg("side"), py::arg("flux"),
+        .def("neumann", &TransportProblem::neumann, py::arg("side"), py::arg("normal_derivative"),
              py::return_value_policy::reference_internal)
         .def("robin", &TransportProblem::robin, py::arg("side"), py::arg("a"), py::arg("b"),
              py::arg("c"), py::return_value_policy::reference_internal)
@@ -1423,15 +1454,34 @@ per unit time.)doc")
                 solver.setDirichletBoundary(checkedBoundary(boundary_id), value);
             },
             py::arg("boundary_id"), py::arg("value"))
-        .def("set_neumann_boundary",
-             py::overload_cast<Boundary, double>(&NernstPlanckSolver::setNeumannBoundary),
-             py::arg("boundary"), py::arg("flux"), "Set flux boundary condition")
+        .def("set_outward_flux_boundary", &NernstPlanckSolver::setOutwardFluxBoundary,
+             py::arg("boundary"), py::arg("outward_molar_flux"),
+             "Prescribe the outward total molar flux N.n [mol/(m^2 s)], positive when ions "
+             "leave the domain. This is a physical flux, not a concentration derivative.")
+        .def(
+            "set_neumann_boundary",
+            [](NernstPlanckSolver& solver, Boundary boundary, double flux) {
+                warn_deprecated("NernstPlanckSolver.set_neumann_boundary",
+                                "set_outward_flux_boundary(boundary, outward_molar_flux)",
+                                "the value is a physical molar flux, positive leaving the domain, "
+                                "not the outward-normal derivative that set_neumann_boundary "
+                                "means on every scalar diffusion solver");
+                solver.setOutwardFluxBoundary(boundary, flux);
+            },
+            py::arg("boundary"), py::arg("flux"),
+            "Deprecated spelling of set_outward_flux_boundary(); installs the same condition")
         .def(
             "set_neumann_boundary",
             [](NernstPlanckSolver& solver, int boundary_id, double flux) {
-                solver.setNeumannBoundary(checkedBoundary(boundary_id), flux);
+                warn_deprecated("NernstPlanckSolver.set_neumann_boundary",
+                                "set_outward_flux_boundary(boundary, outward_molar_flux)",
+                                "the value is a physical molar flux, positive leaving the domain, "
+                                "not the outward-normal derivative that set_neumann_boundary "
+                                "means on every scalar diffusion solver");
+                solver.setOutwardFluxBoundary(checkedBoundary(boundary_id), flux);
             },
-            py::arg("boundary_id"), py::arg("flux"))
+            py::arg("boundary_id"), py::arg("flux"),
+            "Deprecated spelling of set_outward_flux_boundary(); installs the same condition")
         .def("check_stability", &NernstPlanckSolver::checkStability, py::arg("dt"),
              "Check the positivity bound of the fitted diffusion-drift operator")
         .def("maximum_stable_time_step", &NernstPlanckSolver::maximumStableTimeStep,
@@ -1496,10 +1546,22 @@ per unit time.)doc")
                 solver.setDirichletBoundary(species, checkedBoundary(boundary_id), value);
             },
             py::arg("species"), py::arg("boundary_id"), py::arg("value"))
-        .def("set_neumann_boundary",
-             py::overload_cast<size_t, Boundary, double>(&MultiIonSolver::setNeumannBoundary),
-             py::arg("species"), py::arg("boundary"), py::arg("flux"),
-             "Set Neumann boundary for a species")
+        .def("set_outward_flux_boundary", &MultiIonSolver::setOutwardFluxBoundary,
+             py::arg("species"), py::arg("boundary"), py::arg("outward_molar_flux"),
+             "Prescribe the outward total molar flux of one species [mol/(m^2 s)], positive "
+             "when ions leave the domain. This is a physical flux, not a derivative.")
+        .def(
+            "set_neumann_boundary",
+            [](MultiIonSolver& solver, size_t species, Boundary boundary, double flux) {
+                warn_deprecated("MultiIonSolver.set_neumann_boundary",
+                                "set_outward_flux_boundary(species, boundary, outward_molar_flux)",
+                                "the value is a physical molar flux, positive leaving the domain, "
+                                "not the outward-normal derivative that set_neumann_boundary "
+                                "means on every scalar diffusion solver");
+                solver.setOutwardFluxBoundary(species, boundary, flux);
+            },
+            py::arg("species"), py::arg("boundary"), py::arg("flux"),
+            "Deprecated spelling of set_outward_flux_boundary(); installs the same condition")
         .def("set_potential_field", &MultiIonSolver::setPotentialField, py::arg("phi"),
              "Set electric potential field")
         .def("set_uniform_field", &MultiIonSolver::setUniformField, py::arg("Ex"),

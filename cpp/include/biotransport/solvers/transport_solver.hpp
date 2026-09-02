@@ -62,6 +62,17 @@ struct SolveOptions {
     /** Throw as soon as a reaction or solution value is NaN or infinite. */
     bool check_finite = true;
 
+    /**
+     * Absolute times in [0, final_time] at which the field is recorded.
+     *
+     * Values must be finite and strictly increasing.  Each save time
+     * partitions the explicit step schedule so the field is captured exactly
+     * at that clock (the segment's last step is shortened, exactly as the
+     * final step is).  The reaction term always receives the absolute time.
+     * An empty list leaves the schedule and the result bitwise unchanged.
+     */
+    std::vector<double> save_times;
+
     /** @brief Convenience constructor for `solve(problem, SolveOptions::until(t))`. */
     static SolveOptions until(double time) {
         SolveOptions options;
@@ -102,11 +113,20 @@ struct SolveDiagnostics {
     double final_maximum = 0.0;
 };
 
-/** @brief Final concentration field and diagnostics from a transport solve. */
+/** @brief Final concentration field, snapshots, and diagnostics from a transport solve. */
 struct TransportResult {
+    explicit TransportResult(StructuredMesh mesh_value) : mesh(std::move(mesh_value)) {}
+
+    /** The mesh the fields are defined on (a copy, so the result outlives the problem). */
+    StructuredMesh mesh;
     std::vector<double> concentration;
     double time = 0.0;
     SolveDiagnostics diagnostics;
+
+    /** Absolute times requested through SolveOptions::save_times, in order. */
+    std::vector<double> snapshot_times;
+    /** Nodal fields recorded at each snapshot time. */
+    std::vector<std::vector<double>> snapshot_fields;
 
     /** @brief Compatibility/readability alias for the final concentration field. */
     const std::vector<double>& solution() const noexcept { return concentration; }
@@ -267,6 +287,10 @@ inline void validateBoundary(const BoundaryCondition& condition) {
                 throw std::invalid_argument("Robin condition requires non-zero a or b");
             }
             return;
+        case BoundaryType::OUTWARD_FLUX:
+            throw std::invalid_argument(
+                "the canonical transport solver prescribes Neumann outward-normal derivatives; "
+                "a physical OUTWARD_FLUX boundary condition is not supported");
     }
     throw std::invalid_argument("invalid BoundaryType value");
 }
@@ -295,6 +319,16 @@ inline void validateProblem(const TransportProblem& problem, const SolveOptions&
     }
     if (options.max_steps == 0) {
         throw std::invalid_argument("max_steps must be positive");
+    }
+    double previous_save_time = -1.0;
+    for (double save_time : options.save_times) {
+        if (!finite(save_time) || save_time < 0.0 || save_time > options.final_time) {
+            throw std::invalid_argument("save_times must be finite and lie within [0, final_time]");
+        }
+        if (save_time <= previous_save_time) {
+            throw std::invalid_argument("save_times must be strictly increasing");
+        }
+        previous_save_time = save_time;
     }
 
     const std::size_t node_count = asSize(mesh.numNodes());
@@ -721,6 +755,45 @@ inline void takeStep(const TransportProblem& problem, const EssentialBoundaryDat
     concentration.swap(next);
 }
 
+/**
+ * Advance the state over one schedule segment of the given duration using
+ * `step_count` steps of at most `target_step`.  The clock passed to the
+ * reaction term is `start_time` plus the segment-local schedule, so a segment
+ * starting at zero reproduces the single-segment arithmetic bit for bit.
+ */
+inline void integrateSegment(const TransportProblem& problem,
+                             const EssentialBoundaryData& essential_data,
+                             std::vector<double>& concentration, std::vector<double>& next,
+                             std::vector<double>& x_flux, std::vector<double>& y_flux,
+                             double start_time, double duration, double target_step,
+                             std::size_t step_count, const SolveOptions& options,
+                             SolveDiagnostics& diagnostics) {
+    double previous_time = -1.0;
+    for (std::size_t step = 0; step < step_count; ++step) {
+        const double remaining_schedule =
+            std::fma(-static_cast<double>(step), target_step, duration);
+        double time = step == 0 ? 0.0 : roundedStepProduct(step, target_step);
+        if (step + 1 == step_count && remaining_schedule > 0.0 && time >= duration) {
+            time = std::nextafter(duration, -std::numeric_limits<double>::infinity());
+        }
+        if (!finite(time) || time < 0.0 || time >= duration ||
+            (step > 0 && time <= previous_time)) {
+            throw std::runtime_error(
+                "floating-point time schedule cannot represent strictly increasing step clocks");
+        }
+        const double dt =
+            step + 1 == step_count ? std::min(target_step, remaining_schedule) : target_step;
+        if (!(dt > 0.0) || !finite(dt) || dt > target_step) {
+            throw std::runtime_error("floating-point time schedule produced an invalid step");
+        }
+        takeStep(problem, essential_data, concentration, next, x_flux, y_flux, start_time + time,
+                 dt, options.check_finite);
+        diagnostics.minimum_time_step = std::min(diagnostics.minimum_time_step, dt);
+        diagnostics.maximum_time_step = std::max(diagnostics.maximum_time_step, dt);
+        previous_time = time;
+    }
+}
+
 }  // namespace transport_detail
 
 /**
@@ -739,7 +812,7 @@ inline TransportResult solve(const TransportProblem& problem, const SolveOptions
     const EssentialBoundaryData essential_data = makeEssentialBoundaryData(problem);
     validateDegenerateInflows(problem, essential_data);
 
-    TransportResult result;
+    TransportResult result(problem.mesh());
     result.concentration = problem.initial();
     // Essential values are imposed before the first flux/reaction stencil.
     applyEssentialBoundaries(result.concentration, essential_data);
@@ -778,6 +851,11 @@ inline TransportResult solve(const TransportProblem& problem, const SolveOptions
         diagnostics.final_maximum = diagnostics.initial_maximum;
         diagnostics.final_mass = diagnostics.initial_mass;
         result.time = 0.0;
+        // Every validated save time is zero here: record the initial state.
+        for (double save_time : options.save_times) {
+            result.snapshot_times.push_back(save_time);
+            result.snapshot_fields.push_back(result.concentration);
+        }
         return result;
     }
 
@@ -817,7 +895,27 @@ inline TransportResult solve(const TransportProblem& problem, const SolveOptions
         throw std::invalid_argument("the selected time step must be finite and positive");
     }
 
-    const std::size_t step_count = plannedSteps(options.final_time, target_step);
+    // The schedule is partitioned at every save time.  Without save times there
+    // is exactly one segment starting at zero, which reproduces the original
+    // single-schedule arithmetic bit for bit.
+    std::vector<double> segment_ends;
+    segment_ends.reserve(options.save_times.size() + 1);
+    for (double save_time : options.save_times) {
+        segment_ends.push_back(save_time);
+    }
+    segment_ends.push_back(options.final_time);
+
+    std::vector<std::size_t> segment_steps(segment_ends.size(), 0);
+    std::size_t step_count = 0;
+    double segment_start = 0.0;
+    for (std::size_t segment = 0; segment < segment_ends.size(); ++segment) {
+        const double duration = segment_ends[segment] - segment_start;
+        if (duration > 0.0) {
+            segment_steps[segment] = plannedSteps(duration, target_step);
+            step_count += segment_steps[segment];
+        }
+        segment_start = segment_ends[segment];
+    }
     if (step_count > options.max_steps) {
         throw std::runtime_error(
             "solve would exceed max_steps; refine the mesh/model or raise the guard");
@@ -831,29 +929,20 @@ inline TransportResult solve(const TransportProblem& problem, const SolveOptions
     std::vector<double> y_flux(y_face_count, 0.0);
 
     diagnostics.minimum_time_step = std::numeric_limits<double>::infinity();
-    double previous_time = -1.0;
-    for (std::size_t step = 0; step < step_count; ++step) {
-        const double remaining_schedule =
-            std::fma(-static_cast<double>(step), target_step, options.final_time);
-        double time = step == 0 ? 0.0 : roundedStepProduct(step, target_step);
-        if (step + 1 == step_count && remaining_schedule > 0.0 && time >= options.final_time) {
-            time = std::nextafter(options.final_time, -std::numeric_limits<double>::infinity());
+    segment_start = 0.0;
+    for (std::size_t segment = 0; segment < segment_ends.size(); ++segment) {
+        const double duration = segment_ends[segment] - segment_start;
+        if (segment_steps[segment] > 0) {
+            integrateSegment(problem, essential_data, result.concentration, next, x_flux, y_flux,
+                             segment_start, duration, target_step, segment_steps[segment], options,
+                             diagnostics);
         }
-        if (!finite(time) || time < 0.0 || time >= options.final_time ||
-            (step > 0 && time <= previous_time)) {
-            throw std::runtime_error(
-                "floating-point time schedule cannot represent strictly increasing step clocks");
+        if (segment + 1 < segment_ends.size()) {
+            // Every segment end except the last is a requested save time.
+            result.snapshot_times.push_back(segment_ends[segment]);
+            result.snapshot_fields.push_back(result.concentration);
         }
-        const double dt =
-            step + 1 == step_count ? std::min(target_step, remaining_schedule) : target_step;
-        if (!(dt > 0.0) || !finite(dt) || dt > target_step) {
-            throw std::runtime_error("floating-point time schedule produced an invalid step");
-        }
-        takeStep(problem, essential_data, result.concentration, next, x_flux, y_flux, time, dt,
-                 options.check_finite);
-        diagnostics.minimum_time_step = std::min(diagnostics.minimum_time_step, dt);
-        diagnostics.maximum_time_step = std::max(diagnostics.maximum_time_step, dt);
-        previous_time = time;
+        segment_start = segment_ends[segment];
     }
 
     // Assigning the requested value avoids exposing harmless summation roundoff.

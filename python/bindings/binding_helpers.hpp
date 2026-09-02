@@ -118,6 +118,24 @@ inline py::array_t<T> to_numpy_with_base(const std::vector<T>& vec, py::object b
  * @param base Python object that owns the vector
  * @return 3D NumPy array view with shape (frames, ny, nx)
  */
+/**
+ * @brief Emit the package's deprecation warning from compiled code.
+ *
+ * Uses ``biotransport._deprecation.BioTransportDeprecationWarning`` and the
+ * same message format as the Python helpers, so one filter covers every
+ * retired spelling regardless of where it is implemented.
+ */
+inline void warn_deprecated(const char* old_name, const char* replacement, const char* reason,
+                            const char* since = "0.2.0", const char* removal = "0.4.0") {
+    const py::object category =
+        py::module_::import("biotransport._deprecation").attr("BioTransportDeprecationWarning");
+    const py::object message =
+        py::module_::import("biotransport._deprecation")
+            .attr("deprecation_message")(old_name, replacement, py::arg("reason") = reason,
+                                         py::arg("since") = since, py::arg("removal") = removal);
+    py::module_::import("warnings").attr("warn")(message, category, py::arg("stacklevel") = 2);
+}
+
 template <typename T>
 inline py::array_t<T> to_numpy_3d(const std::vector<T>& vec, py::ssize_t frames, py::ssize_t ny,
                                   py::ssize_t nx, py::object base) {

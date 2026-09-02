@@ -90,6 +90,7 @@ void register_mesh_bindings(py::module_& m) {
         .value("DIRICHLET", BoundaryType::DIRICHLET)
         .value("NEUMANN", BoundaryType::NEUMANN)
         .value("ROBIN", BoundaryType::ROBIN)
+        .value("OUTWARD_FLUX", BoundaryType::OUTWARD_FLUX)
         .export_values();
 
     // Boundary side enum
@@ -115,7 +116,11 @@ void register_mesh_bindings(py::module_& m) {
         .def_static("neumann", &BoundaryCondition::Neumann, py::arg("normal_derivative"),
                     "Create a Neumann condition for the outward-normal derivative.")
         .def_static("robin", &BoundaryCondition::Robin, py::arg("a"), py::arg("b"), py::arg("c"),
-                    "Create Robin metadata for a*u + b*du/dn = c. Solver support varies.");
+                    "Create Robin metadata for a*u + b*du/dn = c. Solver support varies.")
+        .def_static("outward_flux", &BoundaryCondition::OutwardFlux, py::arg("outward_flux"),
+                    "Create a prescribed physical-flux condition, positive when material leaves "
+                    "the domain. Distinct from neumann(), which is a derivative; solvers that only "
+                    "accept derivative data reject it.");
 
     // =========================================================================
     // CylindricalMesh

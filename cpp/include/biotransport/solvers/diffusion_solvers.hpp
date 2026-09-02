@@ -194,6 +194,21 @@ public:
 
     DiffusionSolver(const StructuredMesh& mesh, double diffusivity) : Base(mesh, diffusivity) {}
 
+    /**
+     * @brief Largest explicit step accepted by checkStability() for pure diffusion.
+     *
+     * The base stability test bounds the total diffusion number
+     * D*dt*(1/dx^2 [+ 1/dy^2]) by 0.5; this returns that bound directly and is
+     * +infinity when the diffusivity is zero.
+     */
+    double maxStableTimeStep() const {
+        double rate = diffusivity_ / (mesh_.dx() * mesh_.dx());
+        if (!mesh_.is1D()) {
+            rate += diffusivity_ / (mesh_.dy() * mesh_.dy());
+        }
+        return rate > 0.0 ? 0.5 / rate : std::numeric_limits<double>::infinity();
+    }
+
     // Required by CRTP base
     void computeNodeUpdate(int idx, int /*i*/, int /*j*/, const StencilOps& ops, double dt) {
         scratch_[idx] = ops.diffusionStep(solution_, idx, diffusivity_, dt);

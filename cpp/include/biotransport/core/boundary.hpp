@@ -35,9 +35,10 @@ constexpr int to_index(Boundary b) noexcept {
  * @brief Type of boundary condition.
  */
 enum class BoundaryType {
-    DIRICHLET,  ///< Fixed value (e.g., concentration, temperature)
-    NEUMANN,    ///< Fixed outward-normal derivative du/dn
-    ROBIN       ///< Mixed/Robin: a*u + b*du/dn = c
+    DIRICHLET,     ///< Fixed value (e.g., concentration, temperature)
+    NEUMANN,       ///< Fixed outward-normal derivative du/dn
+    ROBIN,         ///< Mixed/Robin: a*u + b*du/dn = c
+    OUTWARD_FLUX,  ///< Prescribed physical flux through the boundary, positive leaving the domain
 };
 
 /**
@@ -83,6 +84,21 @@ struct BoundaryCondition {
      */
     static BoundaryCondition Robin(double a, double b, double c) noexcept {
         return BoundaryCondition{BoundaryType::ROBIN, 0.0, a, b, c};
+    }
+
+    /**
+     * @brief Create a prescribed physical-flux boundary condition.
+     *
+     * The value is a physical flux (for example a molar flux in mol/(m^2 s))
+     * through the boundary, positive when material leaves the domain. It is
+     * deliberately a different type from Neumann(), which prescribes the
+     * outward-normal derivative of the field. Solvers that only accept
+     * derivative data reject this condition instead of reinterpreting it.
+     *
+     * @param outward_flux Physical flux through the boundary, positive outward
+     */
+    static BoundaryCondition OutwardFlux(double outward_flux) noexcept {
+        return BoundaryCondition{BoundaryType::OUTWARD_FLUX, outward_flux, 0.0, 0.0, 0.0};
     }
 };
 

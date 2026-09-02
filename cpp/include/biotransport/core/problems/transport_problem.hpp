@@ -535,6 +535,11 @@ private:
                     throw std::invalid_argument("Robin condition requires non-zero a or b");
                 }
                 return;
+            case BoundaryType::OUTWARD_FLUX:
+                throw std::invalid_argument(
+                    "TransportProblem prescribes Neumann outward-normal derivatives dc/dn; "
+                    "a physical OUTWARD_FLUX condition is not supported here. Use "
+                    "neumann(side, -flux / D) for a uniform diffusivity, or a Robin condition.");
         }
         throw std::invalid_argument("invalid BoundaryType value");
     }

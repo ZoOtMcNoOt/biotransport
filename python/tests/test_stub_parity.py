@@ -273,10 +273,6 @@ def _neumann_setters_with_flux_kwarg() -> list[str]:
     return sorted(set(offenders))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="pybind kwarg 'flux' is renamed to 'normal_derivative' in a later step",
-)
 def test_only_nernst_planck_neumann_setters_take_flux() -> None:
     offenders = _neumann_setters_with_flux_kwarg()
     assert not offenders, (

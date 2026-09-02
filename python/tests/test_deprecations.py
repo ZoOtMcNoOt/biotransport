@@ -147,6 +147,39 @@ def test_problem_aliases_resolve_to_the_problem_builder() -> None:
             assert getattr(bt, name) is bt.Problem
 
 
+def test_transport_result_solution_alias_warns_and_matches_concentration() -> None:
+    result = bt.solve(_problem(), end_time=0.01)
+    with pytest.warns(BioTransportDeprecationWarning, match="concentration"):
+        legacy = result.solution
+    np.testing.assert_array_equal(legacy, result.concentration)
+
+
+def test_nernst_planck_neumann_spelling_warns_and_installs_the_same_flux() -> None:
+    mesh = bt.mesh_1d(10)
+    ion = bt.IonSpecies("Na+", 1, 1.33e-9)
+
+    def make() -> bt.NernstPlanckSolver:
+        solver = bt.NernstPlanckSolver(mesh, ion)
+        solver.set_initial_condition(np.full(mesh.num_nodes(), 1.0))
+        solver.set_uniform_field(50.0)
+        solver.set_dirichlet_boundary(bt.Boundary.Left, 1.0)
+        return solver
+
+    preferred = make()
+    preferred.set_outward_flux_boundary(bt.Boundary.Right, 2.0e-9)
+    deprecated = make()
+    with pytest.warns(BioTransportDeprecationWarning) as record:
+        deprecated.set_neumann_boundary(bt.Boundary.Right, 2.0e-9)
+    message = str(record[0].message)
+    assert "set_outward_flux_boundary" in message
+    assert "physical molar flux" in message
+
+    dt = 0.5 * preferred.maximum_stable_time_step()
+    preferred.solve(dt, 5)
+    deprecated.solve(dt, 5)
+    np.testing.assert_array_equal(preferred.solution(), deprecated.solution())
+
+
 def test_tables_are_read_only() -> None:
     with pytest.raises(TypeError):
         ROOT_DEPRECATED["x"] = ROOT_DEPRECATED["DiffusionProblem"]  # type: ignore[index]

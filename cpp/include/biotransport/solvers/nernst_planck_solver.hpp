@@ -516,6 +516,17 @@ public:
         setNeumannBoundary(static_cast<Boundary>(boundary_id), flux);
     }
 
+    /**
+     * @brief Prescribe the outward total molar flux N dot n [mol/(m^2 s)].
+     *
+     * This is the unambiguous spelling of setNeumannBoundary(): the value is a
+     * physical flux, positive when ions leave the domain, not a concentration
+     * derivative.  Both names install the same condition.
+     */
+    void setOutwardFluxBoundary(Boundary boundary, double outward_molar_flux) {
+        setNeumannBoundary(boundary, outward_molar_flux);
+    }
+
     // -------------------------------------------------------------------------
     // Solver
     // -------------------------------------------------------------------------
@@ -526,6 +537,18 @@ public:
     void solve(double dt, int num_steps) {
         if (!std::isfinite(dt) || dt <= 0.0 || num_steps <= 0) {
             throw std::invalid_argument("Time step and steps must be positive");
+        }
+
+        // Validate before mutating: a rejected step must leave the exposed
+        // state untouched, so the stability bound at the current time is
+        // checked before any Dirichlet trace is written into the field.
+        if (use_potential_function_) {
+            updatePotentialFromFunction(time_);
+        }
+        if (!checkStability(dt)) {
+            throw std::invalid_argument(
+                "Time step is too large for the positivity-preserving "
+                "Scharfetter-Gummel Nernst-Planck update");
         }
 
         for (int step = 0; step < num_steps; ++step) {
@@ -965,6 +988,16 @@ public:
     }
 
     /**
+     * @brief Prescribe the outward total molar flux of one species [mol/(m^2 s)].
+     *
+     * Unambiguous spelling of setNeumannBoundary(): a physical flux, positive
+     * when ions leave the domain.
+     */
+    void setOutwardFluxBoundary(size_t species, Boundary boundary, double outward_molar_flux) {
+        setNeumannBoundary(species, boundary, outward_molar_flux);
+    }
+
+    /**
      * @brief Set electric potential field.
      */
     void setPotentialField(const std::vector<double>& phi) {
@@ -1007,6 +1040,19 @@ public:
     void solve(double dt, int num_steps) {
         if (!std::isfinite(dt) || dt <= 0.0 || num_steps <= 0) {
             throw std::invalid_argument("Time step and steps must be positive");
+        }
+
+        // Validate before mutating: reject an unstable step before any species
+        // field receives its Dirichlet traces.
+        if (use_potential_func_) {
+            updatePotentialFromFunction(time_);
+        }
+        for (size_t s = 0; s < num_species_; ++s) {
+            if (!checkSpeciesStability(s, dt)) {
+                throw std::invalid_argument(
+                    "Time step is too large for the positivity-preserving multi-ion "
+                    "Nernst-Planck update");
+            }
         }
 
         for (int step = 0; step < num_steps; ++step) {
