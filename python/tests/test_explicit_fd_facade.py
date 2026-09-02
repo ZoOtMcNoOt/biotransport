@@ -2,7 +2,12 @@ import unittest
 
 import numpy as np
 
-from biotransport import Boundary, ExplicitFD, DiffusionProblem, StructuredMesh
+from biotransport import Boundary, StructuredMesh
+from biotransport import TransportProblem as DiffusionProblem
+
+# ExplicitFD is the deprecated driver behind bt.solve; it is exercised here
+# through its module so the retired root spelling does not warn.
+from biotransport._core import ExplicitFD
 
 
 class TestExplicitFDFacade(unittest.TestCase):

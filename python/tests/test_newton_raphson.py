@@ -28,11 +28,11 @@ from biotransport.newton_raphson import (
 
 
 class TestNewtonRaphsonSolver:
-    def test_typed_failures_are_top_level_public_api(self) -> None:
-        assert bt.NewtonSolverError is NewtonSolverError
-        assert bt.NewtonEvaluationError is NewtonEvaluationError
-        assert bt.NewtonLinearSolveError is NewtonLinearSolveError
-        assert bt.NewtonLineSearchError is NewtonLineSearchError
+    def test_typed_failures_are_public_in_the_reference_namespace(self) -> None:
+        assert bt.reference.NewtonSolverError is NewtonSolverError
+        assert bt.reference.NewtonEvaluationError is NewtonEvaluationError
+        assert bt.reference.NewtonLinearSolveError is NewtonLinearSolveError
+        assert bt.reference.NewtonLineSearchError is NewtonLineSearchError
 
     def test_dense_direct_solve_converges_and_reports_method(self) -> None:
         def residual(u: np.ndarray) -> np.ndarray:

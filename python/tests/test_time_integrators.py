@@ -37,7 +37,7 @@ class TestRK4Step:
 
         # One step
         dt = 0.1
-        u_new = bt.rk4_step(u, rhs, 0.0, dt)
+        u_new = bt.reference.rk4_step(u, rhs, 0.0, dt)
 
         # Analytical: e^{-0.1} ≈ 0.9048
         expected = np.exp(-dt)
@@ -45,7 +45,7 @@ class TestRK4Step:
 
     def test_rejects_unrepresentable_large_clock_midpoint(self):
         with pytest.raises(ValueError, match="midpoint time is not representable"):
-            bt.rk4_step(np.array([1.0]), lambda u, t: u, 1.0e16, 2.0)
+            bt.reference.rk4_step(np.array([1.0]), lambda u, t: u, 1.0e16, 2.0)
 
     def test_oscillator(self):
         """Test RK4 on simple harmonic oscillator."""
@@ -58,7 +58,7 @@ class TestRK4Step:
 
         dt = 0.1
         for _ in range(10):  # 10 steps to t=1.0
-            u = bt.rk4_step(u, rhs, 0.0, dt)
+            u = bt.reference.rk4_step(u, rhs, 0.0, dt)
 
         t_final = 1.0
         y_expected = np.cos(t_final)
@@ -85,7 +85,7 @@ class TestRK4Step:
             steps = int(t_end / dt)
 
             for _ in range(steps):
-                u = bt.rk4_step(u, rhs, t, dt)
+                u = bt.reference.rk4_step(u, rhs, t, dt)
                 t += dt
 
             error = abs(u[0] - np.exp(t_end))
@@ -116,7 +116,7 @@ class TestHeunStep:
             return -u_state
 
         dt = 0.1
-        u_new = bt.heun_step(u, rhs, 0.0, dt)
+        u_new = bt.reference.heun_step(u, rhs, 0.0, dt)
 
         # Heun should be accurate (2nd order)
         expected = np.exp(-dt)
@@ -138,7 +138,7 @@ class TestHeunStep:
             steps = int(t_end / dt)
 
             for _ in range(steps):
-                u = bt.heun_step(u, rhs, t, dt)
+                u = bt.reference.heun_step(u, rhs, t, dt)
                 t += dt
 
             error = abs(u[0] - np.exp(t_end))
@@ -169,7 +169,7 @@ class TestEulerStep:
             return -u_state
 
         dt = 0.1
-        u_new = bt.euler_step(u, rhs, 0.0, dt)
+        u_new = bt.reference.euler_step(u, rhs, 0.0, dt)
 
         # Euler: u_new = u + dt * (-u) = u * (1 - dt) = 0.9
         expected = 1.0 * (1 - dt)
@@ -191,7 +191,7 @@ class TestEulerStep:
             steps = int(t_end / dt)
 
             for _ in range(steps):
-                u = bt.euler_step(u, rhs, t, dt)
+                u = bt.reference.euler_step(u, rhs, t, dt)
                 t += dt
 
             error = abs(u[0] - np.exp(t_end))
@@ -206,7 +206,9 @@ class TestEulerStep:
         assert 0.8 < order_2 < 1.2, f"Order 2 = {order_2}, expected ~1"
 
 
-@pytest.mark.parametrize("stepper", [bt.euler_step, bt.heun_step, bt.rk4_step])
+@pytest.mark.parametrize(
+    "stepper", [bt.reference.euler_step, bt.reference.heun_step, bt.reference.rk4_step]
+)
 class TestStandaloneStepContracts:
     """Generic ODE steps must reject corruption instead of broadcasting it."""
 
@@ -299,7 +301,7 @@ class TestStandaloneStepContracts:
             stepper(np.ones(2), masked_rhs, 0.0, 0.1)
 
 
-@pytest.mark.parametrize("stepper", [bt.heun_step, bt.rk4_step])
+@pytest.mark.parametrize("stepper", [bt.reference.heun_step, bt.reference.rk4_step])
 def test_stage_average_preserves_a_representable_minimum_subnormal(stepper):
     minimum_subnormal = np.nextafter(0.0, 1.0)
 
@@ -316,7 +318,7 @@ def test_stage_average_preserves_a_representable_minimum_subnormal(stepper):
 def test_rk4_stage_average_preserves_moderate_terms_across_huge_cancellation():
     stage_values = iter((np.finfo(float).max, 1.0, 1.0, -np.finfo(float).max))
 
-    result = bt.rk4_step(
+    result = bt.reference.rk4_step(
         np.array([0.0]),
         lambda _state, _time: np.array([next(stage_values)]),
         0.0,
@@ -331,7 +333,7 @@ def test_heun_stage_average_preserves_adjacent_huge_difference():
     adjacent = np.nextafter(largest, 0.0)
     stage_values = iter((largest, -adjacent))
 
-    result = bt.heun_step(
+    result = bt.reference.heun_step(
         np.array([0.0]),
         lambda _state, _time: np.array([next(stage_values)]),
         0.0,
@@ -382,7 +384,7 @@ class TestRK4Integrator:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        integrator = bt.RK4Integrator(problem)
+        integrator = bt.reference.RK4Integrator(problem)
         assert integrator is not None
         assert integrator.D == 0.01
 
@@ -398,7 +400,7 @@ class TestRK4Integrator:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        integrator = bt.RK4Integrator(problem)
+        integrator = bt.reference.RK4Integrator(problem)
         dt = integrator.max_stable_dt()
 
         assert dt > 0
@@ -418,11 +420,11 @@ class TestRK4Integrator:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        integrator = bt.RK4Integrator(problem)
+        integrator = bt.reference.RK4Integrator(problem)
         result = integrator.solve(t_end=0.1)
 
         assert result is not None
-        assert isinstance(result, bt.IntegrationResult)
+        assert isinstance(result, bt.reference.IntegrationResult)
         assert len(result.solution) == len(ic)
         assert result.time > 0
         assert result.stats["method"] == "rk4"
@@ -452,7 +454,7 @@ class TestRK4Integrator:
         decay_factor = np.exp(-(np.pi**2) * D * t_end)
         expected = [np.sin(np.pi * xi) * decay_factor for xi in x]
 
-        integrator = bt.RK4Integrator(problem)
+        integrator = bt.reference.RK4Integrator(problem)
         result = integrator.solve(t_end=t_end)
 
         # Compare with analytical solution
@@ -473,7 +475,7 @@ class TestRK4Integrator:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        integrator = bt.RK4Integrator(problem)
+        integrator = bt.reference.RK4Integrator(problem)
         result = integrator.solve(t_end=0.05, store_history=True)
 
         assert "history" in result.stats
@@ -502,7 +504,7 @@ class TestHeunIntegrator:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        integrator = bt.HeunIntegrator(problem)
+        integrator = bt.reference.HeunIntegrator(problem)
         assert integrator is not None
 
     def test_max_stable_dt_matches_euler_limit(self):
@@ -516,7 +518,7 @@ class TestHeunIntegrator:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        integrator = bt.HeunIntegrator(problem)
+        integrator = bt.reference.HeunIntegrator(problem)
         expected = 0.8 * mesh.dx() ** 2 / (2 * 0.01)
         assert integrator.max_stable_dt() == pytest.approx(expected)
 
@@ -532,7 +534,7 @@ class TestHeunIntegrator:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        integrator = bt.HeunIntegrator(problem)
+        integrator = bt.reference.HeunIntegrator(problem)
         result = integrator.solve(t_end=0.1)
 
         assert result is not None
@@ -551,7 +553,7 @@ class TestHeunIntegrator:
             .dirichlet(bt.Boundary.Left, 0.0)
             .dirichlet(bt.Boundary.Right, 0.0)
         )
-        integrator = bt.HeunIntegrator(problem)
+        integrator = bt.reference.HeunIntegrator(problem)
 
         result = integrator.solve(
             t_end=integrator.max_stable_dt(),
@@ -575,7 +577,9 @@ class TestExtremeScaleLegacyDiffusion:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_large_spacing_and_field_preserve_neighbor_diffusion(self, integrator):
         problem = self._impulse_problem(1.0e155, 1.0, 1.0e300)
         solver = integrator(problem)
@@ -587,7 +591,9 @@ class TestExtremeScaleLegacyDiffusion:
         assert result.solution[1] == pytest.approx(1.0e-10)
         assert result.solution[3] == pytest.approx(1.0e-10)
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_subnormal_diffusivity_and_tiny_spacing_preserve_lambda(self, integrator):
         minimum_subnormal = np.nextafter(0.0, 1.0)
         dx = 1.0e-200
@@ -604,7 +610,9 @@ class TestExtremeScaleLegacyDiffusion:
         assert 0.04 < result.solution[1] < diffusion_number
         assert result.solution[1] == pytest.approx(result.solution[3])
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_subnormal_final_remainder_is_not_rounded_up(self, integrator):
         minimum_subnormal = np.nextafter(0.0, 1.0)
         mesh = bt.mesh_1d(2, 0.0, 2.0e-154)
@@ -631,7 +639,9 @@ class TestExtremeScaleLegacyDiffusion:
         assert exact.stats["final_dt"] == minimum_subnormal
         assert exact.solution[1] != overadvanced.solution[1]
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_stability_ceiling_never_rounds_up_to_minimum_subnormal(self, integrator):
         dx = np.nextafter(np.ldexp(1.0, -537), np.inf)
         mesh = bt.mesh_1d(1, 0.0, dx)
@@ -650,7 +660,9 @@ class TestExtremeScaleLegacyDiffusion:
 class TestLegacyProblemValidation:
     """Legacy Python wrappers must reject physics they cannot preserve."""
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_rejects_multidimensional_mesh(self, integrator):
         mesh = bt.mesh_2d(4, 4)
         problem = bt.Problem(mesh).diffusivity(0.01).initial_condition(0.0)
@@ -658,7 +670,9 @@ class TestLegacyProblemValidation:
         with pytest.raises(ValueError, match="only 1D diffusion"):
             integrator(problem)
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     @pytest.mark.parametrize(
         "physics", ["variable diffusivity", "reaction", "advection"]
     )
@@ -681,7 +695,9 @@ class TestLegacyProblemValidation:
         with pytest.raises(ValueError, match=physics):
             integrator(problem)
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_rejects_non_dirichlet_boundaries(self, integrator):
         mesh = bt.mesh_1d(10)
         problem = (
@@ -695,7 +711,9 @@ class TestLegacyProblemValidation:
         with pytest.raises(ValueError, match="Dirichlet left/right"):
             integrator(problem)
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     @pytest.mark.parametrize("safety_factor", [0.0, -0.1, 1.1, np.inf, np.nan])
     def test_rejects_invalid_safety_factor(self, integrator, safety_factor):
         mesh = bt.mesh_1d(10)
@@ -710,7 +728,9 @@ class TestLegacyProblemValidation:
         with pytest.raises(ValueError, match="safety_factor"):
             integrator(problem, safety_factor=safety_factor)
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_rejects_requested_step_above_stability_limit(self, integrator):
         mesh = bt.mesh_1d(10)
         problem = (
@@ -725,7 +745,9 @@ class TestLegacyProblemValidation:
         with pytest.raises(ValueError, match="stability limit"):
             solver.solve(t_end=1.0, dt=1.01 * solver.max_stable_dt())
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_subnormal_stability_limit_has_no_normal_scale_allowance(self, integrator):
         mesh = bt.mesh_1d(10, 0.0, 1.0e-159)
         problem = (
@@ -769,7 +791,9 @@ class TestLegacyProblemValidation:
         assert num_steps == 11
         assert resolved_dt <= stable_dt
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_rejects_impractical_python_step_count_before_loop(self, integrator):
         mesh = bt.mesh_1d(10)
         problem = (
@@ -784,7 +808,9 @@ class TestLegacyProblemValidation:
         with pytest.raises(RuntimeError, match="step limit"):
             solver.solve(t_end=1.0, dt=5.0e-8)
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_store_history_requires_a_boolean(self, integrator):
         mesh = bt.mesh_1d(10)
         problem = (
@@ -798,7 +824,9 @@ class TestLegacyProblemValidation:
         with pytest.raises(TypeError, match="store_history"):
             integrator(problem).solve(t_end=0.1, store_history="yes")
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     @pytest.mark.parametrize(
         ("mutation", "message"),
         [
@@ -841,7 +869,9 @@ class TestLegacyProblemValidation:
         with pytest.raises(ValueError, match=message):
             solver.solve(t_end=0.01)
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_solve_revalidates_post_construction_boundaries(self, integrator):
         mesh = bt.mesh_1d(10)
         problem = (
@@ -857,7 +887,9 @@ class TestLegacyProblemValidation:
         with pytest.raises(ValueError, match="Dirichlet left/right"):
             solver.solve(t_end=0.01)
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_supported_live_problem_updates_are_refreshed(self, integrator):
         mesh = bt.mesh_1d(10)
         problem = (
@@ -884,7 +916,9 @@ class TestLegacyProblemValidation:
         assert solver.left_bc.value == 1.0
         assert solver.right_bc.value == 2.0
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_captured_public_state_is_read_only_or_copied(self, integrator):
         mesh = bt.mesh_1d(10)
         problem = (
@@ -916,7 +950,9 @@ class TestLegacyProblemValidation:
         result = solver.solve(t_end=0.01)
         np.testing.assert_array_equal(result.solution, np.zeros(mesh.num_nodes()))
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_python_contract_overrides_cannot_spoof_native_problem_state(
         self, integrator
     ):
@@ -937,7 +973,9 @@ class TestLegacyProblemValidation:
         with pytest.raises(TypeError, match="overrides.*has_reaction"):
             integrator(problem)
 
-    @pytest.mark.parametrize("integrator", [bt.RK4Integrator, bt.HeunIntegrator])
+    @pytest.mark.parametrize(
+        "integrator", [bt.reference.RK4Integrator, bt.reference.HeunIntegrator]
+    )
     def test_python_complex_initial_override_is_rejected(self, integrator):
         class ComplexInitialProblem(bt.TransportProblem):
             def initial(self):
@@ -975,7 +1013,7 @@ class TestIntegrateFunction:
         )
 
         with pytest.raises(TypeError, match="method"):
-            bt.integrate(problem, t_end=0.01, dt=0.005)  # type: ignore[call-arg]
+            bt.reference.integrate(problem, t_end=0.01, dt=0.005)  # type: ignore[call-arg]
 
     def test_integrate_euler(self):
         """Explicit Euler selects the canonical native solver."""
@@ -989,7 +1027,7 @@ class TestIntegrateFunction:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        result = bt.integrate(problem, t_end=0.1, method="euler")
+        result = bt.reference.integrate(problem, t_end=0.1, method="euler")
         assert result.stats["method"] == "euler"
         assert "diagnostics" in result.stats
 
@@ -1004,7 +1042,7 @@ class TestIntegrateFunction:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        result = bt.integrate(
+        result = bt.reference.integrate(
             problem,
             t_end=0.1,
             method="euler",
@@ -1031,7 +1069,7 @@ class TestIntegrateFunction:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        result = bt.integrate(problem, t_end=0.01, method="euler", dt=0.005)
+        result = bt.reference.integrate(problem, t_end=0.01, method="euler", dt=0.005)
 
         assert np.max(result.solution[1:-1]) == pytest.approx(0.01)
 
@@ -1047,7 +1085,7 @@ class TestIntegrateFunction:
             .dirichlet(bt.Boundary.Right, 0.0)
         )
 
-        result = bt.integrate(problem, t_end=0.1, method="heun")
+        result = bt.reference.integrate(problem, t_end=0.1, method="heun")
         assert result.stats["method"] == "heun"
 
     def test_integrate_rk4(self):
@@ -1064,7 +1102,7 @@ class TestIntegrateFunction:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error", FutureWarning)
-            result = bt.integrate(problem, t_end=0.1, method="rk4")
+            result = bt.reference.integrate(problem, t_end=0.1, method="rk4")
         assert result.stats["method"] == "rk4"
 
     def test_integrate_invalid_method(self):
@@ -1074,10 +1112,10 @@ class TestIntegrateFunction:
         problem = bt.Problem(mesh).diffusivity(0.01).initial_condition(ic)
 
         with pytest.raises(ValueError, match="Unknown integration method"):
-            bt.integrate(problem, t_end=0.1, method="invalid")
+            bt.reference.integrate(problem, t_end=0.1, method="invalid")
 
         with pytest.raises(TypeError, match="string"):
-            bt.integrate(problem, t_end=0.1, method=None)
+            bt.reference.integrate(problem, t_end=0.1, method=None)
 
 
 # ============================================================================
@@ -1117,8 +1155,10 @@ class TestMethodAccuracyComparison:
         # Use same timestep for both
         dt = 0.001
 
-        result_euler = bt.integrate(problem, t_end=t_end, method="euler", dt=dt)
-        result_rk4 = bt.integrate(problem, t_end=t_end, method="rk4", dt=dt)
+        result_euler = bt.reference.integrate(
+            problem, t_end=t_end, method="euler", dt=dt
+        )
+        result_rk4 = bt.reference.integrate(problem, t_end=t_end, method="rk4", dt=dt)
 
         error_euler = np.sqrt(np.mean((result_euler.solution - expected) ** 2))
         error_rk4 = np.sqrt(np.mean((result_rk4.solution - expected) ** 2))
@@ -1153,8 +1193,10 @@ class TestMethodAccuracyComparison:
 
         dt = 0.001
 
-        result_euler = bt.integrate(problem, t_end=t_end, method="euler", dt=dt)
-        result_heun = bt.integrate(problem, t_end=t_end, method="heun", dt=dt)
+        result_euler = bt.reference.integrate(
+            problem, t_end=t_end, method="euler", dt=dt
+        )
+        result_heun = bt.reference.integrate(problem, t_end=t_end, method="heun", dt=dt)
 
         error_euler = np.sqrt(np.mean((result_euler.solution - expected) ** 2))
         error_heun = np.sqrt(np.mean((result_heun.solution - expected) ** 2))

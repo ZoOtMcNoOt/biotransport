@@ -46,6 +46,11 @@ releases may retire spellings under the documented
 - `bt.mesh_3d(nx, ny, nz, ...)` mirrors `mesh_1d`/`mesh_2d` for `StructuredMesh3D`,
   and `bt.sides(mesh)` returns a mesh's boundary identifiers in canonical
   order so one loop applies a condition to every side.
+- `biotransport.balance` (dimensioned ledgers, audits, reconciliation and
+  `balance_residual`) and `biotransport.reference` (the Python reference and
+  legacy numerics: adaptive stepping, `integrate`, pulsatile drivers, Newton
+  iteration) as discoverable namespaces alongside `diffusion`, `electrochem`,
+  `flow` and `applications`.
 - `bt.plot(..., save_to=path)` saves the figure in the same call, and
   `Result.write_vtk(filename)` exports every field of a result with its own
   mesh. Matplotlib is now imported lazily, so `import biotransport` no longer
@@ -59,6 +64,12 @@ releases may retire spellings under the documented
   snapshot test.
 
 ### Changed
+- `biotransport.__all__` is tiered: it names the canonical path and the
+  namespaces. Every specialized native class remains an attribute of the
+  root without a warning; only `from biotransport import *` and the
+  public-surface snapshot see the smaller list.
+- The test suite treats `BioTransportDeprecationWarning` as an error, and
+  the examples are checked statically for retired root spellings.
 - The initial-condition helpers (`gaussian`, `step`, `uniform`, `circle`,
   `sinusoidal`), `layered_1d` and `SpatialField.build()` return flat `float64`
   NumPy arrays instead of Python lists. The native bindings accept both, and
@@ -85,6 +96,13 @@ releases may retire spellings under the documented
   intersphinx inventories when building without network access.
 
 ### Deprecated
+- Root-level spellings of the Python reference numerics (`bt.integrate`,
+  `bt.solve_adaptive`, `bt.AdaptiveTimeStepper`, `bt.solve_pulsatile`, the
+  pulsatile boundary drivers, `bt.NewtonRaphsonSolver`,
+  `bt.NonlinearDiffusionSolver` and their helpers): use `bt.reference.<name>`.
+- `bt.ExplicitFD`, `bt.RunResult`, `bt.SolverStats`: use `bt.solve` and
+  `bt.Result`. `bt.CheckpointResult`: use `bt.Snapshots`.
+  `bt.write_vtk_series_with_metadata`: use `bt.write_vtk_series`.
 - `plot_1d_solution`, `plot_2d_solution`, `plot_2d_surface`, `plot_field`,
   `plot_1d` and `plot_2d`: use `bt.plot(mesh, values, kind=..., save_to=...)`.
 - `SpatialField.build_array()`: `build()` returns the same array.

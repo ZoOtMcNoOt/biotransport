@@ -12,7 +12,7 @@ not hide the temporal orders:
 
 This is numerical-verification evidence for one smooth linear problem. It is
 not a blanket performance ranking or permission to exceed a method's stability
-limit. ``bt.integrate(..., method="euler")`` uses the canonical C++ solver;
+limit. ``bt.reference.integrate(..., method="euler")`` uses the canonical C++ solver;
 Heun and RK4 are deliberately limited Python teaching adapters.
 """
 
@@ -81,7 +81,7 @@ def main() -> int:
     for dt in time_steps:
         row: dict[str, float] = {"dt": float(dt)}
         for method in METHODS:
-            result = bt.integrate(
+            result = bt.reference.integrate(
                 problem,
                 t_end=end_time,
                 method=method,

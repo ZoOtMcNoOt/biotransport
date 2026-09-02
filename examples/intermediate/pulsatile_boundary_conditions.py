@@ -31,40 +31,48 @@ def plot_waveform_gallery() -> None:
     """Plot waveform values without assigning them unintended PDE semantics."""
     figure, axes = plt.subplots(3, 2, figsize=(12, 10))
 
-    sinusoid = bt.SinusoidalBC(mean=1.0, amplitude=0.2, frequency=1.2)
-    time, value = bt.sample_waveform(sinusoid, t_end=2.0, num_points=240)
+    sinusoid = bt.reference.SinusoidalBC(mean=1.0, amplitude=0.2, frequency=1.2)
+    time, value = bt.reference.sample_waveform(sinusoid, t_end=2.0, num_points=240)
     axes[0, 0].plot(time, value)
     axes[0, 0].set(title="Dimensionless sinusoid (1.2 Hz)", ylabel="Value")
 
-    arterial = bt.ArterialPressureBC(systolic=120.0, diastolic=80.0, heart_rate=72.0)
-    time, value = bt.sample_waveform(
+    arterial = bt.reference.ArterialPressureBC(
+        systolic=120.0, diastolic=80.0, heart_rate=72.0
+    )
+    time, value = bt.reference.sample_waveform(
         arterial, t_end=2.0 * arterial.period(), num_points=240
     )
     axes[0, 1].plot(time, value, color="tab:red")
     axes[0, 1].set(title="Arterial pressure-shaped signal", ylabel="Pressure (mmHg)")
 
-    venous = bt.VenousPressureBC(mean_pressure=8.0, amplitude=4.0, heart_rate=72.0)
-    time, value = bt.sample_waveform(
+    venous = bt.reference.VenousPressureBC(
+        mean_pressure=8.0, amplitude=4.0, heart_rate=72.0
+    )
+    time, value = bt.reference.sample_waveform(
         venous, t_end=2.0 * venous.period(), num_points=240
     )
     axes[1, 0].plot(time, value, color="tab:purple")
     axes[1, 0].set(title="Venous pressure-shaped signal", ylabel="Pressure (mmHg)")
 
-    cardiac_output = bt.CardiacOutputBC(mean_flow=5.0, peak_flow=25.0, heart_rate=72.0)
-    time, value = bt.sample_waveform(
+    cardiac_output = bt.reference.CardiacOutputBC(
+        mean_flow=5.0, peak_flow=25.0, heart_rate=72.0
+    )
+    time, value = bt.reference.sample_waveform(
         cardiac_output, t_end=2.0 * cardiac_output.period(), num_points=240
     )
     axes[1, 1].plot(time, value, color="tab:green")
     axes[1, 1].set(title="Cardiac-output-shaped signal", ylabel="Flow (L/min)")
 
-    respiratory = bt.RespiratoryBC(mean=0.0, amplitude=1.0, respiratory_rate=12.0)
-    time, value = bt.sample_waveform(
+    respiratory = bt.reference.RespiratoryBC(
+        mean=0.0, amplitude=1.0, respiratory_rate=12.0
+    )
+    time, value = bt.reference.sample_waveform(
         respiratory, t_end=2.0 * respiratory.period(), num_points=240
     )
     axes[2, 0].plot(time, value, color="tab:cyan")
     axes[2, 0].set(title="Respiratory signal", ylabel="Relative value")
 
-    infusion = bt.DrugInfusionBC(
+    infusion = bt.reference.DrugInfusionBC(
         bolus_concentration=1.0,
         maintenance_concentration=0.1,
         bolus_duration=60.0,

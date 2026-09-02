@@ -246,10 +246,111 @@ _ROOT_DEPRECATED: dict[str, DeprecatedName] = {
 
 #: Retired root-level names. Access through ``biotransport.<name>`` warns and
 #: resolves to the target object.
+_REFERENCE_REASON = (
+    "Python reference and legacy numerics live in biotransport.reference so the "
+    "root namespace names only the native, verified path"
+)
+
+#: Legacy Python numerics whose root-level spelling is retired in favour of
+#: ``biotransport.reference``; the objects themselves are unchanged.
+_REFERENCE_NAMES: tuple[str, ...] = (
+    # adaptive
+    "AdaptiveResult",
+    "AdaptiveTimeStepper",
+    "AdaptiveTimeStepperConfig",
+    "solve_adaptive",
+    # time integrators
+    "HeunIntegrator",
+    "IntegrationResult",
+    "RK4Integrator",
+    "euler_step",
+    "heun_step",
+    "integrate",
+    "rk4_step",
+    # pulsatile
+    "ArterialPressureBC",
+    "CardiacOutputBC",
+    "CompositeBC",
+    "ConstantBC",
+    "CustomBC",
+    "DrugInfusionBC",
+    "PulsatileBC",
+    "PulsatileResult",
+    "RampBC",
+    "RespiratoryBC",
+    "SinusoidalBC",
+    "SquareWaveBC",
+    "StepBC",
+    "VenousPressureBC",
+    "heart_rate_to_period",
+    "period_to_heart_rate",
+    "sample_waveform",
+    "solve_pulsatile",
+    # Newton-Raphson
+    "ConvergenceCriterion",
+    "NewtonEvaluationError",
+    "NewtonLinearSolveError",
+    "NewtonLineSearchError",
+    "NewtonRaphsonSolver",
+    "NewtonResult",
+    "NewtonSolverError",
+    "NonlinearDiffusionSolver",
+    "bistable",
+    "exponential_decay",
+    "hill_kinetics",
+    "michaelis_menten",
+)
+for _name in _REFERENCE_NAMES:
+    _ROOT_DEPRECATED[_name] = DeprecatedName(
+        old=_name,
+        target=f"biotransport.reference:{_name}",
+        replacement=f"bt.reference.{_name}",
+        reason=_REFERENCE_REASON,
+    )
+
+_ROOT_DEPRECATED.update(
+    {
+        "ExplicitFD": DeprecatedName(
+            old="ExplicitFD",
+            target="biotransport._core:ExplicitFD",
+            replacement="bt.solve(problem, end_time=...)",
+            reason=(
+                "ExplicitFD.run() is the legacy driver for the same canonical C++ "
+                "solver; solve() returns a Result with the same diagnostics"
+            ),
+        ),
+        "RunResult": DeprecatedName(
+            old="RunResult",
+            target="biotransport._core:RunResult",
+            replacement="bt.Result",
+            reason="solve() returns a Result instead of the legacy RunResult",
+        ),
+        "SolverStats": DeprecatedName(
+            old="SolverStats",
+            target="biotransport._core:SolverStats",
+            replacement="bt.Result.diagnostics",
+            reason="solve() reports its step schedule through SolveDiagnostics",
+        ),
+        "CheckpointResult": DeprecatedName(
+            old="CheckpointResult",
+            target="biotransport.run:CheckpointResult",
+            replacement="bt.Snapshots",
+            reason="solve(save_times=...) returns its recorded fields as result.snapshots",
+        ),
+        "write_vtk_series_with_metadata": DeprecatedName(
+            old="write_vtk_series_with_metadata",
+            target="biotransport._core:write_vtk_series_with_metadata",
+            replacement="bt.write_vtk_series",
+            reason="the Python writer accepts named fields and writes the same files",
+        ),
+    }
+)
+
 ROOT_DEPRECATED: Mapping[str, DeprecatedName] = MappingProxyType(_ROOT_DEPRECATED)
 
 _ROOT_LAZY: dict[str, str] = {
-    # Deprecated plot spellings: resolve silently, warn when called.
+    # Deprecated callables: resolve silently, warn when called.
+    "run_checkpoints": "biotransport.run:run_checkpoints",
     "plot_1d_solution": "biotransport.visualization:plot_1d_solution",
     "plot_2d_solution": "biotransport.visualization:plot_2d_solution",
     "plot_2d_surface": "biotransport.visualization:plot_2d_surface",

@@ -6,7 +6,7 @@ Provides reusable test fixtures for common mesh and solver configurations.
 
 import os
 
-# BioTransport imports Matplotlib eagerly, so select the test backend first.
+# Plotting tests import Matplotlib; select the headless backend first.
 os.environ["MPLBACKEND"] = "Agg"
 
 import pytest

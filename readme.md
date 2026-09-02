@@ -127,11 +127,15 @@ initial-condition helpers (`gaussian`, `step`, `uniform`, `circle`, `sinusoidal`
 you can combine before handing them to a problem or solver. `bt.plot(mesh, values, save_to="c.png")`
 renders any field and saves it in one call.
 
-For discovery without a flat wall of class names, many native solver objects are grouped into thin
-namespaces: `bt.diffusion`, `bt.electrochem`, `bt.flow`, and `bt.applications`. These modules only
-organize the API; numerical work still runs in the C++ core. Application configuration objects also
-provide high-level factories, such as `BioheatCryotherapyConfig.create_solver(...)`, so ordinary
-users do not need to call long low-level constructors directly.
+The root namespace advertises only the canonical path (`Problem`, `solve`, `Result`, `solve_until`,
+meshes, boundaries, field helpers, `plot`, VTK writers) plus thin namespaces that organize the rest:
+`bt.diffusion`, `bt.electrochem`, `bt.flow`, `bt.applications`, `bt.balance` (dimensioned balance
+ledgers and residuals), `bt.reference` (Python reference and legacy numerics with their own
+contracts), `bt.stepping`, and the workflow modules. Every specialized native class is still an
+attribute of the root, so `bt.DiffusionSolver` keeps working; the namespaces only organize the API,
+and numerical work still runs in the C++ core. Application configuration objects also provide
+high-level factories, such as `BioheatCryotherapyConfig.create_solver(...)`, so ordinary users do
+not need to call long low-level constructors directly.
 
 ## Scientific workflow and evidence APIs
 

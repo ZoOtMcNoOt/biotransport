@@ -302,3 +302,23 @@ def test_reproducible_artifact_example_is_idempotent(tmp_path: Path) -> None:
         )
         output = (completed.stdout + completed.stderr).decode(errors="backslashreplace")
         assert completed.returncode == 0, output
+
+
+def test_examples_do_not_use_retired_root_spellings() -> None:
+    from biotransport._deprecation import ROOT_DEPRECATED
+
+    failures: list[str] = []
+    for path, _, tree in _example_sources():
+        relative = path.relative_to(EXAMPLES)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "bt"
+                and node.attr in ROOT_DEPRECATED
+            ):
+                failures.append(
+                    f"{relative}:{node.lineno} uses bt.{node.attr}; "
+                    f"use {ROOT_DEPRECATED[node.attr].replacement}"
+                )
+    assert not failures, "\n" + "\n".join(failures)

@@ -65,17 +65,17 @@ print(f"Simulation time: {t_end} s")
 print()
 
 # =============================================================================
-# Method 1: Fixed Time-Stepping (ExplicitFD with default CFL)
+# Method 1: Fixed Time-Stepping (bt.solve with the certified stable step)
 # =============================================================================
 
 print("Running with FIXED time-stepping (CFL-based)...")
 start = time.perf_counter()
-result_fixed = bt.ExplicitFD().run(problem, t_end)
+result_fixed = bt.solve(problem, end_time=t_end)
 time_fixed = time.perf_counter() - start
-u_fixed = np.array(result_fixed.solution())
+u_fixed = np.array(result_fixed.concentration)
 
-print(f"  Steps: {result_fixed.stats.steps}")
-print(f"  dt: {result_fixed.stats.dt:.6e} s")
+print(f"  Steps: {result_fixed.steps}")
+print(f"  dt: {result_fixed.diagnostics.maximum_time_step:.6e} s")
 print(f"  Wall time: {time_fixed:.3f} s")
 print()
 
@@ -85,7 +85,7 @@ print()
 
 print("Running with ADAPTIVE time-stepping (tol=1e-3)...")
 start = time.perf_counter()
-stepper = bt.AdaptiveTimeStepper(problem, tol=1e-3, verbose=False)
+stepper = bt.reference.AdaptiveTimeStepper(problem, tol=1e-3, verbose=False)
 result_adaptive = stepper.solve(t_end)
 time_adaptive = time.perf_counter() - start
 u_adaptive = result_adaptive.solution
@@ -105,7 +105,7 @@ print()
 
 print("Running with ADAPTIVE (tol=1e-5, high accuracy)...")
 start = time.perf_counter()
-stepper_tight = bt.AdaptiveTimeStepper(problem, tol=1e-5, verbose=False)
+stepper_tight = bt.reference.AdaptiveTimeStepper(problem, tol=1e-5, verbose=False)
 result_tight = stepper_tight.solve(t_end)
 time_tight = time.perf_counter() - start
 u_tight = result_tight.solution
@@ -191,7 +191,11 @@ if dt_history_tight:
         label="Adaptive (tol=1e-5)",
     )
 ax3.axhline(
-    result_fixed.stats.dt, color="b", linestyle="--", linewidth=2, label="Fixed (CFL)"
+    result_fixed.diagnostics.maximum_time_step,
+    color="b",
+    linestyle="--",
+    linewidth=2,
+    label="Fixed (CFL)",
 )
 ax3.axhline(stats["cfl_limit"], color="k", linestyle=":", label="CFL stability limit")
 ax3.set_xlabel("Simulation Time (s)")
@@ -204,7 +208,7 @@ ax3.set_xlim(0, t_end)
 # Plot 4: Summary comparison
 ax4 = axes[1, 1]
 methods = ["Fixed\n(CFL)", "Adaptive\n(tol=1e-3)", "Adaptive\n(tol=1e-5)"]
-step_counts = [result_fixed.stats.steps, stats["steps"], stats_tight["steps"]]
+step_counts = [result_fixed.steps, stats["steps"], stats_tight["steps"]]
 colors = ["blue", "red", "green"]
 bars = ax4.bar(methods, step_counts, color=colors, alpha=0.7, edgecolor="black")
 ax4.set_ylabel("Number of Steps")

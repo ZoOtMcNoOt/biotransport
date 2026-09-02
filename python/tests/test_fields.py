@@ -231,7 +231,7 @@ class TestSpatialFieldCurvedRegions:
             .default(0.0)
             .region_circle(0.5, 0.5, 0.2, value=1.0)
             .region_annulus(0.5, 0.5, 0.3, 0.4, value=2.0)
-            .build_array()
+            .build()
         )
 
         assert field[5 * 11 + 5] == pytest.approx(1.0)
@@ -265,7 +265,7 @@ class TestSpatialFieldCurvedRegions:
 class TestSpatialFieldCylindrical:
     def test_radial_mesh_uses_radial_coordinate(self):
         mesh = bt.CylindricalMesh(10, 0.0, 1.0)
-        field = SpatialField(mesh).region_box(0.4, 0.6, value=3.0).build_array()
+        field = SpatialField(mesh).region_box(0.4, 0.6, value=3.0).build()
 
         assert field.shape == (11,)
         assert field[5] == pytest.approx(3.0)
@@ -276,7 +276,7 @@ class TestSpatialFieldCylindrical:
         field = (
             SpatialField(mesh)
             .region_box(0.25, 0.75, -0.5, 0.5, value=2.0)
-            .build_array()
+            .build()
             .reshape((7, 5))
         )
 

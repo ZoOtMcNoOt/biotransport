@@ -60,10 +60,10 @@ def demo_michaelis_menten_reaction():
     x = bt.x_nodes(mesh)
 
     # Set up reaction term
-    reaction, deriv = bt.michaelis_menten(Vmax, Km)
+    reaction, deriv = bt.reference.michaelis_menten(Vmax, Km)
 
     # Create solver
-    solver = bt.NonlinearDiffusionSolver(mesh, D=D)
+    solver = bt.reference.NonlinearDiffusionSolver(mesh, D=D)
     solver.set_reaction(reaction, deriv)
     solver.set_boundary(bt.Boundary.Left, S0)  # Supply at boundary
     solver.set_boundary(bt.Boundary.Right, 0.0, bc_type="neumann")  # No flux at center
@@ -136,9 +136,9 @@ def demo_hill_kinetics():
     fig, ax = plt.subplots(figsize=(10, 6))
 
     for n in hill_coefficients:
-        reaction, deriv = bt.hill_kinetics(Vmax, Km, n)
+        reaction, deriv = bt.reference.hill_kinetics(Vmax, Km, n)
 
-        solver = bt.NonlinearDiffusionSolver(mesh, D=0.1)
+        solver = bt.reference.NonlinearDiffusionSolver(mesh, D=0.1)
         solver.set_reaction(reaction, deriv)
         solver.set_boundary(bt.Boundary.Left, 1.0)
         solver.set_boundary(bt.Boundary.Right, 0.0, bc_type="neumann")
@@ -182,10 +182,10 @@ def demo_bistable_reaction():
 
     # Bistable with threshold at a=0.3
     a = 0.3
-    reaction, deriv = bt.bistable(a)
+    reaction, deriv = bt.reference.bistable(a)
 
     # Strong diffusion - should reach intermediate state
-    solver = bt.NonlinearDiffusionSolver(mesh, D=0.5)
+    solver = bt.reference.NonlinearDiffusionSolver(mesh, D=0.5)
     solver.set_reaction(reaction, deriv)
     solver.set_boundary(bt.Boundary.Left, 0.0)  # Low state on left
     solver.set_boundary(bt.Boundary.Right, 1.0)  # High state on right
@@ -246,9 +246,9 @@ def demo_convergence_history():
     x = bt.x_nodes(mesh)
 
     # Nonlinear problem with known convergence
-    reaction, deriv = bt.michaelis_menten(1.0, 0.5)
+    reaction, deriv = bt.reference.michaelis_menten(1.0, 0.5)
 
-    solver = bt.NonlinearDiffusionSolver(mesh, D=0.1)
+    solver = bt.reference.NonlinearDiffusionSolver(mesh, D=0.1)
     solver.set_reaction(reaction, deriv)
     solver.set_boundary(bt.Boundary.Left, 1.0)
     solver.set_boundary(bt.Boundary.Right, 0.0)
@@ -302,7 +302,7 @@ def demo_2d_nonlinear():
     def reaction(u):
         return u**2
 
-    solver = bt.NonlinearDiffusionSolver(mesh, D=1.0)
+    solver = bt.reference.NonlinearDiffusionSolver(mesh, D=1.0)
     solver.set_reaction(reaction)
 
     # Model a square tissue sample held at a uniform bath concentration.
@@ -358,18 +358,18 @@ def main():
     print(
         """
 Core Solvers:
-  - bt.NewtonRaphsonSolver(residual, jacobian, n)  # General F(u)=0 solver
-  - bt.NonlinearDiffusionSolver(mesh, D)           # -D*laplacian(u) + R(u) = S
+  - bt.reference.NewtonRaphsonSolver(residual, jacobian, n)  # General F(u)=0 solver
+  - bt.reference.NonlinearDiffusionSolver(mesh, D)           # -D*laplacian(u) + R(u) = S
 
 Built-in Reaction Terms:
-  - bt.michaelis_menten(Vmax, Km)     # R = Vmax*u/(Km+u)
-  - bt.hill_kinetics(Vmax, Km, n)     # R = Vmax*u^n/(Km^n+u^n)
-  - bt.bistable(a)                    # R = u(1-u)(u-a)
-  - bt.exponential_decay(k)           # R = k*u
+  - bt.reference.michaelis_menten(Vmax, Km)     # R = Vmax*u/(Km+u)
+  - bt.reference.hill_kinetics(Vmax, Km, n)     # R = Vmax*u^n/(Km^n+u^n)
+  - bt.reference.bistable(a)                    # R = u(1-u)(u-a)
+  - bt.reference.exponential_decay(k)           # R = k*u
 
 Usage Example:
-  solver = bt.NonlinearDiffusionSolver(mesh, D=1.0)
-  solver.set_reaction(*bt.michaelis_menten(Vmax, Km))
+  solver = bt.reference.NonlinearDiffusionSolver(mesh, D=1.0)
+  solver.set_reaction(*bt.reference.michaelis_menten(Vmax, Km))
   solver.set_boundary(bt.Boundary.Left, 1.0)
   solver.set_boundary(bt.Boundary.Right, 0.0)
   result = solver.solve(initial_guess)

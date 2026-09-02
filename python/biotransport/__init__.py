@@ -63,9 +63,6 @@ from ._core import (
     BioheatCryotherapySolver,
     BioheatSaved,
     TransportProblem,
-    ExplicitFD,
-    RunResult,
-    SolverStats,
     SolveOptions,
     SolveDiagnostics,
     TransportResult,
@@ -111,8 +108,6 @@ from ._core import (
     blood_carreau_model,
     pipe_wall_shear_rate,
     apparent_viscosity_pipe,
-    # I/O and visualization (C++ version - single array API)
-    write_vtk_series_with_metadata,
     # Multi-species reaction-diffusion
     MultiSpeciesSolver,
     LotkaVolterraReaction,
@@ -154,7 +149,7 @@ from .mesh_utils import (
 )
 from . import run as _run_module
 from .results import Result, Snapshots
-from .run import CheckpointResult, run_checkpoints, solve
+from .run import solve
 from . import stepping
 from .stepping import StepDiagnostics, solve_until
 from ._deprecation import (
@@ -179,25 +174,6 @@ from .config import (
     get_parameter_ranges,
 )
 
-# Adaptive time-stepping
-from .adaptive import (
-    AdaptiveResult,
-    AdaptiveTimeStepper,
-    AdaptiveTimeStepperConfig,
-    solve_adaptive,
-)
-
-# Higher-order time integration (RK4, Heun)
-from .time_integrators import (
-    RK4Integrator,
-    HeunIntegrator,
-    IntegrationResult,
-    integrate,
-    rk4_step,
-    heun_step,
-    euler_step,
-)
-
 # Grid convergence studies (verification)
 from .convergence import (
     ConvergenceSolveResult,
@@ -207,28 +183,6 @@ from .convergence import (
     run_convergence_study,
     temporal_convergence_study,
     plot_convergence,
-)
-
-# Pulsatile (time-varying) boundary conditions
-from .pulsatile import (
-    PulsatileBC,
-    ConstantBC,
-    SinusoidalBC,
-    RampBC,
-    StepBC,
-    SquareWaveBC,
-    CustomBC,
-    ArterialPressureBC,
-    VenousPressureBC,
-    CardiacOutputBC,
-    RespiratoryBC,
-    DrugInfusionBC,
-    CompositeBC,
-    PulsatileResult,
-    solve_pulsatile,
-    heart_rate_to_period,
-    period_to_heart_rate,
-    sample_waveform,
 )
 
 # Higher-order finite difference schemes
@@ -246,31 +200,19 @@ from .high_order import (
     verify_order_of_accuracy,
 )
 
-# Newton-Raphson iteration for nonlinear steady-state problems
-from .newton_raphson import (
-    NewtonSolverError,
-    NewtonEvaluationError,
-    NewtonLinearSolveError,
-    NewtonLineSearchError,
-    NewtonRaphsonSolver,
-    NonlinearDiffusionSolver,
-    NewtonResult,
-    ConvergenceCriterion,
-    michaelis_menten,
-    hill_kinetics,
-    bistable,
-    exponential_decay,
-)
-
 # Discoverable, science-scoped API namespaces.
 from . import (
     analysis,
     applications,
+    balance,
     contracts,
+    convergence,
     diffusion,
     electrochem,
     flow,
+    high_order,
     provenance,
+    reference,
     reproducibility,
     units,
 )
@@ -340,278 +282,77 @@ Problem = TransportProblem
 __version__ = "0.1.0"
 
 __all__ = [
-    # ========== Discoverable namespaces ==========
-    "diffusion",
-    "electrochem",
-    "flow",
-    "applications",
-    "analysis",
-    "contracts",
-    "provenance",
-    "reproducibility",
-    "units",
-    # ========== Scientific workflow helpers ==========
-    "Dimension",
-    "Quantity",
-    "Unit",
-    "quantity",
-    "convert",
-    "ParameterRange",
-    "parameter_sweep",
-    "local_sensitivity",
-    "latin_hypercube",
-    "propagate_uncertainty",
-    "standardized_regression_coefficients",
-    "ParameterProvenance",
-    "ParameterSetProvenance",
-    "illustrative_parameter_set",
-    "SolverContract",
-    "PythonBackend",
-    "PythonNumericalContract",
-    "get_contract",
-    "get_python_numerical_contract",
-    "list_contracts",
-    "list_python_numerical_contracts",
-    "list_python_numerical_symbols",
-    "filter_contracts",
-    "registry_as_dict",
-    "python_registry_as_dict",
-    "freeze_config",
-    "method_metadata",
-    "convergence_table",
-    "balance_residual",
-    "create_manifest",
-    "write_manifest",
-    "load_manifest",
-    # ========== Scientific balance accounting ==========
-    "BalanceDimension",
-    "BalanceUnit",
-    "BalanceTransferDirection",
-    "BalanceTerm",
-    "BalanceTransfer",
-    "BalanceAudit",
-    "BalanceLedger",
-    "MatchedBalanceTransfer",
-    "DimensionBalanceAudit",
-    "BalanceReconciliation",
-    "balance_dimension_name",
-    "balance_unit_symbol",
-    "balance_unit_dimension",
-    "balance_base_unit",
-    "convert_balance_value",
-    "reconcile_balances",
-    "native_build_info",
-    "NonuniformMesh1D",
-    "NonuniformDiffusionDiagnostics",
-    "NonuniformDiffusion1D",
-    # ========== Core (most commonly used) ==========
+    # ========== Tier 0: the canonical path ==========
     "Problem",  # The main problem builder (alias for TransportProblem)
+    "TransportProblem",
     "solve",  # Simplest way to run a simulation
     "Result",  # What every solve returns
+    "Snapshots",  # Fields recorded at save_times
     "solve_until",  # Same verb on every native stepping solver
     "StepDiagnostics",
-    "stepping",
-    "Snapshots",  # Fields recorded at save_times
-    "plot",  # Simplest way to visualize results
-    "mesh_1d",  # Create 1D mesh
-    "mesh_2d",  # Create 2D mesh
-    "mesh_3d",  # Create 3D mesh
-    "sides",  # Boundary identifiers of a mesh in canonical order
-    "x_nodes",  # Get x coordinates from mesh
-    "y_nodes",  # Get y coordinates from mesh
-    "xy_grid",  # Get 2D meshgrid
-    # ========== Initial condition helpers ==========
-    "gaussian",
-    "step",
-    "uniform",
-    "circle",
-    "sinusoidal",
-    # ========== Slightly more advanced ==========
-    "StructuredMesh",
-    "StructuredMesh3D",
-    "Boundary3D",
-    "DiffusionSolver3D",
-    "LinearReactionDiffusionSolver3D",
-    "TransportProblem",
-    "ExplicitFD",
-    "Boundary",
-    "BoundaryCondition",
-    "RunResult",
-    "SolverStats",
     "SolveOptions",
     "SolveDiagnostics",
     "TransportResult",
     "solve_transport",
-    "run_checkpoints",
-    "CheckpointResult",
-    "BioTransportDeprecationWarning",
-    # ========== Adaptive time-stepping ==========
-    "AdaptiveTimeStepper",
-    "AdaptiveTimeStepperConfig",
-    "AdaptiveResult",
-    "solve_adaptive",
-    # ========== Higher-order time integration ==========
-    "RK4Integrator",
-    "HeunIntegrator",
-    "IntegrationResult",
-    "integrate",
-    "rk4_step",
-    "heun_step",
-    "euler_step",
-    # ========== Grid convergence (verification) ==========
-    "GridConvergenceStudy",
-    "ConvergenceSolveResult",
-    "ConvergenceResult",
-    "compute_order_of_accuracy",
-    "run_convergence_study",
-    "temporal_convergence_study",
-    "plot_convergence",
-    # ========== Pulsatile boundary conditions ==========
-    "PulsatileBC",
-    "ConstantBC",
-    "SinusoidalBC",
-    "RampBC",
-    "StepBC",
-    "SquareWaveBC",
-    "CustomBC",
-    "ArterialPressureBC",
-    "VenousPressureBC",
-    "CardiacOutputBC",
-    "RespiratoryBC",
-    "DrugInfusionBC",
-    "CompositeBC",
-    "PulsatileResult",
-    "solve_pulsatile",
-    "heart_rate_to_period",
-    "period_to_heart_rate",
-    "sample_waveform",
-    # ========== Higher-order finite difference schemes ==========
-    "laplacian_2nd_order",
-    "laplacian_4th_order",
-    "laplacian_6th_order",
-    "gradient_4th_order",
-    "d2dx2",
-    "ddx",
-    "HighOrderDiffusionSolver",
-    "HighOrderResult",
-    "RungeKuttaResult",
-    "integrate_explicit_runge_kutta",
-    "verify_order_of_accuracy",
-    # ========== Mesh utilities ==========
+    # boundaries
+    "Boundary",
+    "Boundary3D",
+    "BoundaryCondition",
+    "BoundaryType",
+    "sides",
+    # meshes
+    "StructuredMesh",
+    "StructuredMesh3D",
+    "CylindricalMesh",
+    "CylindricalMeshType",
+    "NonuniformMesh1D",
+    "mesh_1d",
+    "mesh_2d",
+    "mesh_3d",
+    "x_nodes",
+    "y_nodes",
+    "xy_grid",
     "r_nodes",
     "z_nodes",
     "rz_grid",
     "as_1d",
     "as_2d",
-    # ========== Field builders ==========
+    # fields and initial conditions
+    "gaussian",
+    "step",
+    "uniform",
+    "circle",
+    "sinusoidal",
     "SpatialField",
     "layered_1d",
-    # ========== Specialized solvers ==========
-    "DiffusionSolver",
-    "CrankNicolsonDiffusion",
-    "CNSolveResult",
-    # ADI solvers
-    "ADIDiffusion2D",
-    "ADIDiffusion3D",
-    "ADISolveResult",
-    # Sparse matrix and implicit solvers
-    "SparseSolverType",
-    "SparseSolveResult",
-    "Triplet",
-    "SparseMatrix",
-    "build_2d_laplacian",
-    "build_implicit_diffusion_2d",
-    "build_implicit_diffusion_3d",
-    "ImplicitSolveResult",
-    "ImplicitDiffusion2D",
-    "ImplicitDiffusion3D",
-    "sparse_matrix_available",
-    "ConstantSourceReactionDiffusionSolver",
-    "LinearReactionDiffusionSolver",
-    "LogisticReactionDiffusionSolver",
-    "MichaelisMentenReactionDiffusionSolver",
-    "ReactionDiffusionSolver",
-    "MaskedMichaelisMentenReactionDiffusionSolver",
-    "BoundaryType",
-    "AdvectionScheme",
-    "AdvectionDiffusionSolver",
-    "DarcyFlowResult",
-    "DarcyFlowSolver",
-    "MembraneDiffusionResult",
-    "MembraneDiffusion1DSolver",
-    "MultiLayerMembraneSolver",
-    "renkin_hindrance",
-    "GrayScottSolver",
-    "GrayScottRunResult",
-    "TumorDrugDeliverySolver",
-    "TumorDrugDeliverySaved",
-    "BioheatCryotherapySolver",
-    "BioheatSaved",
-    # ========== Fluid dynamics ==========
-    "VelocityBCType",
-    "VelocityBC",
-    "StokesResult",
-    "StokesSolver",
-    "ConvectionScheme",
-    "NavierStokesResult",
-    "NavierStokesSolver",
-    # ========== Cylindrical mesh ==========
-    "CylindricalMeshType",
-    "CylindricalMesh",
-    # ========== Non-Newtonian fluid models ==========
-    "FluidModel",
-    "ViscosityModel",
-    "NewtonianModel",
-    "PowerLawModel",
-    "CarreauModel",
-    "CarreauYasudaModel",
-    "CrossModel",
-    "BinghamModel",
-    "HerschelBulkleyModel",
-    "CassonModel",
-    "blood_casson_model",
-    "blood_carreau_model",
-    "pipe_wall_shear_rate",
-    "apparent_viscosity_pipe",
-    # ========== Utilities ==========
-    "get_results_dir",
-    "get_result_path",
+    # output
+    "plot",
     "write_vtk",
     "write_vtk_series",
-    "write_vtk_series_with_metadata",
-    "dimensionless",
-    "analytical",
-    # ========== Configuration ==========
-    "TumorDrugDeliveryConfig",
-    "BioheatCryotherapyConfig",
-    "get_parameter_ranges",
-    # ========== Multi-species reaction-diffusion ==========
-    "MultiSpeciesSolver",
-    "LotkaVolterraReaction",
-    "SIRReaction",
-    "SEIRReaction",
-    "BrusselatorReaction",
-    "CompetitiveInhibitionReaction",
-    "EnzymeCascadeReaction",
-    # ========== Nernst-Planck electrochemical transport ==========
-    "IonSpecies",
-    "NernstPlanckSolver",
-    "MultiIonSolver",
-    "constants",
-    "ions",
-    "ghk",
-    # ========== Newton-Raphson nonlinear solvers ==========
-    "NewtonSolverError",
-    "NewtonEvaluationError",
-    "NewtonLinearSolveError",
-    "NewtonLineSearchError",
-    "NewtonRaphsonSolver",
-    "NonlinearDiffusionSolver",
-    "NewtonResult",
-    "ConvergenceCriterion",
-    "michaelis_menten",
-    "hill_kinetics",
-    "bistable",
-    "exponential_decay",
+    "get_result_path",
+    "get_results_dir",
+    # package
+    "native_build_info",
+    "BioTransportDeprecationWarning",
     "__version__",
+    # ========== Tier 1: discoverable namespaces ==========
+    "diffusion",
+    "electrochem",
+    "flow",
+    "applications",
+    "balance",
+    "reference",
+    "stepping",
+    "analysis",
+    "convergence",
+    "contracts",
+    "high_order",
+    "provenance",
+    "reproducibility",
+    "units",
 ]
+
+# Every specialized native solver, fluid model, balance object and workflow
+# helper remains an attribute of this module (``bt.DiffusionSolver`` still
+# works and tab-completes); the namespaces above are the documented way to
+# find them.  Retired spellings resolve through ``__getattr__`` and warn.

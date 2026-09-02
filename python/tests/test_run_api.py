@@ -6,6 +6,13 @@ import numpy as np
 import pytest
 
 import biotransport as bt
+from biotransport.run import CheckpointResult, run_checkpoints
+
+# run_checkpoints and CheckpointResult are deprecated in favour of
+# solve(save_times=...); these tests pin the legacy semantics until removal.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::biotransport._deprecation.BioTransportDeprecationWarning"
+)
 
 
 def _constant_problem() -> bt.Problem:
@@ -63,12 +70,12 @@ def test_run_checkpoints_rejects_invalid_times(checkpoints, error) -> None:
     mesh = bt.mesh_1d(4, 0.0, 1.0)
 
     with pytest.raises(error):
-        bt.run_checkpoints(mesh, checkpoints, diffusivity=0.0)
+        run_checkpoints(mesh, checkpoints, diffusivity=0.0)
 
 
 def test_run_checkpoints_returns_owned_fields_and_segment_diagnostics() -> None:
     mesh = bt.mesh_1d(4, 0.0, 1.0)
-    result = bt.run_checkpoints(
+    result = run_checkpoints(
         mesh,
         np.array([0.2, 0.1]),
         diffusivity=0.0,
@@ -76,7 +83,7 @@ def test_run_checkpoints_returns_owned_fields_and_segment_diagnostics() -> None:
         time_step=0.05,
     )
 
-    assert isinstance(result, bt.CheckpointResult)
+    assert isinstance(result, CheckpointResult)
     assert result.times == (0.1, 0.2)
     assert tuple(result) == result.times
     assert result.total_steps == 4
@@ -93,7 +100,7 @@ def test_run_checkpoints_returns_owned_fields_and_segment_diagnostics() -> None:
 def test_checkpoint_result_constructor_copies_and_checks_metadata() -> None:
     native = bt.solve(_constant_problem(), end_time=0.1, time_step=0.1)
     source = np.full(5, 2.0)
-    result = bt.CheckpointResult(
+    result = CheckpointResult(
         fields={0.1: source},
         diagnostics={0.1: native.diagnostics},
         total_steps=1,
@@ -103,7 +110,7 @@ def test_checkpoint_result_constructor_copies_and_checks_metadata() -> None:
     np.testing.assert_array_equal(result[0.1], 2.0)
     assert not result[0.1].flags.writeable
     with pytest.raises(ValueError, match="sum of segment"):
-        bt.CheckpointResult(
+        CheckpointResult(
             fields={0.1: source},
             diagnostics={0.1: native.diagnostics},
             total_steps=2,
@@ -115,15 +122,15 @@ def test_checkpoint_result_rejects_empty_or_inconsistent_fields() -> None:
     second = bt.solve(_constant_problem(), end_time=0.1, time_step=0.1).diagnostics
 
     with pytest.raises(ValueError, match="at least one"):
-        bt.CheckpointResult(fields={}, diagnostics={}, total_steps=0)
+        CheckpointResult(fields={}, diagnostics={}, total_steps=0)
     with pytest.raises(ValueError, match="must not be empty"):
-        bt.CheckpointResult(
+        CheckpointResult(
             fields={0.1: np.array([])},
             diagnostics={0.1: first},
             total_steps=1,
         )
     with pytest.raises(ValueError, match="same number"):
-        bt.CheckpointResult(
+        CheckpointResult(
             fields={0.1: np.ones(2), 0.2: np.ones(3)},
             diagnostics={0.1: first, 0.2: second},
             total_steps=2,
@@ -134,7 +141,7 @@ def test_checkpoint_result_rejects_diagnostic_time_mismatch() -> None:
     diagnostic = bt.solve(_constant_problem(), end_time=0.1, time_step=0.1).diagnostics
 
     with pytest.raises(ValueError, match="segment duration"):
-        bt.CheckpointResult(
+        CheckpointResult(
             fields={0.2: np.ones(5)},
             diagnostics={0.2: diagnostic},
             total_steps=1,
@@ -159,7 +166,7 @@ def test_checkpoint_result_requires_exact_diagnostic_times(
     ).diagnostics
 
     with pytest.raises(ValueError, match="segment duration"):
-        bt.CheckpointResult(
+        CheckpointResult(
             fields={checkpoint_time: np.ones(5)},
             diagnostics={checkpoint_time: diagnostic},
             total_steps=1,
@@ -174,7 +181,7 @@ def test_checkpoint_result_rejects_keys_that_collide_after_float_normalization()
     second = first + 1
 
     with pytest.raises(ValueError, match="strictly increasing"):
-        bt.CheckpointResult(
+        CheckpointResult(
             fields={first: np.ones(5), second: np.ones(5)},
             diagnostics={first: diagnostic, second: diagnostic},
             total_steps=2,
@@ -193,7 +200,7 @@ def test_checkpoint_result_rejects_non_real_numeric_fields(field) -> None:
     native = bt.solve(_constant_problem(), end_time=0.1, time_step=0.1)
 
     with pytest.raises(TypeError, match="real numeric"):
-        bt.CheckpointResult(
+        CheckpointResult(
             fields={0.1: field},
             diagnostics={0.1: native.diagnostics},
             total_steps=1,
@@ -205,7 +212,7 @@ def test_checkpoint_result_rejects_masked_field_values() -> None:
     field = np.ma.array(np.ones(5), mask=[False, False, True, False, False])
 
     with pytest.raises(ValueError, match="masked"):
-        bt.CheckpointResult(
+        CheckpointResult(
             fields={0.1: field},
             diagnostics={0.1: native.diagnostics},
             total_steps=1,
@@ -220,7 +227,7 @@ def test_run_checkpoints_matches_one_shot_when_dt_divides_every_segment() -> Non
         bt.Boundary.Right: bt.BoundaryCondition.dirichlet(0.0),
     }
 
-    checkpoints = bt.run_checkpoints(
+    checkpoints = run_checkpoints(
         mesh,
         [0.001, 0.002],
         diffusivity=0.1,
@@ -245,7 +252,7 @@ def test_run_checkpoints_enforces_max_steps_cumulatively() -> None:
     mesh = bt.mesh_1d(4, 0.0, 1.0)
 
     with pytest.raises(RuntimeError, match="cumulative max_steps"):
-        bt.run_checkpoints(
+        run_checkpoints(
             mesh,
             [0.1, 0.2],
             diffusivity=0.0,
@@ -280,11 +287,11 @@ def test_run_checkpoints_rejects_invalid_problem_data(keyword, value, error) -> 
     }
 
     with pytest.raises(error):
-        bt.run_checkpoints(**arguments)
+        run_checkpoints(**arguments)
 
 
 def test_run_checkpoints_owns_segment_time_keywords() -> None:
     mesh = bt.mesh_1d(4, 0.0, 1.0)
 
     with pytest.raises(TypeError, match="controls each segment end time"):
-        bt.run_checkpoints(mesh, [0.1], 0.0, end_time=0.1)
+        run_checkpoints(mesh, [0.1], 0.0, end_time=0.1)

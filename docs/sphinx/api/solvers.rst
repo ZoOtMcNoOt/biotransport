@@ -71,11 +71,19 @@ class does not implement.
 Python reference and legacy time surfaces
 -----------------------------------------
 
-These APIs have separate :class:`PythonNumericalContract` records and do not
-claim native performance.  ``integrate`` requires ``method``:
+.. currentmodule:: biotransport.reference
+
+These APIs live in :mod:`biotransport.reference`. They have separate
+:class:`~biotransport.PythonNumericalContract` records and do not claim native
+performance. The root-level spellings (``bt.integrate``, ``bt.solve_adaptive``,
+``bt.NewtonRaphsonSolver`` and the rest) are deprecated and warn; write
+``bt.reference.integrate`` instead. ``integrate`` requires ``method``:
 ``integrate(method="euler")`` uses the canonical native Euler path, while
 ``"heun"`` and ``"rk4"`` are legacy Python reference integrators for 1D uniform
 diffusion with Dirichlet ends.
+
+.. automodule:: biotransport.reference
+   :no-members:
 
 .. autoclass:: AdaptiveTimeStepper
    :members:
@@ -93,9 +101,9 @@ diffusion with Dirichlet ends.
 
 .. autofunction:: integrate
 
-.. autofunction:: integrate_explicit_runge_kutta
+.. autofunction:: biotransport.high_order.integrate_explicit_runge_kutta
 
-.. autoclass:: HighOrderDiffusionSolver
+.. autoclass:: biotransport.high_order.HighOrderDiffusionSolver
    :members:
 
 .. autoclass:: NewtonRaphsonSolver
@@ -105,6 +113,8 @@ diffusion with Dirichlet ends.
    :members:
 
 .. autofunction:: solve_pulsatile
+
+.. currentmodule:: biotransport
 
 Inspect :func:`get_python_numerical_contract` for each backend, failure policy,
 evidence, and retain/port/deprecate disposition.  Newton iteration exhaustion

@@ -200,9 +200,22 @@ File utilities
 .. autofunction:: get_result_path
 
 
-Run and checkpoint helpers
---------------------------
+Namespaces and tiers
+--------------------
 
-The canonical :func:`run`, :func:`run_checkpoints`, and
-:class:`CheckpointResult` APIs are documented with their numerical semantics
-on :doc:`solvers`.
+``biotransport.__all__`` names the canonical path only: :class:`Problem`,
+:func:`solve`, :class:`Result`, :func:`solve_until`, the meshes, boundary and
+field helpers, :func:`plot` and the VTK writers, plus the namespaces
+``diffusion``, ``electrochem``, ``flow``, ``applications``, ``balance``,
+``reference``, ``stepping``, ``analysis``, ``convergence``, ``contracts``,
+``high_order``, ``provenance``, ``reproducibility`` and ``units``.  Every
+specialized native class remains an attribute of the root (``bt.DiffusionSolver``
+still works and tab-completes); the namespaces are the documented way to find
+them.  Retired spellings resolve with a :class:`BioTransportDeprecationWarning`
+and are listed in the changelog.
+
+The balance-accounting objects documented above are also grouped in
+:mod:`biotransport.balance` together with :func:`balance_residual`.
+
+The deprecated ``run``, ``run_checkpoints`` and ``CheckpointResult`` helpers are
+documented with their numerical semantics on :doc:`solvers`.

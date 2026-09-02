@@ -17,6 +17,7 @@ from importlib import import_module
 from pathlib import Path
 
 import biotransport as bt
+from biotransport._deprecation import ROOT_DEPRECATED, ROOT_LAZY
 import biotransport._core as core_pkg
 
 SNAPSHOT_PATH = Path(__file__).with_name("data") / "public_surface.json"
@@ -32,6 +33,9 @@ NAMESPACES = (
     "provenance",
     "reproducibility",
     "units",
+    "balance",
+    "reference",
+    "stepping",
 )
 
 
@@ -42,6 +46,8 @@ def current_surface() -> dict[str, object]:
     }
     return {
         "root_all": sorted(bt.__all__),
+        "root_lazy": sorted(ROOT_LAZY),
+        "root_deprecated": sorted(ROOT_DEPRECATED),
         "namespaces": namespaces,
         "core_all": sorted(core_pkg.__all__),
     }

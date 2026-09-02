@@ -10,16 +10,12 @@ native_result: bt.TransportResult = bt.solve_transport(problem, options)
 python_result: bt.Result = bt.solve(problem, end_time=0.01)
 steps: int = python_result.diagnostics.steps
 field = native_result.concentration
-checkpoint_result: bt.CheckpointResult = bt.run_checkpoints(
-    mesh,
-    [0.01, 0.02],
-    0.1,
-    initial_condition=1.0,
-    time_step=0.001,
+snapshot_result: bt.Result = bt.solve(
+    problem, end_time=0.02, time_step=0.001, save_times=[0.01, 0.02]
 )
-checkpoint_steps: int = checkpoint_result.total_steps
-checkpoint_field = checkpoint_result[0.02]
-adaptive_config = bt.AdaptiveTimeStepperConfig(max_factor=1.5)
+snapshots: bt.Snapshots = snapshot_result.snapshots
+snapshot_field = snapshots[0.02]
+adaptive_config = bt.reference.AdaptiveTimeStepperConfig(max_factor=1.5)
 adaptive_max_factor: float = adaptive_config.max_factor
 
 
