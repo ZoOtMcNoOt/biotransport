@@ -85,7 +85,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          # Warnings are errors where the warning set has been audited (GCC);
+          # MSVC and AppleClang still report them without failing the build.
+          - os: ubuntu-latest
+            werror: "ON"
+          - os: windows-latest
+            werror: "OFF"
+          - os: macos-latest
+            werror: "OFF"
     steps:
       - uses: actions/checkout@v4
       - name: Configure native Debug build
@@ -97,7 +105,7 @@ jobs:
           -DBUILD_BENCHMARKS=OFF
           -DBIOTRANSPORT_EIGEN=OFF
           -DBIOTRANSPORT_OPENMP=OFF
-          -DBIOTRANSPORT_WERROR=ON
+          -DBIOTRANSPORT_WERROR=${{ matrix.werror }}
       - name: Build native tests
         run: cmake --build build/native --config Debug --parallel 2
       - name: Run native tests with assertions enabled

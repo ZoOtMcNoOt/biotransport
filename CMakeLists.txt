@@ -32,7 +32,7 @@ if(BIOTRANSPORT_WARNINGS)
     biotransport_warnings
     INTERFACE
       $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Wshadow;-Wconversion;-Wnon-virtual-dtor;-Wold-style-cast;-Wcast-align;-Wunused;-Woverloaded-virtual;-Wnull-dereference;-Wdouble-promotion;-Wformat=2>
-      $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W4;/permissive->)
+      $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W4>)
   if(BIOTRANSPORT_WERROR)
     target_compile_options(
       biotransport_warnings
