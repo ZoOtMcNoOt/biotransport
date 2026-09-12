@@ -33,8 +33,10 @@ jobs:
       - name: Check experiment editor operations
         run: node --test tests/frontend/studio-model.test.mjs
       - name: Check native API typing contract
+        env:
+          MYPYPATH: python
         run: >-
-          python -m mypy --no-incremental --ignore-missing-imports
+          python -m mypy --no-incremental --no-site-packages --ignore-missing-imports
           python/biotransport/_core/_core.pyi
           python/tests/typing/api_smoke.py
 

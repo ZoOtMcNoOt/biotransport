@@ -12,11 +12,27 @@ inspection. There was substantial uncommitted scientific API, geometry,
 documentation and example work already present. Its 66 changed files were
 snapshotted, with hashes and a patch, under
 `build/workbench-validation/baseline/` before this increment. That work was
-extended in place. No commit, push or deployment is part of this record.
+extended in place. The completed increment was committed and pushed to `master`
+as `85ef2a556a7af0a846808cb78e47cfe5c4d93173` on 12 September 2026.
 
 The follow-on extension began from a second snapshot of 90 changed files in
 `build/extension-validation/baseline/`. Both snapshots and the first installed
-wheel are retained. The current work remains local on the same branch and HEAD.
+wheel are retained.
+
+## Current priority
+
+The user has deferred further UI work. The next increment focuses on a simple
+Python API for multiple physical domains, named species, conservative membrane
+coupling and stoichiometric reactions, with inspectable sparse operators and
+independent numerical verification.
+
+The first pushed revision passed all native, Python and packaging CI jobs.
+CI exposed typing checks masked by a local installed package and a Sphinx source
+path that shadowed the installed wheel. The fixes require source-based typing
+and real native imports for documentation. Locally, 416 affected Python tests,
+Ruff, source-based mypy and a strict Sphinx build importing the installed wheel
+pass. Evidence is in `build/extension-validation/ci-fix-pytest.log` and
+`ci-docs-fix.log`. Remote CI acceptance is pending the repair push.
 
 ## Follow-on extension: completed
 

@@ -1621,11 +1621,12 @@ class NonlinearDiffusionSolver:
             if kind == "dirichlet":
                 residual[index] = u[index] - value
             elif value != 0.0 and area > 0.0:
-                diffusivity = (
-                    self._scalar_diffusivity
-                    if self._scalar_diffusivity is not None
-                    else self._nodal_diffusivity[index]
-                )
+                if self._scalar_diffusivity is not None:
+                    diffusivity = self._scalar_diffusivity
+                elif self._nodal_diffusivity is not None:
+                    diffusivity = self._nodal_diffusivity[index]
+                else:
+                    raise AssertionError("Internal error: diffusivity is missing")
                 # -div(D grad u) includes -D*(du/dn)*A/V at either wall.
                 # Keep the reaction/source already present on this half-cell.
                 residual[index] -= (diffusivity * value) * (area / self._volumes[index])

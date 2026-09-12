@@ -404,7 +404,7 @@ def solve_steady(
         recipe, concentration_scale=concentration_scale, rate_scale=rate_scale
     )
     if reaction is not None:
-        active = []
+        active: list[Any] = []
         for term in recipe.reactions:
             if term.mode == "replace":
                 active.clear()

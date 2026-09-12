@@ -1267,6 +1267,8 @@ def integrate(
         )
         elapsed = time_module.perf_counter() - start
         diagnostics = run_result.diagnostics
+        if diagnostics is None:
+            raise RuntimeError("transient solve did not return diagnostics")
         return IntegrationResult(
             solution=np.asarray(run_result.concentration, dtype=float).copy(),
             time=float(run_result.time),

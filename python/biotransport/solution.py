@@ -935,13 +935,13 @@ class Solution:
                     "a 2D solution cannot be drawn as a line; try kind='contour', "
                     "'heatmap' or 'surface'"
                 )
-            requested = self.time if times is None else times
-            if isinstance(requested, (list, tuple)) and len(requested) != 1:
+            requested = np.asarray(self.time if times is None else times)
+            if requested.ndim > 1 or requested.size != 1:
                 raise ValueError(
                     "2D plots draw one frame at a time; pass a single time, or "
                     "call sol.animate() to see the evolution"
                 )
-            when = requested[0] if isinstance(requested, (list, tuple)) else requested
+            when = requested.reshape(-1)[0]
             ax = self._plot_2d(
                 float(when),
                 kind="contour" if kind == "auto" else kind,

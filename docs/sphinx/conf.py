@@ -1,11 +1,8 @@
 # Configuration file for the Sphinx documentation builder.
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
-import os
-import sys
-
-# Add Python package to path
-sys.path.insert(0, os.path.abspath("../../python"))
+# Document the installed package, including its native extension. Injecting the
+# source directory here shadows a clean wheel install with unbuilt Python files.
 
 # -- Project information -----------------------------------------------------
 project = "BioTransport"
@@ -86,27 +83,15 @@ html_theme_options = {
 }
 
 # -- Options for autodoc -----------------------------------------------------
-# Only mock the compiled extension when it genuinely is not importable.
-#
-# Mocking it unconditionally is worse than it looks: every pybind11 class becomes
-# an empty stand-in, so the whole native API renders with a heading and no
-# members, and the build still reports success. When the package is installed --
-# which it is in CI and in any editable dev checkout -- autodoc should import the
-# real module and document the real signatures.
+# A successful build must describe real native signatures, not mocked classes.
 try:  # pragma: no cover - documentation build only
     import biotransport._core._core  # noqa: F401
+except ImportError as error:  # pragma: no cover - documentation build only
+    raise RuntimeError(
+        "Install BioTransport and its native extension with "
+        "`pip install '.[docs]'` before building the documentation."
+    ) from error
 
-    autodoc_mock_imports = []
-    _native_available = True
-except ImportError:  # pragma: no cover - documentation build only
-    autodoc_mock_imports = ["biotransport._core._core"]
-    _native_available = False
-    suppress_warnings = ["autodoc.mocked_object"]
-    print(
-        "conf.py: the compiled extension is not importable, so the native API "
-        "reference will be mocked and incomplete. Build it with "
-        "`pip install -e .` for complete docs."
-    )
 
 def _escape_rst_substitutions(app, what, name, obj, options, lines):
     """Stop maths notation in docstrings from being parsed as RST markup.

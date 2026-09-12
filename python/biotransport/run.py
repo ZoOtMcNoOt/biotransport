@@ -608,7 +608,7 @@ def _solve_in_segments(
                     f"reaching t={checkpoints[-1]:g}. Raise max_steps, or shorten "
                     f"end_time."
                 )
-            if needs_clock_shift:
+            if needs_clock_shift and recipe is not None:
                 recipe.replay_reactions(problem, elapsed)
             # Native call: the field is already validated, and going through a
             # recording override would be redundant work inside the loop.
@@ -634,7 +634,7 @@ def _solve_in_segments(
             elapsed = target
     finally:
         # Leave the problem exactly as the caller configured it.
-        if needs_clock_shift:
+        if needs_clock_shift and recipe is not None:
             recipe.replay_reactions(problem, 0.0)
         TransportProblem.initial_condition(problem, starting_field.tolist())
 
@@ -791,8 +791,11 @@ def run_checkpoints(
         concentration = result.concentration
         current = concentration.tolist()
         fields[target_time] = concentration
-        diagnostics[target_time] = result.diagnostics
-        total_steps += int(result.diagnostics.steps)
+        segment_diagnostics = result.diagnostics
+        if segment_diagnostics is None:
+            raise RuntimeError("transient solve did not return diagnostics")
+        diagnostics[target_time] = segment_diagnostics
+        total_steps += int(segment_diagnostics.steps)
         current_time = target_time
 
     return CheckpointResult(
