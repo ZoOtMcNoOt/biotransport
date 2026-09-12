@@ -60,11 +60,18 @@ def _require_structured_mesh(mesh) -> bool:
     return bool(is_1d())
 
 
-def _finite_values(values: np.ndarray, name: str) -> list[float]:
+def _finite_values(values: np.ndarray, name: str) -> np.ndarray:
+    """Flatten to a float64 node vector, rejecting non-finite results.
+
+    These return NumPy arrays rather than lists so the obvious arithmetic does
+    the obvious thing: ``2 * bt.gaussian(mesh)`` scales the field, and adding two
+    of them superposes them. With lists, both would silently change the length.
+    """
+
     flattened = np.asarray(values, dtype=np.float64).reshape(-1, order="C")
     if not np.all(np.isfinite(flattened)):
         raise ValueError(f"{name} parameters produced non-finite values")
-    return flattened.tolist()
+    return flattened
 
 
 def gaussian(
@@ -90,7 +97,7 @@ def gaussian(
         center_y: Y center for 2D (overrides center)
 
     Returns:
-        list: Initial condition values for all mesh nodes
+        One value per mesh node, as a NumPy array.
 
     Example:
         >>> ic = bt.gaussian(mesh, center=0.5, width=0.1)  # 1D
@@ -148,7 +155,7 @@ def step(mesh, position: float = 0.5, left: float = 1.0, right: float = 0.0):
         right: Value for x >= position (default 0.0)
 
     Returns:
-        list: Initial condition values
+        One value per mesh node, as a NumPy array.
 
     Example:
         >>> ic = bt.step(mesh, position=0.3, left=1.0, right=0.0)
@@ -173,14 +180,14 @@ def uniform(mesh, value: float = 0.0):
         value: Constant value everywhere (default 0.0)
 
     Returns:
-        list: Initial condition values
+        One value per mesh node, as a NumPy array.
 
     Example:
         >>> ic = bt.uniform(mesh, 1.0)
     """
     node_count = _validated_node_count(mesh)
     value = _finite_float(value, "value")
-    return [value] * node_count
+    return np.full(node_count, value, dtype=np.float64)
 
 
 def circle(
@@ -204,7 +211,7 @@ def circle(
         outside: Value outside circle (default 0.0)
 
     Returns:
-        list: Initial condition values
+        One value per mesh node, as a NumPy array.
 
     Example:
         >>> ic = bt.circle(mesh, center_x=0.5, center_y=0.5, radius=0.1)
@@ -238,7 +245,7 @@ def sinusoidal(mesh, periods: float = 1.0, amplitude: float = 1.0, offset: float
         offset: Vertical offset (default 0.0)
 
     Returns:
-        list: Initial condition values
+        One value per mesh node, as a NumPy array.
 
     Example:
         >>> ic = bt.sinusoidal(mesh, periods=2, amplitude=0.5)

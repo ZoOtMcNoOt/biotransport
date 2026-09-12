@@ -15,6 +15,7 @@ compliance with JCGM or ASME procedures.
 ```python
 from typing import Mapping
 
+import biotransport as bt
 from biotransport.analysis import (
     ParameterRange,
     local_sensitivity,
@@ -22,14 +23,29 @@ from biotransport.analysis import (
     standardized_regression_coefficients,
 )
 
+L = 200.0e-6                       # 200 um of tissue
+mesh = bt.mesh_1d(50, 0.0, L)
+
+def run_model(D: float, k: float) -> float:
+    # Construct a BioTransport problem, run its native solver, and reduce the
+    # returned field to one explicitly defined scalar QoI. Here: the steady
+    # amount retained in a slab fed at one face and consumed first order.
+    problem = (
+        bt.Problem(mesh)
+        .diffusivity(D)
+        .linear_decay(k)
+        .initial(0.0)
+        .dirichlet("left", 1.0)
+        .sealed("right")
+    )
+    return float(bt.solve_steady(problem).total())
+
 parameters = [
     ParameterRange("D", nominal=1.0e-9, lower=0.7e-9, upper=1.3e-9),
     ParameterRange("k", nominal=0.2, lower=0.1, upper=0.4),
 ]
 
 def quantity_of_interest(values: Mapping[str, float]) -> float:
-    # Construct a BioTransport problem, run its native solver, and reduce the
-    # returned field to one explicitly defined scalar QoI.
     return run_model(D=values["D"], k=values["k"])
 
 local = local_sensitivity(quantity_of_interest, parameters)
@@ -59,15 +75,15 @@ interactions among simultaneously changing inputs.
 
 ### Central local sensitivity
 
-For parameter (x_i), the numerical derivative is
+For parameter $x_i$, the numerical derivative is
 
-\[
+$$
 \frac{\partial y}{\partial x_i}
 \approx
 \frac{y(x_i+h_i)-y(x_i-h_i)}{2h_i}.
-\]
+$$
 
-The default step is (10^{-4}) times the larger of the nominal magnitude and
+The default step is $10^{-4}$ times the larger of the nominal magnitude and
 half the declared range. `absolute_steps` can override individual steps. Both
 perturbations must remain inside the declared bounds. A nominal value on a bound
 therefore raises; the routine never silently substitutes a one-sided formula.
@@ -75,10 +91,10 @@ therefore raises; the routine never silently substitutes a one-sided formula.
 Two dimensionless normalizations are available:
 
 - `normalization="elasticity"` (default):
-  ((x_i/y)(\partial y/\partial x_i)). For a local power law it is the local
+  $(x_i/y)(\partial y/\partial x_i)$. For a local power law it is the local
   exponent. It requires nonzero nominal inputs and a nonzero baseline QoI.
 - `normalization="range"`:
-  (((x_{i,max}-x_{i,min})/y)(\partial y/\partial x_i)). This supports a zero
+  $((x_{i,max}-x_{i,min})/y)(\partial y/\partial x_i)$. This supports a zero
   nominal input but still requires a nonzero baseline QoI.
 
 Sensitivity to the chosen step should be checked for expensive, noisy, or
@@ -89,8 +105,8 @@ measure.
 
 `latin_hypercube` uses an explicit NumPy PCG64 generator. The default seed is
 fixed at zero, and scientific artifacts should still state the seed explicitly.
-For (N) samples, every parameter has one randomly jittered point in each of
-its (N) equal-probability marginal strata, followed by an independent
+For $N$ samples, every parameter has one randomly jittered point in each of
+its $N$ equal-probability marginal strata, followed by an independent
 permutation. Repeating the same call with the same inputs and seed reproduces the
 same design.
 
@@ -144,12 +160,12 @@ defensibly by the caller.
 
 `standardized_regression_coefficients` fits a multiple linear regression to
 standardized inputs and standardized output. Inputs declared `log_uniform` are
-first transformed with the natural logarithm. For standardized column (z_i),
+first transformed with the natural logarithm. For standardized column $z_i$,
 the fitted screening model is
 
-\[
+$$
 z_y = \sum_i \beta_i z_i + \epsilon.
-\]
+$$
 
 The returned β values are standardized regression coefficients (SRCs). Their
 signs describe fitted linear association within this design, and their absolute
@@ -157,18 +173,18 @@ magnitudes can screen relative linear influence. The result also reports:
 
 - matrix rank and singular values;
 - the standardized design condition number;
-- in-sample (R^2) and adjusted (R^2); and
+- in-sample $R^2$ and adjusted $R^2$; and
 - standardized residual root-mean-square error.
 
-The fit requires at least (p+2) successful rows for (p) parameters, nonzero
+The fit requires at least $p+2$ successful rows for $p$ parameters, nonzero
 input and output variance, full column rank, and a condition number no larger
-than `max_condition_number` (default (10^8)). Violations raise rather than
+than `max_condition_number` (default $10^8$). Violations raise rather than
 returning an unstable ranking.
 
 SRCs are only defensible as a **linear-association screening metric** for the
-sampled design. A low (R^2) indicates that the linear surrogate is inadequate;
+sampled design. A low $R^2$ indicates that the linear surrogate is inadequate;
 small SRCs can then coexist with strong nonlinear or interaction effects. A high
-(R^2) does not validate the transport model, and no SRC establishes causality.
+$R^2$ does not validate the transport model, and no SRC establishes causality.
 
 ## Reporting checklist
 
@@ -183,7 +199,7 @@ For a reproducible scientific artifact, record:
 - local finite-difference steps and normalization;
 - sample method, count, seed, and requested quantiles;
 - all failed-evaluation counts and reasons;
-- SRC rank, condition number, (R^2), and residual diagnostic; and
+- SRC rank, condition number, $R^2$, and residual diagnostic; and
 - the exact scope of any conclusion.
 
 The runnable, plotting-free example is

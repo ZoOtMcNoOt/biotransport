@@ -209,13 +209,54 @@ def run_hindered_diffusion():
     print(
         f"  Flux reduction: {100 * (1 - result_hindered.flux / result_bulk.flux):.1f}%"
     )
+
+    profile_bulk = np.asarray(result_bulk.concentration())
+    profile_hindered = np.asarray(result_hindered.concentration())
+    print(
+        "  Max |bulk profile - hindered profile| = "
+        f"{np.max(np.abs(profile_bulk - profile_hindered)):.3e} mol/m^3"
+    )
     print(
         "  The steady profiles coincide because fixed partitioned boundary "
         "concentrations set the linear profile; hindrance changes the flux."
     )
+    print("  Only one profile is drawn; the flux comparison is plotted instead.")
+
+    # Sweep solute size so the comparison panel shows two curves that differ
+    radii = np.linspace(0.5e-9, 9.0e-9, 30)
+    flux_bulk_sweep = np.full_like(radii, result_bulk.flux)
+    flux_hindered_sweep = np.empty_like(radii)
+    for k, r_solute in enumerate(radii):
+        sweep_solver = (
+            bt.MembraneDiffusion1DSolver()
+            .set_membrane_thickness(L)
+            .set_diffusivity(D_bulk)
+            .set_partition_coefficient(Phi)
+            .set_left_concentration(C_blood)
+            .set_right_concentration(C_dialysate)
+            .set_hindered_diffusion(float(r_solute), pore_radius)
+        )
+        flux_hindered_sweep[k] = sweep_solver.solve().flux
+
+    mass_bulk = flux_bulk_sweep * albumin_molar_mass * 1000.0
+    mass_hindered = flux_hindered_sweep * albumin_molar_mass * 1000.0
+    print("\nFlux vs solute size (the two plotted curves):")
+    print(
+        f"  Unhindered flux is flat at {mass_bulk[0]:.4e} g/(m^2*s) "
+        f"for every solute radius"
+    )
+    print(
+        f"  Hindered flux falls from {mass_hindered[0]:.4e} to "
+        f"{mass_hindered[-1]:.4e} g/(m^2*s) over r = "
+        f"{radii[0] * 1e9:.1f}-{radii[-1] * 1e9:.1f} nm"
+    )
+    print(
+        f"  Max separation between the curves: "
+        f"{np.max(np.abs(mass_bulk - mass_hindered)):.4e} g/(m^2*s)"
+    )
 
     # Plot hindrance curve
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
     # Hindrance factor vs lambda
     ax1 = axes[0]
@@ -237,28 +278,51 @@ def run_hindered_diffusion():
     ax1.set_xlim(0, 1)
     ax1.set_ylim(0, 1)
 
-    # Concentration profiles
+    # Concentration profile - a single curve, because bulk and hindered cases
+    # share the same linear steady profile set by the partitioned boundaries.
     ax2 = axes[1]
     x_um = result_bulk.x() * 1e6
     ax2.plot(
         x_um,
-        np.asarray(result_bulk.concentration()) * albumin_molar_mass,
+        profile_bulk * albumin_molar_mass,
         "b-",
         linewidth=2,
-        label="Bulk diffusion",
-    )
-    ax2.plot(
-        x_um,
-        np.asarray(result_hindered.concentration()) * albumin_molar_mass,
-        "r--",
-        linewidth=2,
-        label="Hindered diffusion",
+        label="Bulk and hindered (identical)",
     )
     ax2.set_xlabel("Position in membrane (um)")
     ax2.set_ylabel("Albumin concentration (g/L)")
-    ax2.set_title("Concentration Profiles")
+    ax2.set_title("Steady Profile (same for both cases)")
     ax2.legend()
     ax2.grid(True, alpha=0.3)
+
+    # Flux comparison - this is where hindrance actually shows up
+    ax3 = axes[2]
+    ax3.plot(
+        radii * 1e9,
+        mass_bulk,
+        "b-",
+        linewidth=2,
+        label="Unhindered (bulk D)",
+    )
+    ax3.plot(
+        radii * 1e9,
+        mass_hindered,
+        "r--",
+        linewidth=2,
+        label="Hindered (Renkin)",
+    )
+    ax3.axvline(
+        x=solute_radius * 1e9,
+        color="k",
+        linestyle=":",
+        alpha=0.6,
+        label=f"Albumin ({solute_radius * 1e9:.1f} nm)",
+    )
+    ax3.set_xlabel("Solute radius (nm)")
+    ax3.set_ylabel("Mass flux (g/(m^2*s))")
+    ax3.set_title(f"Flux vs Solute Size (pore R = {pore_radius * 1e9:.0f} nm)")
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
 
     plt.tight_layout()
     plt.savefig(bt.get_result_path("hindered_diffusion.png", EXAMPLE_NAME))
@@ -332,10 +396,15 @@ def run_multilayer_skin():
     R_total = R_sc + R_epi + R_dermis
 
     print("\nLayer resistances (s/m):")
-    print(f"  Stratum corneum: {R_sc:.2e} ({100 * R_sc / R_total:.1f}%)")
-    print(f"  Epidermis: {R_epi:.2e} ({100 * R_epi / R_total:.1f}%)")
-    print(f"  Dermis: {R_dermis:.2e} ({100 * R_dermis / R_total:.1f}%)")
+    print(f"  Stratum corneum: {R_sc:.2e} ({100 * R_sc / R_total:.4f}%)")
+    print(f"  Epidermis: {R_epi:.2e} ({100 * R_epi / R_total:.4f}%)")
+    print(f"  Dermis: {R_dermis:.2e} ({100 * R_dermis / R_total:.4f}%)")
     print(f"  Total: {R_total:.2e}")
+    print(
+        f"  Stratum corneum is {R_sc / R_epi:.0f}x the epidermis and "
+        f"{R_sc / R_dermis:.0f}x the dermis, so a linear share plot would be a "
+        "single wedge. The figure uses a log-scale bar chart instead."
+    )
 
     # Plot concentration profile through all layers
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
@@ -362,13 +431,26 @@ def run_multilayer_skin():
     ax1.legend(loc="upper right")
     ax1.grid(True, alpha=0.3)
 
-    # Resistance pie chart
+    # Resistance bar chart on a log axis. The three resistances span four
+    # decades, so a pie chart would collapse into a single 100% wedge.
     ax2 = axes[1]
     labels = ["Stratum corneum", "Epidermis", "Dermis"]
     sizes = [R_sc, R_epi, R_dermis]
     colors = ["#ff6b6b", "#4ecdc4", "#45b7d1"]
-    ax2.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
-    ax2.set_title("Resistance Distribution")
+    bars = ax2.barh(labels, sizes, color=colors)
+    ax2.set_xscale("log")
+    ax2.set_xlim(min(sizes) / 5, max(sizes) * 20)
+    ax2.set_xlabel("Diffusive resistance L/(D*Phi)  (s/m, log scale)")
+    ax2.set_title("Layer Resistances (log scale)")
+    ax2.grid(True, alpha=0.3, axis="x", which="both")
+    for bar, size in zip(bars, sizes):
+        ax2.text(
+            size * 1.4,
+            bar.get_y() + bar.get_height() / 2,
+            f"{size:.2e} ({100 * size / R_total:.3f}%)",
+            va="center",
+            fontsize=9,
+        )
 
     plt.tight_layout()
     plt.savefig(bt.get_result_path("multilayer_skin.png", EXAMPLE_NAME))

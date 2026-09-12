@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>BioTransport · Experiment workbench</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Skip to experiment</a>
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="BioTransport home">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <path d="M6 8h20M6 16h20M6 24h20" />
+          <circle cx="11" cy="8" r="3" />
+          <circle cx="21" cy="16" r="3" />
+          <circle cx="14" cy="24" r="3" />
+        </svg>
+        <strong>BioTransport</strong><span>Studio</span>
+      </a>
+      <span class="local-badge"
+        ><span class="status-dot"></span>Local workspace</span
+      >
+      <button
+        id="help-button"
+        class="header-button"
+        aria-expanded="false"
+        aria-controls="help"
+      >
+        How it works
+      </button>
+    </header>
+    <section id="help" class="help-panel" hidden>
+      <h2>From a question to a model you can check.</h2>
+      <p>
+        Choose an example. Drag a component onto the experiment, or select its
+        add button. Select any component to edit its parameters, then run the
+        simulation. The plots show actual saved frames; all frames share the
+        same concentration scale.
+      </p>
+      <p>
+        Distances use metres, times use seconds, and concentration uses your
+        chosen consistent scale. Example values are illustrative. This first
+        workbench supports one scalar field on a 1D slab, cylinder, or sphere.
+        Python remains available for the library’s other solvers.
+      </p>
+    </section>
+    <div class="project-bar">
+      <div class="project-title">
+        <span class="project-symbol" aria-hidden="true">/</span
+        ><label class="sr-only" for="experiment-name">Experiment name</label
+        ><input
+          id="experiment-name"
+          value="Loading experiment…"
+          maxlength="120"
+        /><span id="edit-state">Ready</span>
+      </div>
+      <div class="project-actions">
+        <button id="undo-button" disabled>Undo</button>
+        <button id="import-button">Open JSON</button>
+        <button id="export-button">Save JSON</button>
+        <button id="run-button" class="run-button" disabled>
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M6 3l10 7-10 7z" />
+          </svg>
+          <span>Run simulation</span>
+        </button>
+        <input
+          id="import-file"
+          type="file"
+          accept=".json,application/json"
+          hidden
+        />
+      </div>
+    </div>
+    <main id="workspace" class="workspace" tabindex="-1">
+      <aside class="library" aria-labelledby="library-title">
+        <div class="panel-heading">
+          <h2 id="library-title">Components</h2>
+          <span class="count" id="component-count"></span>
+        </div>
+        <p class="panel-intro">
+          Drag onto your experiment.<br />Or use the add buttons.
+        </p>
+        <div id="component-library"></div>
+        <div class="library-foot">
+          <span class="status-dot"></span>
+          <p>
+            One model, everywhere.<br /><span
+              >Save it here. Extend it in Python.</span
+            >
+          </p>
+        </div>
+      </aside>
+      <div class="main-column">
+        <section class="experiment-section" aria-labelledby="model-title">
+          <div class="section-heading">
+            <div>
+              <h1 id="model-title">Your experiment</h1>
+              <p>Set the space. Add the physics. See what changes.</p>
+            </div>
+            <div class="example-picker">
+              <label for="example-select">Start from</label
+              ><select id="example-select">
+                <option>Loading examples…</option>
+              </select>
+            </div>
+          </div>
+          <div
+            id="model-canvas"
+            class="model-canvas"
+            aria-label="Experiment canvas, drop components here"
+          >
+            <div class="canvas-topline">
+              <span id="domain-caption">1D transport domain</span
+              ><span class="canvas-hint">Select a component to edit</span>
+            </div>
+            <div class="domain-model">
+              <button
+                id="boundary-left"
+                class="boundary-node"
+                aria-label="Edit left boundary"
+              >
+                <span class="boundary-icon" aria-hidden="true"></span
+                ><strong>Left face</strong><span id="left-caption"></span>
+              </button>
+              <button id="domain-button" class="domain-node">
+                <span class="domain-title" id="domain-title">Slab</span
+                ><svg
+                  id="domain-art"
+                  viewBox="0 0 520 66"
+                  role="img"
+                  aria-label="One dimensional discretized transport domain"
+                ></svg
+                ><span class="domain-scale"
+                  ><span>0</span><span id="domain-size">10 mm</span></span
+                >
+              </button>
+              <button
+                id="boundary-right"
+                class="boundary-node"
+                aria-label="Edit right boundary"
+              >
+                <span class="boundary-icon" aria-hidden="true"></span
+                ><strong>Right face</strong><span id="right-caption"></span>
+              </button>
+            </div>
+            <div class="physics-heading">
+              <span>Model components</span
+              ><span id="model-equation">∂c/∂t = ∇·(D∇c)</span>
+            </div>
+            <div id="model-components" class="model-components"></div>
+            <p class="drop-hint">
+              Drop a component here to add it to the model
+            </p>
+          </div>
+        </section>
+        <section class="results-section" aria-labelledby="results-title">
+          <div class="results-heading">
+            <div>
+              <h2 id="results-title">Explore the result</h2>
+              <p id="result-caption">
+                Run your experiment to see how the concentration changes.
+              </p>
+            </div>
+            <button id="csv-button" disabled>Export CSV</button>
+          </div>
+          <div id="run-error" class="error-panel" role="alert" hidden></div>
+          <div id="results-empty" class="results-empty">
+            <svg viewBox="0 0 300 85" aria-hidden="true">
+              <path d="M4 72h292M18 78V8" />
+              <path
+                class="empty-curve"
+                d="M22 66C72 66 72 12 146 12S222 66 294 66"
+              />
+            </svg>
+            <h3>A model is a question. Run it.</h3>
+            <p>
+              Your concentration profile, history, and checks will appear here.
+            </p>
+          </div>
+          <div id="results-content" hidden>
+            <div class="result-tabs" role="tablist" aria-label="Result view">
+              <button
+                role="tab"
+                id="profile-tab"
+                aria-selected="true"
+                aria-controls="plot-panel"
+              >
+                Concentration profile</button
+              ><button
+                role="tab"
+                id="history-tab"
+                aria-selected="false"
+                aria-controls="plot-panel"
+                tabindex="-1"
+              >
+                Space × time
+              </button>
+            </div>
+            <div id="plot-panel" role="tabpanel" aria-labelledby="profile-tab">
+              <div class="plot-legend">
+                <span><i class="legend-line"></i>Simulation</span
+                ><span id="reference-legend" hidden
+                  ><i class="legend-line dashed"></i>Exact reference</span
+                ><span id="plot-time"></span>
+              </div>
+              <svg
+                id="profile-plot"
+                class="profile-plot"
+                viewBox="0 0 800 290"
+                role="img"
+                aria-label="Concentration as a function of position"
+              ></svg>
+              <div id="heatmap-wrap" class="heatmap-wrap" hidden>
+                <canvas
+                  id="history-plot"
+                  width="960"
+                  height="280"
+                  role="img"
+                  aria-label="Concentration over position and time; dark teal represents higher concentration"
+                ></canvas>
+                <div class="heatmap-labels">
+                  <span id="heatmap-time"></span><span>Position →</span
+                  ><span id="heatmap-scale"></span>
+                </div>
+              </div>
+              <div class="playback">
+                <button id="play-button" aria-label="Play saved frames">
+                  Play</button
+                ><label class="sr-only" for="time-slider"
+                  >Saved time frame</label
+                ><input
+                  id="time-slider"
+                  type="range"
+                  min="0"
+                  max="40"
+                  value="40"
+                /><output id="time-readout" for="time-slider">0 s</output>
+              </div>
+            </div>
+            <div class="result-checks" id="result-checks"></div>
+            <div class="result-detail">
+              <details>
+                <summary>Understand the physics</summary>
+                <dl id="dimensionless"></dl>
+              </details>
+              <details>
+                <summary>Solver report</summary>
+                <pre id="solver-report"></pre>
+              </details>
+              <details>
+                <summary>View the saved data</summary>
+                <div class="table-scroll">
+                  <table id="result-table">
+                    <caption>
+                      Current frame, every mesh node
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Position (m)</th>
+                        <th scope="col">Concentration</th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </details>
+            </div>
+          </div>
+        </section>
+        <footer class="workspace-footer">
+          <span
+            >Illustrative experiments · Check model assumptions before drawing
+            conclusions.</span
+          ><span>Engine 0.1 · Alpha</span>
+        </footer>
+      </div>
+      <aside class="inspector" aria-labelledby="inspector-title">
+        <div class="panel-heading">
+          <h2 id="inspector-title">Properties</h2>
+          <span class="inspector-mark" aria-hidden="true"></span>
+        </div>
+        <div id="properties"></div>
+        <section class="run-settings" aria-labelledby="run-title">
+          <h2 id="run-title">Simulation</h2>
+          <label for="run-mode">Solve for</label
+          ><select id="run-mode">
+            <option value="transient">Evolution over time</option>
+            <option value="steady">Steady state</option>
+          </select>
+          <div id="time-settings">
+            <label for="duration">Duration <span>s</span></label
+            ><input
+              id="duration"
+              type="number"
+              min="0.000001"
+              step="any"
+              value="2000"
+            /><label for="frames">Saved intervals</label
+            ><input id="frames" type="number" min="1" max="120" value="40" />
+          </div>
+          <p id="method-note">
+            The engine chooses a stable time step for your model.
+          </p>
+          <section class="run-plan-panel" aria-labelledby="plan-title">
+            <h3 id="plan-title">Before you run</h3>
+            <div id="run-plan" aria-live="polite"><p>Checking this model…</p></div>
+          </section>
+          <p
+            id="run-status"
+            class="run-status"
+            role="status"
+            aria-live="polite"
+          >
+            Loading the engine…
+          </p>
+        </section>
+        <details class="python-panel">
+          <summary>Continue in Python</summary>
+          <p>The same experiment runs without this interface.</p>
+          <pre>
+import biotransport as bt
+import json
+
+with open("experiment.json") as f:
+    model = bt.Experiment.from_dict(
+        json.load(f)
+    )
+
+solution = model.run()
+solution.plot()</pre
+          >
+        </details>
+      </aside>
+    </main>
+    <div
+      id="announcement"
+      class="sr-only"
+      role="status"
+      aria-live="polite"
+    ></div>
+  </body>
+</html>

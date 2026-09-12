@@ -23,6 +23,7 @@ from ._core import (
     NonuniformMesh1D,
     NonuniformDiffusionDiagnostics,
     NonuniformDiffusion1D,
+    Geometry,
     StructuredMesh,
     StructuredMesh3D,
     Boundary3D,
@@ -68,8 +69,10 @@ from ._core import (
     SolverStats,
     SolveOptions,
     SolveDiagnostics,
+    TransportPlan,
     TransportResult,
     solve_transport,
+    plan_transport,
     # Advection-diffusion (Phase 2)
     AdvectionScheme,
     AdvectionDiffusionSolver,
@@ -83,7 +86,12 @@ from ._core import (
     renkin_hindrance,
     # BMEN 341 utilities
     dimensionless,
-    analytical,
+    # NOTE: `analytical` is deliberately NOT imported from ._core here. The
+    # Python module biotransport/analytical.py wraps every native helper with
+    # array broadcasting and adds the finite-domain series solutions, and it is
+    # imported further down as a submodule. Binding the native name at this
+    # point would win: `from . import analytical` skips the submodule import
+    # when the attribute already exists.
     # Fluid dynamics (Stokes & Navier-Stokes)
     VelocityBCType,
     VelocityBC,
@@ -150,7 +158,20 @@ from .mesh_utils import (
     mesh_1d,
     mesh_2d,
 )
+from .problem import Problem
+from .fluxes import FluxReport
+from .solution import ErrorReport, Solution
 from .run import CheckpointResult, run, run_checkpoints, solve
+from .steady import solve_steady
+from .experiment import (
+    ComponentDefinition,
+    ComponentRegistry,
+    Experiment,
+    ExperimentPlan,
+    ExperimentValidationError,
+    Parameter,
+    builtin_registry,
+)
 from .visualization import (
     plot_1d_solution,
     plot_2d_solution,
@@ -258,8 +279,12 @@ from .newton_raphson import (
 )
 
 # Discoverable, science-scoped API namespaces.
+# `analytical` deliberately shadows the native submodule imported above: the
+# Python module re-exports every native helper with array broadcasting added,
+# and adds the finite-domain series solutions. Scalar calls are unchanged.
 from . import (
     analysis,
+    analytical,
     applications,
     contracts,
     diffusion,
@@ -307,20 +332,23 @@ from .reproducibility import (
 from .units import Dimension, Quantity, Unit, convert, quantity
 
 # ============================================================================
-# User-friendly aliases
+# Older names, kept so existing scripts keep working
 # ============================================================================
 
-# "Problem" is the simplest, most intuitive name
-Problem = TransportProblem
-
-# Backward-compatible aliases for legacy code
-DiffusionProblem = TransportProblem
-LinearReactionDiffusionProblem = TransportProblem
-AdvectionDiffusionProblem = TransportProblem
+DiffusionProblem = Problem
+LinearReactionDiffusionProblem = Problem
+AdvectionDiffusionProblem = Problem
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "ComponentDefinition",
+    "ComponentRegistry",
+    "Experiment",
+    "ExperimentPlan",
+    "ExperimentValidationError",
+    "Parameter",
+    "builtin_registry",
     # ========== Discoverable namespaces ==========
     "diffusion",
     "electrochem",
@@ -386,11 +414,16 @@ __all__ = [
     "NonuniformDiffusionDiagnostics",
     "NonuniformDiffusion1D",
     # ========== Core (most commonly used) ==========
-    "Problem",  # The main problem builder (alias for TransportProblem)
-    "solve",  # Simplest way to run a simulation
-    "plot",  # Simplest way to visualize results
-    "mesh_1d",  # Create 1D mesh
+    "Problem",  # Build the physics
+    "solve",  # Run it
+    "solve_steady",  # Jump straight to the steady state
+    "Solution",  # What you get back
+    "ErrorReport",  # What Solution.compare() gives you
+    "FluxReport",  # What Solution.balance() gives you
+    "plot",  # Plot a bare mesh + array
+    "mesh_1d",  # Create 1D mesh (slab, cylindrical or spherical)
     "mesh_2d",  # Create 2D mesh
+    "Geometry",  # Coordinate system of a 1D mesh
     "x_nodes",  # Get x coordinates from mesh
     "y_nodes",  # Get y coordinates from mesh
     "xy_grid",  # Get 2D meshgrid
@@ -414,8 +447,10 @@ __all__ = [
     "SolverStats",
     "SolveOptions",
     "SolveDiagnostics",
+    "TransportPlan",
     "TransportResult",
     "solve_transport",
+    "plan_transport",
     "run",
     "run_checkpoints",
     "CheckpointResult",

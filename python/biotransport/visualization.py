@@ -10,17 +10,31 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal, cast
 
-import matplotlib.pyplot as plt
 from numpy.typing import ArrayLike
 
 from .mesh_utils import as_1d, as_2d, x_nodes, xy_grid
 from .utils import get_result_path
 
+
+def _pyplot():
+    """Import pyplot on first use.
+
+    Importing Matplotlib costs about a third of a second, which is most of the
+    cost of ``import biotransport``. Deferring it keeps the import fast for the
+    many scripts and test runs that never draw anything.
+    """
+
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
     from mpl_toolkits.mplot3d import Axes3D
-    from .._core import StructuredMesh
+
+    from ._core import StructuredMesh
 
 
 def plot_1d_solution(
@@ -49,7 +63,7 @@ def plot_1d_solution(
     y = as_1d(mesh, solution)
 
     if ax is None:
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = _pyplot().subplots(figsize=(10, 6))
     else:
         fig = cast("Figure", ax.figure)
 
@@ -69,6 +83,8 @@ def plot_2d_solution(
     title: str | None = None,
     colorbar_label: str = "Value",
     ax: Axes | None = None,
+    *,
+    colorbar: bool = True,
 ) -> Figure:
     """Plot a 2D solution on a mesh as a contour plot.
 
@@ -78,6 +94,9 @@ def plot_2d_solution(
         title: Plot title
         colorbar_label: Label for the colorbar
         ax: Optional Matplotlib axes to plot into
+        colorbar: Whether to attach a colorbar. Pass ``False`` when drawing
+            repeatedly into the same axes, because each colorbar steals width
+            from the axes it is attached to.
     """
 
     if mesh.is_1d():
@@ -87,12 +106,13 @@ def plot_2d_solution(
     Z = as_2d(mesh, solution)
 
     if ax is None:
-        fig, ax = plt.subplots(figsize=(10, 8))
+        fig, ax = _pyplot().subplots(figsize=(10, 8))
     else:
         fig = cast("Figure", ax.figure)
 
     contour = ax.contourf(X, Y, Z, 50, cmap="viridis")
-    fig.colorbar(contour, ax=ax, label=colorbar_label)
+    if colorbar:
+        fig.colorbar(contour, ax=ax, label=colorbar_label)
 
     if title:
         ax.set_title(title)
@@ -126,7 +146,7 @@ def plot_2d_surface(
     Z = as_2d(mesh, solution)
 
     if ax is None:
-        fig = plt.figure(figsize=(12, 10))
+        fig = _pyplot().figure(figsize=(12, 10))
         ax = fig.add_subplot(111, projection="3d")
     else:
         fig = cast("Figure", ax.figure)
@@ -187,16 +207,12 @@ def plot_field(
         )
         return fig
 
+    if kind not in {"surface", "contour"}:
+        raise ValueError("kind must be 'contour' or 'surface'")
+
     if kind == "surface":
         fig = plot_2d_surface(mesh, values, title=title, zlabel=zlabel, ax=ax)
-        if xlabel:
-            ax = fig.axes[0]
-            ax.set_xlabel(xlabel)
-        if ylabel:
-            ax = fig.axes[0]
-            ax.set_ylabel(ylabel)
-        return fig
-    if kind == "contour":
+    else:
         fig = plot_2d_solution(
             mesh,
             values,
@@ -204,15 +220,16 @@ def plot_field(
             colorbar_label=colorbar_label,
             ax=ax,
         )
-        if xlabel:
-            ax = fig.axes[0]
-            ax.set_xlabel(xlabel)
-        if ylabel:
-            ax = fig.axes[0]
-            ax.set_ylabel(ylabel)
-        return fig
 
-    raise ValueError("kind must be 'contour' or 'surface'")
+    # Label the axes we actually drew into. Reaching for fig.axes[0] would
+    # relabel the figure's first subplot, which is the wrong one whenever the
+    # caller passed an ax belonging to a multi-panel figure.
+    target = ax if ax is not None else fig.axes[0]
+    if xlabel:
+        target.set_xlabel(xlabel)
+    if ylabel:
+        target.set_ylabel(ylabel)
+    return fig
 
 
 def plot_1d(
@@ -332,31 +349,32 @@ def plot(
     show: bool = True,
     **kwargs,
 ):
-    """Universal plotting function - the simplest way to visualize results.
+    """Plot a field on a mesh.
 
-    Automatically detects 1D vs 2D and chooses the right plot type.
-    Accepts ``(mesh, values)`` or ``(mesh, result)``. Solver results do not
-    retain their mesh, so a result cannot be plotted by itself.
+    Detects 1D vs 2D and picks the plot type. Accepts a
+    :class:`~biotransport.Solution` on its own, since it knows its own mesh, or a
+    ``(mesh, values)`` pair when you have a bare array.
+
+    For anything that came out of :func:`biotransport.solve`, prefer
+    ``sol.plot()`` -- it does not call ``plt.show()``, it takes ``times=`` to
+    overlay snapshots, and it returns the Axes so you can compose further.
 
     Args:
-        mesh_or_result: A structured mesh
-        solution: Field values or an object exposing ``concentration`` or
-            ``solution`` data
-        title: Plot title (optional)
-        kind: Plot type - 'auto' (default), 'contour', 'surface', or 'line'
-        show: Whether to call plt.show() (default True)
-        **kwargs: Additional arguments passed to underlying plot functions
+        mesh_or_result: A :class:`~biotransport.Solution`, or a structured mesh.
+        solution: Field values, or an object exposing ``concentration`` or
+            ``solution``. Omit when the first argument is a ``Solution``.
+        title: Plot title.
+        kind: ``'auto'`` (default), ``'contour'``, ``'surface'`` or ``'line'``.
+        show: Whether to call ``plt.show()`` (default True).
+        **kwargs: Passed through to the underlying plot function.
 
     Returns:
-        Matplotlib figure
+        Matplotlib figure.
 
     Examples:
-        >>> # Plot a canonical result
-        >>> result = bt.solve(problem, t=0.1)
-        >>> bt.plot(mesh, result, show=False)
-
-        >>> # 3D surface plot
-        >>> bt.plot(mesh, solution, kind='surface')
+        >>> sol = bt.solve(problem, end_time=0.1)
+        >>> bt.plot(sol, show=False)              # a Solution knows its mesh
+        >>> bt.plot(mesh, values, kind='surface')  # a bare array needs one
     """
     if not isinstance(kind, str):
         raise TypeError("kind must be a string")
@@ -364,14 +382,20 @@ def plot(
     if not isinstance(show, bool):
         raise TypeError("show must be a boolean")
     if solution is None:
-        if hasattr(mesh_or_result, "concentration") or hasattr(
+        # A Solution carries its own mesh, so it can be plotted on its own.
+        own_mesh = getattr(mesh_or_result, "mesh", None)
+        if own_mesh is not None and not callable(own_mesh):
+            solution = mesh_or_result
+            mesh_or_result = own_mesh
+        elif hasattr(mesh_or_result, "concentration") or hasattr(
             mesh_or_result, "solution"
         ):
             raise ValueError(
-                "A solver result does not retain its mesh. "
-                "Pass both objects: bt.plot(mesh, result)."
+                "this result does not carry a mesh, so pass both: "
+                "bt.plot(mesh, result)."
             )
-        raise TypeError("solution values or a solver result are required")
+        else:
+            raise TypeError("field values or a solver result are required")
     if not hasattr(mesh_or_result, "is_1d") or not callable(mesh_or_result.is_1d):
         raise TypeError("mesh_or_result must be a structured mesh")
 
@@ -400,6 +424,6 @@ def plot(
             fig = plot_2d_solution(mesh, values, title=title, **kwargs)
 
     if show:
-        plt.show()
+        _pyplot().show()
 
     return fig

@@ -230,8 +230,18 @@ plt.tight_layout()
 plt.savefig(bt.get_result_path("tumor_structure.png", EXAMPLE_NAME))
 
 times_to_save = [1, 2, 6]  # hours
+TIME_STEP = 0.5  # s; about 2/3 of the certified stable limit for this setup
+
+# Stop at the last time we actually save. Running past it costs steps whose
+# results are then discarded -- the figures below select the 6 h frame, so the
+# extra 6800 steps that num_steps=50000 used to request produced nothing.
+# Do not raise TIME_STEP to compensate: 0.5 s already uses about 67% of the
+# solver's monotonic limit for this configuration, and 1.0 s is rejected.
+num_steps = int(round(max(times_to_save) * 3600 / TIME_STEP))
 solution, saved_solutions = solve_drug_transport(
-    num_steps=50000, dt=0.5, times_to_save=[t * 3600 for t in times_to_save]
+    num_steps=num_steps,
+    dt=TIME_STEP,
+    times_to_save=[t * 3600 for t in times_to_save],
 )
 
 # Custom colormap for drug concentration

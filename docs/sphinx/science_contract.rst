@@ -42,7 +42,10 @@ quantities and explicit conversion before handoff to a native solver:
 
 .. code-block:: python
 
+   import biotransport as bt
    from biotransport import units
+
+   problem = bt.Problem(bt.mesh_1d(100, 0.0, 0.01))
 
    D = units.diffusivity(1.33e-5, "cm^2/s")
    problem.diffusivity(D.require(units.Dimension.DIFFUSIVITY))

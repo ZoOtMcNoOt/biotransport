@@ -7,9 +7,37 @@ mesh = bt.StructuredMesh(10, 0.0, 1.0)
 problem = bt.TransportProblem(mesh).diffusivity(0.1).initial_condition(1.0)
 options = bt.SolveOptions.until(0.01)
 native_result: bt.TransportResult = bt.solve_transport(problem, options)
-python_result: bt.TransportResult = bt.solve(problem, end_time=0.01)
-steps: int = python_result.diagnostics.steps
+native_plan: bt.TransportPlan = bt.plan_transport(problem, options)
+planned_steps: int = native_plan.planned_steps
+selected_step: float = native_plan.selected_time_step
+
+# bt.solve() wraps the native result in a Solution, which keeps the native
+# attribute names and adds geometry, saved frames, plotting and comparison.
+python_result: bt.Solution = bt.solve(problem, end_time=0.01)
+diagnostics = python_result.diagnostics
+assert diagnostics is not None  # only None for a steady solve
+steps: int = diagnostics.steps
 field = native_result.concentration
+
+# The richer surface, typed.
+typed_mesh = bt.mesh_1d(10, 0.0, 1.0)
+typed_problem = (
+    bt.Problem(typed_mesh)
+    .diffusivity(0.1)
+    .initial(1.0)
+    .dirichlet("left", 0.0)
+    .sealed("right")
+)
+description: str = typed_problem.describe()
+largest_step: float = typed_problem.stable_time_step()
+history: bt.Solution = bt.solve(typed_problem, end_time=0.01, save_every=0.005)
+saved_times: tuple[float, ...] = history.times
+final_field = history.c
+summary_text: str = history.summary()
+error_report: bt.ErrorReport = history.compare(lambda x: 0.0 * x)
+worst: float = error_report.max_abs
+steady_solution: bt.Solution = bt.solve_steady(typed_problem)
+is_steady: bool = steady_solution.steady
 checkpoint_result: bt.CheckpointResult = bt.run_checkpoints(
     mesh,
     [0.01, 0.02],

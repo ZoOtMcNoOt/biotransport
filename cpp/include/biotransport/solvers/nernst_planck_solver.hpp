@@ -423,6 +423,7 @@ public:
     NernstPlanckSolver(const StructuredMesh& mesh, const IonSpecies& ion,
                        double temperature = 310.0)
         : mesh_(mesh), ion_(ion) {
+        requireCartesian(mesh, "NernstPlanckSolver");
         electrochem_detail::requirePositive(temperature, "Temperature");
         solution_.resize(mesh.numNodes(), 0.0);
         scratch_.resize(mesh.numNodes(), 0.0);

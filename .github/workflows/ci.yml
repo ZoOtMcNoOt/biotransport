@@ -27,6 +27,11 @@ jobs:
         run: python -m pip install "ruff~=0.16.0" "mypy>=1.10"
       - name: Check Python source
         run: python -m ruff check setup.py python
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check experiment editor operations
+        run: node --test tests/frontend/studio-model.test.mjs
       - name: Check native API typing contract
         run: >-
           python -m mypy --no-incremental --ignore-missing-imports
@@ -72,6 +77,7 @@ jobs:
           assert info['compiler']['id'];
           assert info['compiler']['version'];
           assert info['cxx']['standard'] >= 201703;
+          assert not info['cxx']['assertions_enabled'], 'Expected the default Release wheel';
           assert set(info['features']) == {'eigen', 'openmp'};
           print(bt.__version__, info)"
       - name: Run Python tests
@@ -216,6 +222,7 @@ jobs:
           assert (package_root / 'py.typed').is_file();
           assert (package_root / '_core' / '_core.pyi').is_file();
           assert bt.native_build_info()['cxx']['standard'] >= 201703;
+          assert not bt.native_build_info()['cxx']['assertions_enabled'];
           assert hasattr(bt, 'CheckpointResult');
           assert hasattr(bt, 'PythonNumericalContract');
           mesh=bt.mesh_1d(4, 0.0, 1.0);

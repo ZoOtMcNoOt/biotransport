@@ -13,6 +13,7 @@ graft examples
 graft python/bindings
 graft python/biotransport
 graft python/tests
+graft tests/frontend
 
 prune docs/_build
 prune docs/doxygen/html

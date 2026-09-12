@@ -42,8 +42,16 @@ mesh = bt.mesh_2d(100, 100, x_min=0.0, x_max=2.5, y_min=0.0, y_max=2.5)
 # Diffusion parameters
 D = 2e-5  # Diffusivity
 
+# mesh.y() takes (i, j), so mesh.y(ny) would read column ny of row 0 and
+# report 0.0. Query the corners explicitly to get the real extents.
+x_min, x_max = mesh.x(0), mesh.x(mesh.nx())
+y_min, y_max = mesh.y(0, 0), mesh.y(0, mesh.ny())
+extent = [x_min, x_max, y_min, y_max]
+
 print(f"Mesh: {mesh.nx() + 1} x {mesh.ny() + 1} nodes")
-print(f"Domain: {mesh.x(mesh.nx())} x {mesh.y(mesh.ny())}")
+print(f"Domain: x in [{x_min:.3f}, {x_max:.3f}], y in [{y_min:.3f}, {y_max:.3f}]")
+print(f"Extents: {x_max - x_min:.3f} x {y_max - y_min:.3f}")
+print(f"Cell size: dx = {mesh.dx():.4f}, dy = {mesh.dy():.4f}")
 
 # Initial condition: Background with localized spots
 u0 = np.ones(mesh.num_nodes())
@@ -108,7 +116,10 @@ for i, t_target in enumerate(time_points):
         times.append(t_target)
 
     print(
-        f"  Time = {t_target:7.1f}: Min = {current_solution.min():.4f}, Max = {current_solution.max():.4f}"
+        f"  Time = {t_target:7.1f}: Min = {current_solution.min():.4f}, "
+        f"Max = {current_solution.max():.4f}, "
+        f"Range = {np.ptp(current_solution):.4f}, "
+        f"Std = {current_solution.std():.4f}"
     )
 
 # ========================================================================
@@ -118,15 +129,39 @@ print(f"\n{'=' * 70}")
 print("VTK Export Method 1: Single Snapshot")
 print(f"{'=' * 70}")
 
-# Export final state as a single VTK file
-vtk_single_path = bt.get_result_path("pattern_final.vtk", EXAMPLE_NAME)
-bt.write_vtk(mesh, {"concentration": solutions[-1]}, vtk_single_path)
+# Export the snapshot that still carries the pattern. By t = 4000 the spots
+# have merged into a near-uniform field, so exporting the last frame would
+# ship a picture with almost nothing in it. Pick the latest snapshot that
+# still holds at least 25% of the initial spatial contrast.
+initial_range = float(np.ptp(solutions[0]))
+contrast_floor = 0.25 * initial_range
+export_idx = max(
+    i for i, sol in enumerate(solutions) if float(np.ptp(sol)) >= contrast_floor
+)
+export_solution = solutions[export_idx]
+export_time = times[export_idx]
+
+print(f"\nInitial spatial contrast (max - min): {initial_range:.4f}")
+print(f"Contrast floor for export (25% of initial): {contrast_floor:.4f}")
+print(
+    f"Final frame t = {times[-1]:.0f} contrast: {np.ptp(solutions[-1]):.4f} (too flat to export)"
+)
+print(f"Selected snapshot: t = {export_time:.0f}")
+print(
+    f"  Min = {export_solution.min():.4f}, Max = {export_solution.max():.4f}, "
+    f"Range = {np.ptp(export_solution):.4f}, Std = {export_solution.std():.4f}"
+)
+
+vtk_single_path = bt.get_result_path(
+    f"pattern_t{int(export_time):05d}.vtk", EXAMPLE_NAME
+)
+bt.write_vtk(mesh, {"concentration": export_solution}, vtk_single_path)
 
 print("\n[OK] Single snapshot exported to:")
 print(f"  {vtk_single_path}")
 print("\nTo visualize in ParaView:")
 print("  1. Open ParaView")
-print("  2. File -> Open -> Select 'pattern_final.vtk'")
+print(f"  2. File -> Open -> Select 'pattern_t{int(export_time):05d}.vtk'")
 print("  3. Click 'Apply' in the Properties panel")
 print("  4. Use 'Surface' or 'Surface with Edges' representation")
 
@@ -171,8 +206,10 @@ for idx, ax in enumerate(axes.flat):
         # Manual 2D plot since bt.plot doesn't support all kwargs
         nx, ny = mesh.nx() + 1, mesh.ny() + 1
         Z = solutions[idx].reshape((ny, nx))
-        im = ax.imshow(Z, origin="lower", cmap="viridis", aspect="equal")
-        ax.set_title(f"t = {times[idx]:.0f}")
+        im = ax.imshow(Z, origin="lower", cmap="viridis", aspect="equal", extent=extent)
+        ax.set_title(f"t = {times[idx]:.0f} (range {np.ptp(Z):.3f})")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
         plt.colorbar(im, ax=ax)
     else:
         ax.axis("off")
@@ -188,8 +225,10 @@ for i, (solution, t) in enumerate(zip(solutions, times)):
     fig, ax = plt.subplots(figsize=(8, 7))
     nx, ny = mesh.nx() + 1, mesh.ny() + 1
     Z = solution.reshape((ny, nx))
-    im = ax.imshow(Z, origin="lower", cmap="viridis", aspect="equal")
+    im = ax.imshow(Z, origin="lower", cmap="viridis", aspect="equal", extent=extent)
     ax.set_title(f"Concentration at t = {t:.0f}")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
     plt.colorbar(im, ax=ax)
     plt.tight_layout()
     plt.savefig(
@@ -210,9 +249,9 @@ print(f"\n{'=' * 70}")
 print("Advanced: Exporting Multiple Fields")
 print(f"{'=' * 70}")
 
-# Calculate derived quantities
-final_solution = solutions[-1]
-gradient_magnitude = np.zeros_like(final_solution)
+# Calculate derived quantities from the same snapshot that was exported, so
+# the gradient field describes a field that still has structure.
+gradient_magnitude = np.zeros_like(export_solution)
 
 # Simple gradient approximation
 for j in range(1, mesh.ny()):
@@ -221,8 +260,8 @@ for j in range(1, mesh.ny()):
         idx_w = mesh.index(i - 1, j)
         idx_s = mesh.index(i, j - 1)
 
-        dx_val = (final_solution[idx] - final_solution[idx_w]) / mesh.dx()
-        dy_val = (final_solution[idx] - final_solution[idx_s]) / mesh.dy()
+        dx_val = (export_solution[idx] - export_solution[idx_w]) / mesh.dx()
+        dy_val = (export_solution[idx] - export_solution[idx_s]) / mesh.dy()
         gradient_magnitude[idx] = np.sqrt(dx_val**2 + dy_val**2)
 
 # Export with multiple fields (requires custom VTK writing - placeholder example)
@@ -236,6 +275,11 @@ bt.write_vtk(mesh, {"gradient": gradient_magnitude}, vtk_grad_path)
 
 print("\n[OK] Gradient field exported to:")
 print(f"  {vtk_grad_path}")
+print(
+    f"  (gradient of the t = {export_time:.0f} snapshot) "
+    f"Min = {gradient_magnitude.min():.4f}, Max = {gradient_magnitude.max():.4f}, "
+    f"Std = {gradient_magnitude.std():.4f}"
+)
 
 # ========================================================================
 # Summary and Tips

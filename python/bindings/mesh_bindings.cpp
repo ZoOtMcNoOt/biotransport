@@ -25,10 +25,20 @@ void register_mesh_bindings(py::module_& m) {
     // =========================================================================
     // StructuredMesh
     // =========================================================================
+    py::enum_<Geometry>(m, "Geometry",
+                        "Coordinate system of a 1D mesh. Only the area factor and the "
+                        "control-volume measure differ between them.")
+        .value("CARTESIAN", Geometry::CARTESIAN, "Slab. Area factor 1.")
+        .value("CYLINDRICAL", Geometry::CYLINDRICAL,
+               "Radial in a long cylinder. Area factor r.")
+        .value("SPHERICAL", Geometry::SPHERICAL, "Radial in a sphere. Area factor r^2.");
+
     py::class_<StructuredMesh>(m, "StructuredMesh")
-        .def(py::init<int, double, double>(), py::arg("nx"), py::arg("xmin"), py::arg("xmax"))
-        .def(py::init<int, int, double, double, double, double>(), py::arg("nx"), py::arg("ny"),
-             py::arg("xmin"), py::arg("xmax"), py::arg("ymin"), py::arg("ymax"))
+        .def(py::init<int, double, double, Geometry>(), py::arg("nx"), py::arg("xmin"),
+             py::arg("xmax"), py::arg("geometry") = Geometry::CARTESIAN)
+        .def(py::init<int, int, double, double, double, double, Geometry>(), py::arg("nx"),
+             py::arg("ny"), py::arg("xmin"), py::arg("xmax"), py::arg("ymin"), py::arg("ymax"),
+             py::arg("geometry") = Geometry::CARTESIAN)
         .def("num_nodes", &StructuredMesh::numNodes)
         .def("num_cells", &StructuredMesh::numCells)
         .def("dx", &StructuredMesh::dx)
@@ -38,7 +48,20 @@ void register_mesh_bindings(py::module_& m) {
         .def("ny", &StructuredMesh::ny)
         .def("x", &StructuredMesh::x, py::arg("i"))
         .def("y", &StructuredMesh::y, py::arg("i"), py::arg("j") = 0)
-        .def("index", &StructuredMesh::index, py::arg("i"), py::arg("j") = 0);
+        .def("index", &StructuredMesh::index, py::arg("i"), py::arg("j") = 0)
+        .def("geometry", &StructuredMesh::geometry, "Coordinate system of this mesh")
+        .def("is_radial", &StructuredMesh::isRadial,
+             "Whether this mesh uses cylindrical or spherical geometry")
+        .def("area_factor", &StructuredMesh::areaFactor, py::arg("r"),
+             "Face area factor at coordinate r: 1, r, or r^2")
+        .def("control_volume", &StructuredMesh::controlVolume, py::arg("i"),
+             "Radial measure of node i's control volume; per unit z in 2D")
+        .def("lower_face_area", &StructuredMesh::lowerFaceArea, py::arg("i"),
+             "Area factor at the lower x face of node i's control volume")
+        .def("upper_face_area", &StructuredMesh::upperFaceArea, py::arg("i"),
+             "Area factor at the upper x face of node i's control volume")
+        .def("axial_height", &StructuredMesh::axialHeight, py::arg("j"),
+             "Axial control height of row j; 1 on a 1D mesh");
 
     // =========================================================================
     // StructuredMesh3D

@@ -54,6 +54,7 @@ class ExplicitSolverBase {
 public:
     ExplicitSolverBase(const StructuredMesh& mesh, double diffusivity)
         : mesh_(mesh), diffusivity_(diffusivity), iterator_(mesh), stencil_ops_(mesh) {
+        requireCartesian(mesh, "this explicit solver");
         if (!std::isfinite(diffusivity) || diffusivity <= 0.0) {
             throw std::invalid_argument("Diffusivity must be finite and positive");
         }

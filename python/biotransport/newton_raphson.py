@@ -7,9 +7,10 @@ available only through the explicit ``allow_least_squares`` opt-in and is
 reported in :class:`NewtonResult`.
 
 ``NonlinearDiffusionSolver`` solves ``-div(D grad(u)) + R(u) = S`` on uniform
-``StructuredMesh`` grids. Nodal variable diffusivity is supported in 1D with
-harmonic face values. Variable diffusivity and Neumann boundaries are currently
-rejected in 2D rather than being approximated by a different equation.
+``StructuredMesh`` grids. Cartesian, cylindrical and spherical 1D domains share
+the same conservative control-volume balance, including natural boundaries.
+Nodal variable diffusivity uses harmonic face values. Radial geometry, variable
+diffusivity and Neumann boundaries are currently rejected in 2D.
 """
 
 from __future__ import annotations
@@ -21,10 +22,43 @@ from numbers import Integral, Real
 from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
 import numpy as np
-from scipy import sparse
-from scipy.sparse.linalg import MatrixRankWarning, lsmr, spsolve
 
-from ._core import Boundary, StructuredMesh
+from ._core import Boundary, Geometry, StructuredMesh
+
+
+class _LazyScipySparse:
+    """Defer ``scipy.sparse`` until a sparse solve actually needs it.
+
+    Importing scipy.sparse costs about a fifth of a second, and this module is
+    imported by the package root, so every ``import biotransport`` paid for it
+    whether or not a nonlinear solve ever happened. Attribute access here imports
+    on first use and then behaves exactly like the module.
+    """
+
+    __slots__ = ("_module",)
+
+    def __init__(self) -> None:
+        self._module: Any = None
+
+    def __getattr__(self, name: str) -> Any:
+        module = object.__getattribute__(self, "_module")
+        if module is None:
+            from scipy import sparse
+
+            module = sparse
+            object.__setattr__(self, "_module", module)
+        return getattr(module, name)
+
+
+_sparse = _LazyScipySparse()
+
+
+def _sparse_linalg() -> tuple[Any, Any, Any]:
+    """Return ``(MatrixRankWarning, lsmr, splu)``, imported on first use."""
+
+    from scipy.sparse.linalg import MatrixRankWarning, lsmr, splu
+
+    return MatrixRankWarning, lsmr, splu
 
 
 def _has_active_mask(value: Any, seen: Optional[set[int]] = None) -> bool:
@@ -539,7 +573,7 @@ class NewtonRaphsonSolver:
                 "Jacobian callback raised an exception"
             ) from error
 
-        if sparse.issparse(raw):
+        if _sparse.issparse(raw):
             try:
                 _real_array(raw.data, "Sparse Jacobian callback output")
                 matrix = raw.astype(np.float64).tocsr(copy=True)
@@ -616,7 +650,8 @@ class NewtonRaphsonSolver:
     def _least_squares_step(
         self, matrix: Any, rhs: np.ndarray
     ) -> Tuple[np.ndarray, str, Optional[int]]:
-        if sparse.issparse(matrix):
+        _rank_warning, lsmr, _splu = _sparse_linalg()
+        if _sparse.issparse(matrix):
             try:
                 output = lsmr(
                     matrix,
@@ -668,14 +703,61 @@ class NewtonRaphsonSolver:
     ) -> Tuple[np.ndarray, str, bool, Optional[int]]:
         rhs = -residual
         direct_error: Optional[BaseException] = None
+        MatrixRankWarning, _lsmr, splu = _sparse_linalg()
 
-        if sparse.issparse(matrix):
+        if _sparse.issparse(matrix):
+            from scipy.sparse.linalg import LinearOperator, onenormest
+
             try:
+                # LU may leave a tiny roundoff pivot for a singular diffusion
+                # operator (including nonconstant reaction-driven null modes).
+                # Estimate conditioning from the same factorization used for
+                # the correction. This keeps storage sparse instead of paying
+                # for a dense SVD. It is an estimate, not an exact rank claim.
+                magnitude = float(np.max(np.abs(matrix.data))) if matrix.nnz else 0.0
+                if magnitude == 0.0:
+                    raise np.linalg.LinAlgError("sparse Jacobian is zero")
+                # Sparse division may multiply by a precomputed reciprocal,
+                # which overflows for a finite subnormal magnitude. Divide the
+                # owned data array directly instead.
+                normalized = matrix.copy()
+                normalized.data /= magnitude
                 with warnings.catch_warnings():
                     warnings.simplefilter("error", MatrixRankWarning)
-                    step = np.asarray(spsolve(matrix, rhs), dtype=np.float64).reshape(
-                        -1
+                    factor = splu(normalized.tocsc())
+                    inverse = LinearOperator(
+                        matrix.shape,
+                        matvec=factor.solve,
+                        rmatvec=lambda vector: factor.solve(vector, trans="T"),
+                        matmat=factor.solve,
+                        rmatmat=lambda vectors: factor.solve(vectors, trans="T"),
+                        dtype=np.float64,
                     )
+                    matrix_norm = float(np.max(np.asarray(abs(normalized).sum(axis=0))))
+                    # t=1 uses deterministic probe vectors and leaves the
+                    # caller's random state untouched, unlike randomized blocks.
+                    inverse_norm = float(onenormest(inverse, t=1))
+                    if (
+                        not np.isfinite(matrix_norm)
+                        or matrix_norm <= 0.0
+                        or not np.isfinite(inverse_norm)
+                        or inverse_norm <= 0.0
+                    ):
+                        raise np.linalg.LinAlgError(
+                            "sparse Jacobian condition estimate is not finite and positive"
+                        )
+                    reciprocal_condition = (1.0 / matrix_norm) / inverse_norm
+                    if (
+                        not np.isfinite(reciprocal_condition)
+                        or reciprocal_condition <= self.n * np.finfo(np.float64).eps
+                    ):
+                        raise np.linalg.LinAlgError(
+                            "sparse Jacobian is numerically singular "
+                            f"(estimated reciprocal condition {reciprocal_condition:.3g})"
+                        )
+                    step = np.asarray(
+                        factor.solve(rhs / magnitude), dtype=np.float64
+                    ).reshape(-1)
                 if step.shape != (self.n,) or not np.all(np.isfinite(step)):
                     raise np.linalg.LinAlgError("sparse solve returned non-finite data")
                 return step, "sparse_direct", False, None
@@ -964,8 +1046,10 @@ class NonlinearDiffusionSolver:
     values, giving one conservative interface flux. Variable diffusivity in 2D
     and 2D Neumann conditions are explicitly unsupported.
 
-    One boundary condition is required for every domain side before ``solve``.
-    One-dimensional Neumann values are outward-normal derivatives ``du/dn``.
+    One boundary condition is required for every physical domain side before
+    ``solve``. In 1D, Neumann values are outward-normal derivatives ``du/dn``
+    applied through the boundary control-volume balance. At the origin of a
+    radial domain symmetry is automatic; only zero Neumann data are permitted.
     """
 
     def __init__(
@@ -999,6 +1083,24 @@ class NonlinearDiffusionSolver:
             self._n = (self.nx + 1) * (ny + 1)
             self._grid_shape = (ny + 1, self.nx + 1)
 
+        self._geometry = self._mesh_geometry(mesh)
+        if not self.is_1d and self._geometry != Geometry.CARTESIAN:
+            raise ValueError(
+                "Two-dimensional radial geometry is not implemented by "
+                "NonlinearDiffusionSolver; use the transient transport solver"
+            )
+        self._inner_radius = (
+            float(mesh.x(0)) if self._geometry != Geometry.CARTESIAN else None
+        )
+        self._outer_radius = (
+            float(mesh.x(self.nx)) if self._geometry != Geometry.CARTESIAN else None
+        )
+        self._volumes: Optional[np.ndarray] = None
+        self._lower_areas: Optional[np.ndarray] = None
+        self._upper_areas: Optional[np.ndarray] = None
+        if self.is_1d:
+            self._capture_control_volumes()
+
         self._scalar_diffusivity: Optional[float]
         self._nodal_diffusivity: Optional[np.ndarray]
         self._face_diffusivity: Optional[np.ndarray]
@@ -1008,6 +1110,8 @@ class NonlinearDiffusionSolver:
         self.reaction_deriv: Optional[Callable[[np.ndarray], Any]] = None
         self._source: Optional[np.ndarray] = None
         self._bcs: dict[Boundary, Tuple[str, float]] = {}
+        if self._inner_radius == 0.0:
+            self._bcs[Boundary.Left] = ("neumann", 0.0)
 
         self.max_iterations = 50
         self.tol = 1.0e-10
@@ -1015,6 +1119,57 @@ class NonlinearDiffusionSolver:
         self.use_line_search = True
         self.damping = 1.0
         self.allow_least_squares = False
+
+    @staticmethod
+    def _mesh_geometry(mesh: Any) -> Any:
+        read_geometry = getattr(mesh, "geometry", None)
+        if callable(read_geometry):
+            geometry = read_geometry()
+            if geometry not in (
+                Geometry.CARTESIAN,
+                Geometry.CYLINDRICAL,
+                Geometry.SPHERICAL,
+            ):
+                raise ValueError("Unsupported mesh geometry")
+            return geometry
+        is_radial = getattr(mesh, "is_radial", None)
+        if callable(is_radial) and is_radial():
+            raise TypeError(
+                "A radial mesh must expose its geometry and control volumes"
+            )
+        return Geometry.CARTESIAN
+
+    def _capture_control_volumes(self) -> None:
+        """Capture the mesh's finite-volume metrics once, outside Newton loops."""
+
+        if self._geometry == Geometry.CARTESIAN:
+            volumes = np.full(self.n, self.dx)
+            volumes[[0, -1]] *= 0.5
+            lower = np.ones(self.n)
+            upper = np.ones(self.n)
+        else:
+            for name in ("control_volume", "lower_face_area", "upper_face_area"):
+                if not callable(getattr(self.mesh, name, None)):
+                    raise TypeError(f"A radial mesh must expose {name}()")
+            volumes = np.array([self.mesh.control_volume(i) for i in range(self.n)])
+            lower = np.array([self.mesh.lower_face_area(i) for i in range(self.n)])
+            upper = np.array([self.mesh.upper_face_area(i) for i in range(self.n)])
+        if (
+            not np.all(np.isfinite(volumes))
+            or np.any(volumes <= 0.0)
+            or not np.all(np.isfinite(lower))
+            or np.any(lower < 0.0)
+            or not np.all(np.isfinite(upper))
+            or np.any(upper < 0.0)
+            or not np.array_equal(lower[1:], upper[:-1])
+        ):
+            raise ValueError(
+                "Mesh control volumes and face areas must be finite and consistent"
+            )
+        volumes.setflags(write=False)
+        lower.setflags(write=False)
+        upper.setflags(write=False)
+        self._volumes, self._lower_areas, self._upper_areas = volumes, lower, upper
 
     @property
     def is_1d(self) -> bool:
@@ -1184,11 +1339,6 @@ class NonlinearDiffusionSolver:
         normalized_type = bc_type.strip().lower()
         if normalized_type not in ("dirichlet", "neumann"):
             raise ValueError("bc_type must be 'dirichlet' or 'neumann'")
-        if self.is_1d and normalized_type == "neumann" and self.n < 3:
-            raise ValueError(
-                "A 1D Neumann boundary requires at least three nodes for the "
-                "second-order outward derivative"
-            )
         if not self.is_1d and normalized_type == "neumann":
             raise NotImplementedError(
                 "Two-dimensional Neumann boundaries are not implemented by "
@@ -1202,6 +1352,12 @@ class NonlinearDiffusionSolver:
             raise ValueError("Boundary value must be finite") from error
         if not np.isfinite(converted_value):
             raise ValueError("Boundary value must be finite")
+        if boundary == Boundary.Left and self._inner_radius == 0.0:
+            if normalized_type != "neumann" or converted_value != 0.0:
+                raise ValueError(
+                    "At the radial origin only symmetry (zero Neumann) is valid; "
+                    "the centre is not a physical boundary with area"
+                )
         self._bcs[boundary] = (normalized_type, converted_value)
         return self
 
@@ -1254,6 +1410,15 @@ class NonlinearDiffusionSolver:
             mesh_nodes = _positive_integer_scalar(
                 self.mesh.num_nodes(), "Mesh node count"
             )
+            mesh_geometry = self._mesh_geometry(self.mesh)
+            inner_radius = (
+                float(self.mesh.x(0)) if mesh_geometry != Geometry.CARTESIAN else None
+            )
+            outer_radius = (
+                float(self.mesh.x(mesh_nx))
+                if mesh_geometry != Geometry.CARTESIAN
+                else None
+            )
             mesh_ny = (
                 None
                 if mesh_is_1d
@@ -1273,6 +1438,9 @@ class NonlinearDiffusionSolver:
             or mesh_nodes != self.n
             or mesh_ny != self.ny
             or mesh_dy != self.dy
+            or mesh_geometry != self._geometry
+            or inner_radius != self._inner_radius
+            or outer_radius != self._outer_radius
         ):
             raise ValueError(
                 "mesh geometry changed after solver construction; create a new "
@@ -1325,6 +1493,11 @@ class NonlinearDiffusionSolver:
             bc_type, value = self._bcs[boundary]
             if bc_type not in ("dirichlet", "neumann") or not np.isfinite(value):
                 raise ValueError(f"Boundary data for {boundary.name} are invalid")
+            if boundary == Boundary.Left and self._inner_radius == 0.0:
+                if bc_type != "neumann" or value != 0.0:
+                    raise ValueError(
+                        "At the radial origin only symmetry (zero Neumann) is valid"
+                    )
             if not self.is_1d and bc_type == "neumann":
                 raise NotImplementedError(
                     "Two-dimensional Neumann boundaries are unsupported"
@@ -1368,6 +1541,12 @@ class NonlinearDiffusionSolver:
         snapshot._dx = self._dx
         snapshot._dy = self._dy
         snapshot._grid_shape = self._grid_shape
+        snapshot._geometry = self._geometry
+        snapshot._inner_radius = self._inner_radius
+        snapshot._outer_radius = self._outer_radius
+        snapshot._volumes = self._volumes
+        snapshot._lower_areas = self._lower_areas
+        snapshot._upper_areas = self._upper_areas
         snapshot._scalar_diffusivity = self._scalar_diffusivity
         snapshot._nodal_diffusivity = self._readonly_copy(self._nodal_diffusivity)
         snapshot._face_diffusivity = self._readonly_copy(self._face_diffusivity)
@@ -1428,22 +1607,49 @@ class NonlinearDiffusionSolver:
         return result.copy()
 
     def _apply_bcs_1d(self, u: np.ndarray, residual: np.ndarray) -> np.ndarray:
-        left_type, left_value = self._bcs[Boundary.Left]
-        if left_type == "dirichlet":
-            residual[0] = u[0] - left_value
-        else:
-            residual[0] = (
-                3.0 * (u[0] - u[1]) + (u[2] - u[1])
-            ) / self.dx * 0.5 - left_value
-
-        right_type, right_value = self._bcs[Boundary.Right]
-        if right_type == "dirichlet":
-            residual[-1] = u[-1] - right_value
-        else:
-            residual[-1] = (
-                3.0 * (u[-1] - u[-2]) + (u[-3] - u[-2])
-            ) / self.dx * 0.5 - right_value
+        if (
+            self._volumes is None
+            or self._lower_areas is None
+            or self._upper_areas is None
+        ):
+            raise AssertionError("Internal error: 1D control volumes are missing")
+        for side, index, area in (
+            (Boundary.Left, 0, self._lower_areas[0]),
+            (Boundary.Right, -1, self._upper_areas[-1]),
+        ):
+            kind, value = self._bcs[side]
+            if kind == "dirichlet":
+                residual[index] = u[index] - value
+            elif value != 0.0 and area > 0.0:
+                diffusivity = (
+                    self._scalar_diffusivity
+                    if self._scalar_diffusivity is not None
+                    else self._nodal_diffusivity[index]
+                )
+                # -div(D grad u) includes -D*(du/dn)*A/V at either wall.
+                # Keep the reaction/source already present on this half-cell.
+                residual[index] -= (diffusivity * value) * (area / self._volumes[index])
         return residual
+
+    def _diffusion_coefficients_1d(self) -> tuple[np.ndarray, np.ndarray]:
+        """Left/right coefficients of the common conservative 1D balance."""
+
+        if (
+            self._face_diffusivity is None
+            or self._volumes is None
+            or self._lower_areas is None
+            or self._upper_areas is None
+        ):
+            raise AssertionError("Internal error: 1D diffusion geometry is missing")
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            face_transport = self._face_diffusivity / self.dx
+            lower = face_transport * (self._lower_areas[1:] / self._volumes[1:])
+            upper = face_transport * (self._upper_areas[:-1] / self._volumes[:-1])
+        if not np.all(np.isfinite(lower)) or not np.all(np.isfinite(upper)):
+            raise NewtonEvaluationError(
+                "One-dimensional diffusion coefficients are not representable in float64"
+            )
+        return lower, upper
 
     def _apply_bcs_2d(self, u: np.ndarray, residual: np.ndarray) -> np.ndarray:
         values = {boundary: self._bcs[boundary][1] for boundary in self._bcs}
@@ -1458,19 +1664,11 @@ class NonlinearDiffusionSolver:
             raise NewtonEvaluationError(
                 "1D nonlinear diffusion state has invalid shape or values"
             )
-        if self._face_diffusivity is None:
-            raise AssertionError("Internal error: 1D face diffusivity is missing")
+        lower, upper = self._diffusion_coefficients_1d()
         residual = np.zeros_like(u)
-        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            face_transport = self._face_diffusivity / self.dx
-        if not np.all(np.isfinite(face_transport)):
-            raise NewtonEvaluationError(
-                "One-dimensional face diffusivity divided by dx is not "
-                "representable in float64"
-            )
-        right_flux = face_transport[1:] * (u[2:] - u[1:-1])
-        left_flux = face_transport[:-1] * (u[1:-1] - u[:-2])
-        residual[1:-1] = -(right_flux - left_flux) / self.dx
+        jump = u[1:] - u[:-1]
+        residual[:-1] -= upper * jump
+        residual[1:] += lower * jump
         residual += self._evaluate_reaction(u)
         if self._source is not None:
             residual -= self._source
@@ -1510,46 +1708,110 @@ class NonlinearDiffusionSolver:
             residual -= self._source.reshape(self._grid_shape)
         return self._apply_bcs_2d(u, residual).reshape(-1)
 
-    def _jacobian_1d(self, u: np.ndarray) -> np.ndarray:
-        if self._face_diffusivity is None:
-            raise AssertionError("Internal error: 1D face diffusivity is missing")
-        matrix: np.ndarray = np.zeros((self.n, self.n), dtype=np.float64)
-        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            diffusion_diagonal = (self._face_diffusivity / self.dx) / self.dx
-        if not np.all(np.isfinite(diffusion_diagonal)):
-            raise NewtonEvaluationError(
-                "One-dimensional face diffusivity divided by dx^2 is not "
-                "representable in float64"
-            )
-        for index in range(1, self.n - 1):
-            left = diffusion_diagonal[index - 1]
-            right = diffusion_diagonal[index]
-            matrix[index, index - 1] = -left
-            matrix[index, index] = left + right
-            matrix[index, index + 1] = -right
+    def _jacobian_1d(self, u: np.ndarray) -> Any:
+        """Assemble the conservative 1D stencil with linear storage.
 
+        Every row has at most three entries. Natural boundary rows keep the
+        boundary control-volume balance, including its reaction derivative;
+        Dirichlet rows are replaced by the imposed concentration.
+        """
+
+        lower, upper = self._diffusion_coefficients_1d()
+        diagonal = np.zeros(self.n)
+        diagonal[1:] += lower
+        diagonal[:-1] += upper
         if self.reaction_deriv is not None:
-            derivative = self._evaluate_reaction_derivative(u)
-            diagonal = np.arange(1, self.n - 1)
-            matrix[diagonal, diagonal] += derivative[1:-1]
+            diagonal += self._evaluate_reaction_derivative(u)
 
         left_type, _ = self._bcs[Boundary.Left]
         if left_type == "dirichlet":
-            matrix[0, 0] = 1.0
-        else:
-            inverse_two_dx = 0.5 / self.dx
-            matrix[0, 0] = 3.0 * inverse_two_dx
-            matrix[0, 1] = -4.0 * inverse_two_dx
-            matrix[0, 2] = inverse_two_dx
-
+            diagonal[0] = 1.0
+            upper[0] = 0.0
         right_type, _ = self._bcs[Boundary.Right]
         if right_type == "dirichlet":
-            matrix[-1, -1] = 1.0
-        else:
-            inverse_two_dx = 0.5 / self.dx
-            matrix[-1, -1] = 3.0 * inverse_two_dx
-            matrix[-1, -2] = -4.0 * inverse_two_dx
-            matrix[-1, -3] = inverse_two_dx
+            diagonal[-1] = 1.0
+            lower[-1] = 0.0
+        matrix = _sparse.diags(
+            [-lower, diagonal, -upper], [-1, 0, 1], shape=(self.n, self.n), format="csr"
+        )
+        if not np.all(np.isfinite(matrix.data)):
+            raise NewtonEvaluationError(
+                "One-dimensional Jacobian assembly produced non-finite values"
+            )
+        return matrix
+
+    def _jacobian_2d(self, u: np.ndarray) -> Any:
+        """Analytic sparse Jacobian of :meth:`_residual_2d`.
+
+        The 2D residual is a five-point Laplacian plus a pointwise reaction, so
+        every row has at most five entries and the whole matrix is known in closed
+        form. Assembling it beats the dense finite-difference fallback by orders
+        of magnitude: that fallback costs one full residual evaluation per unknown
+        per iteration, which on a 60x60 grid is 3721 evaluations and minutes of
+        wall clock.
+        """
+
+        from scipy import sparse
+
+        if self.ny is None or self.dy is None or self._scalar_diffusivity is None:
+            raise AssertionError("Internal error: 2D solver geometry is incomplete")
+
+        rows, columns = self._grid_shape
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            coefficient_x = (
+                np.float64(self._scalar_diffusivity) / np.float64(self.dx)
+            ) / np.float64(self.dx)
+            coefficient_y = (
+                np.float64(self._scalar_diffusivity) / np.float64(self.dy)
+            ) / np.float64(self.dy)
+        if not np.isfinite(coefficient_x) or not np.isfinite(coefficient_y):
+            raise NewtonEvaluationError(
+                "Two-dimensional D/dx^2 or D/dy^2 is not representable in float64"
+            )
+
+        index = np.arange(self.n, dtype=np.int64).reshape(self._grid_shape)
+        interior = index[1:-1, 1:-1].reshape(-1)
+        boundary = np.setdiff1d(index.reshape(-1), interior, assume_unique=False)
+
+        derivative = np.zeros(self.n, dtype=np.float64)
+        if self.reaction_deriv is not None:
+            derivative = np.asarray(
+                self._evaluate_reaction_derivative(u), dtype=np.float64
+            ).reshape(-1)
+
+        # Interior rows: the five-point stencil plus dR/du on the diagonal.
+        centre_rows = interior
+        centre_values = 2.0 * coefficient_x + 2.0 * coefficient_y + derivative[interior]
+        west = index[1:-1, :-2].reshape(-1)
+        east = index[1:-1, 2:].reshape(-1)
+        south = index[:-2, 1:-1].reshape(-1)
+        north = index[2:, 1:-1].reshape(-1)
+
+        row_indices = np.concatenate(
+            [centre_rows, interior, interior, interior, interior, boundary]
+        )
+        column_indices = np.concatenate(
+            [centre_rows, west, east, south, north, boundary]
+        )
+        values = np.concatenate(
+            [
+                centre_values,
+                np.full(interior.size, -coefficient_x),
+                np.full(interior.size, -coefficient_x),
+                np.full(interior.size, -coefficient_y),
+                np.full(interior.size, -coefficient_y),
+                # Boundary rows are residual = u - target, so the derivative is 1.
+                np.ones(boundary.size, dtype=np.float64),
+            ]
+        )
+
+        matrix = sparse.csr_matrix(
+            (values, (row_indices, column_indices)), shape=(self.n, self.n)
+        )
+        if not np.all(np.isfinite(matrix.data)):
+            raise NewtonEvaluationError(
+                "Two-dimensional Jacobian assembly produced non-finite values"
+            )
         return matrix
 
     def _default_initial_guess(self) -> np.ndarray:
@@ -1585,7 +1847,13 @@ class NonlinearDiffusionSolver:
             )
         else:
             residual_func = self._residual_2d
-            jacobian_func = None
+            # Same rule as 1D: use the analytic Jacobian whenever the reaction can
+            # be differentiated, and fall back to finite differences otherwise.
+            jacobian_func = (
+                self._jacobian_2d
+                if self.reaction_func is None or self.reaction_deriv is not None
+                else None
+            )
 
         solver = NewtonRaphsonSolver(
             residual_func=residual_func,

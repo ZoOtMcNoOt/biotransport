@@ -76,6 +76,11 @@ then attach the complete manifest:
 ```python
 from dataclasses import replace
 
+import biotransport as bt
+
+cfg = bt.BioheatCryotherapyConfig()
+manifest = cfg.provenance
+
 record = manifest.record("rho_tissue")
 sourced_record = replace(
     record,
@@ -100,6 +105,8 @@ honest unprovenanced records for the changed values.
 A manifest can also be supplied directly to either factory:
 
 ```python
+import biotransport as bt
+
 base = bt.TumorDrugDeliveryConfig()
 manifest = base.provenance
 cfg = bt.TumorDrugDeliveryConfig(parameter_provenance=manifest)

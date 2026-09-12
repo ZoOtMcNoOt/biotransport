@@ -4,6 +4,7 @@ API Reference
 .. toctree::
    :maxdepth: 2
 
+   workflow
    core
    solvers
    config
@@ -11,16 +12,21 @@ API Reference
    utilities
 
 
-Package Overview
-----------------
+Where to look
+-------------
 
 .. currentmodule:: biotransport
 
-The ``biotransport`` package provides:
+Start with :doc:`workflow` — :class:`Problem`, :func:`solve`,
+:func:`solve_steady`, :class:`Solution` and :mod:`biotransport.analytical` cover
+most of what anyone uses. The rest of these pages are the specialized solvers and
+the workflow modules around them.
 
-- **Core classes**: :class:`StructuredMesh`, :class:`StructuredMesh3D`,
-  :class:`CylindricalMesh`, :class:`NonuniformMesh1D`, and
-  :class:`TransportProblem`.
+- **Meshes and the native problem**: :class:`StructuredMesh`,
+  :class:`StructuredMesh3D`, :class:`CylindricalMesh`, :class:`NonuniformMesh1D`
+  and :class:`TransportProblem`. :class:`Problem` is a Python subclass of
+  :class:`TransportProblem` that records how you described the model, so it can
+  report dimensionless groups and keep a correct clock across saved frames.
 - **Numerical contracts**: Physics-specific C++ solvers have native contracts,
   while governed Python adapters/reference/workflow modules have a separate
   backend/disposition registry in :mod:`biotransport.contracts`.

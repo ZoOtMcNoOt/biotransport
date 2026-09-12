@@ -1,0 +1,138 @@
+{
+  "recorded_at": "2026-09-12T06:53:10.757242+00:00",
+  "environment": {
+    "python": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+    "numpy": "2.5.1",
+    "scipy": "1.18.0",
+    "platform": "Windows-11-10.0.22631-SP0",
+    "processor": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+    "logical_cpus": 20,
+    "threads_requested": 1
+  },
+  "method": "warm complete solve; identical scaled equations and stopping criteria",
+  "problem": "-c'' + c = 0 on [0,1], c(0)=1, c'(1)=0; initial c=1",
+  "repeats": 3,
+  "comparisons": [
+    {
+      "sparse": {
+        "cells": 100,
+        "unknowns": 101,
+        "linear_solver": "sparse_direct",
+        "seconds": [
+          0.012291699997149408,
+          0.010873900002479786,
+          0.007837600001948886
+        ],
+        "median_seconds": 0.010873900002479786,
+        "max_absolute_error": 1.936829071680357e-06,
+        "iterations": 1,
+        "dimensionless_residual": 1.2729947516919811e-15,
+        "jacobian_array_bytes": 4020,
+        "jacobian_nonzeros": 301
+      },
+      "dense_reference": {
+        "cells": 100,
+        "unknowns": 101,
+        "linear_solver": "dense_direct",
+        "seconds": [
+          0.008240300001489231,
+          0.0058671000006143,
+          0.008069999999861466
+        ],
+        "median_seconds": 0.008069999999861466,
+        "max_absolute_error": 1.936828994963946e-06,
+        "iterations": 1,
+        "dimensionless_residual": 1.1155111083432646e-15,
+        "jacobian_array_bytes": 81608,
+        "jacobian_nonzeros": 301
+      },
+      "median_speedup": 0.7421440327776702
+    },
+    {
+      "sparse": {
+        "cells": 300,
+        "unknowns": 301,
+        "linear_solver": "sparse_direct",
+        "seconds": [
+          0.008538799997040769,
+          0.008640600000944687,
+          0.014001800002006348
+        ],
+        "median_seconds": 0.008640600000944687,
+        "max_absolute_error": 2.239764791411858e-07,
+        "iterations": 1,
+        "dimensionless_residual": 1.9349243956444188e-15,
+        "jacobian_array_bytes": 12020,
+        "jacobian_nonzeros": 901
+      },
+      "dense_reference": {
+        "cells": 300,
+        "unknowns": 301,
+        "linear_solver": "dense_direct",
+        "seconds": [
+          0.07036750000042957,
+          0.062324499998794636,
+          0.06089659999997821
+        ],
+        "median_seconds": 0.062324499998794636,
+        "max_absolute_error": 2.2397561916243092e-07,
+        "iterations": 1,
+        "dimensionless_residual": 1.7623013974823473e-15,
+        "jacobian_array_bytes": 724808,
+        "jacobian_nonzeros": 901
+      },
+      "median_speedup": 7.212982893778282
+    },
+    {
+      "sparse": {
+        "cells": 600,
+        "unknowns": 601,
+        "linear_solver": "sparse_direct",
+        "seconds": [
+          0.014085200000408804,
+          0.014645999999629566,
+          0.026871699999901466
+        ],
+        "median_seconds": 0.014645999999629566,
+        "max_absolute_error": 5.6556090033410555e-08,
+        "iterations": 2,
+        "dimensionless_residual": 1.9085289272987475e-15,
+        "jacobian_array_bytes": 24020,
+        "jacobian_nonzeros": 1801
+      },
+      "dense_reference": {
+        "cells": 600,
+        "unknowns": 601,
+        "linear_solver": "dense_direct",
+        "seconds": [
+          0.6973896000017703,
+          0.5988637000009476,
+          0.649613200002932
+        ],
+        "median_seconds": 0.649613200002932,
+        "max_absolute_error": 5.6556090033410555e-08,
+        "iterations": 2,
+        "dimensionless_residual": 1.9107100661863906e-15,
+        "jacobian_array_bytes": 2889608,
+        "jacobian_nonzeros": 1801
+      },
+      "median_speedup": 44.354308344897056
+    }
+  ],
+  "large_sparse": {
+    "cells": 10000,
+    "unknowns": 10001,
+    "linear_solver": "sparse_direct",
+    "seconds": [
+      0.06643519999852288,
+      0.07863649999853806,
+      0.1000278999999864
+    ],
+    "median_seconds": 0.07863649999853806,
+    "max_absolute_error": 2.0552426427400405e-10,
+    "iterations": 2,
+    "dimensionless_residual": 7.915598478909314e-15,
+    "jacobian_array_bytes": 400020,
+    "jacobian_nonzeros": 30001
+  }
+}

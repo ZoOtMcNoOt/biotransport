@@ -436,6 +436,7 @@ public:
           diffusivities_(diffusivities),
           num_species_(num_species == 0 ? diffusivities.size() : num_species),
           time_(0.0) {
+        requireCartesian(mesh, "MultiSpeciesSolver");
         if (num_species_ == 0) {
             throw std::invalid_argument("Must have at least 1 species");
         }

@@ -113,6 +113,17 @@ struct TransportResult {
     std::vector<double>& solution() noexcept { return concentration; }
 };
 
+/** @brief An exact explicit schedule prepared without advancing the field. */
+struct TransportPlan {
+    /** Nominal step cap selected by the solver; the final step may be shorter. */
+    double selected_time_step = 0.0;
+    std::size_t planned_steps = 0;
+    bool within_step_budget = true;
+
+    /** Initial-state and stability diagnostics. No steps have been executed. */
+    SolveDiagnostics diagnostics;
+};
+
 namespace transport_detail {
 
 constexpr double boundary_conflict_tolerance = 64.0 * std::numeric_limits<double>::epsilon();
@@ -476,22 +487,37 @@ inline double transportLossRate(const TransportProblem& problem,
                 continue;
             }
 
-            const double width_x = (i == 0 || i == mesh.nx()) ? 0.5 * mesh.dx() : mesh.dx();
+            // In Cartesian geometry every face has unit area and the control
+            // volume is the plain width, so these weights collapse to the
+            // original expression exactly. In a curved geometry each face is
+            // weighted by its own area, which is what makes the certified step
+            // tighten near r = 0 where the shells are thin.
+            const double plain_width =
+                (i == 0 || i == mesh.nx()) ? 0.5 * mesh.dx() : mesh.dx();
+            // The axial direction of an axisymmetric mesh is untouched: its face
+            // area and its control volume share the radial measure, which
+            // cancels. Only the radial direction needs the area weights.
+            const bool radial = mesh.isRadial();
+            const double width_x = radial ? mesh.controlVolume(i) : plain_width;
+            const double lower_area = radial ? mesh.lowerFaceArea(i) : 1.0;
+            const double upper_area = radial ? mesh.upperFaceArea(i) : 1.0;
+
             double loss_rate = 0.0;
             if (i > 0) {
                 const std::size_t left = asSize(mesh.index(i - 1, j));
                 const double diffusion =
                     harmonicMean(diffusivityAt(problem, left), diffusivityAt(problem, centre));
                 const double velocity = faceVelocityX(problem, left, centre);
-                loss_rate += diffusion / (mesh.dx() * width_x);
+                loss_rate += lower_area * diffusion / (mesh.dx() * width_x);
                 if (velocity < 0.0) {
-                    loss_rate += -velocity / width_x;
+                    loss_rate += lower_area * -velocity / width_x;
                 }
             } else {
-                loss_rate +=
-                    naturalRobinLoss(boundaries[0], diffusivityAt(problem, centre), width_x);
+                loss_rate += lower_area * naturalRobinLoss(boundaries[0],
+                                                           diffusivityAt(problem, centre),
+                                                           width_x);
                 if (vxAt(problem, centre) < 0.0) {
-                    loss_rate += -vxAt(problem, centre) / width_x;
+                    loss_rate += lower_area * -vxAt(problem, centre) / width_x;
                 }
             }
             if (i < mesh.nx()) {
@@ -499,15 +525,16 @@ inline double transportLossRate(const TransportProblem& problem,
                 const double diffusion =
                     harmonicMean(diffusivityAt(problem, centre), diffusivityAt(problem, right));
                 const double velocity = faceVelocityX(problem, centre, right);
-                loss_rate += diffusion / (mesh.dx() * width_x);
+                loss_rate += upper_area * diffusion / (mesh.dx() * width_x);
                 if (velocity > 0.0) {
-                    loss_rate += velocity / width_x;
+                    loss_rate += upper_area * velocity / width_x;
                 }
             } else {
-                loss_rate +=
-                    naturalRobinLoss(boundaries[1], diffusivityAt(problem, centre), width_x);
+                loss_rate += upper_area * naturalRobinLoss(boundaries[1],
+                                                           diffusivityAt(problem, centre),
+                                                           width_x);
                 if (vxAt(problem, centre) > 0.0) {
-                    loss_rate += vxAt(problem, centre) / width_x;
+                    loss_rate += upper_area * vxAt(problem, centre) / width_x;
                 }
             }
 
@@ -556,16 +583,20 @@ inline double integrateMass(const StructuredMesh& mesh, const std::vector<double
     double integral = 0.0;
     if (mesh.is1D()) {
         for (int i = 0; i <= mesh.nx(); ++i) {
-            const double width = (i == 0 || i == mesh.nx()) ? 0.5 * mesh.dx() : mesh.dx();
+            // controlVolume reduces to dx (dx/2 at the ends) in Cartesian
+            // geometry, and to the exact shell measure in a curved one.
+            const double width = mesh.controlVolume(i);
             integral += values[asSize(mesh.index(i))] * width;
         }
         return integral;
     }
 
     for (int j = 0; j <= mesh.ny(); ++j) {
-        const double height = (j == 0 || j == mesh.ny()) ? 0.5 * mesh.dy() : mesh.dy();
+        const double height = mesh.axialHeight(j);
         for (int i = 0; i <= mesh.nx(); ++i) {
-            const double width = (i == 0 || i == mesh.nx()) ? 0.5 * mesh.dx() : mesh.dx();
+            // controlVolume carries the radial measure, so on an axisymmetric
+            // mesh this is the true ring volume rather than a plain rectangle.
+            const double width = mesh.controlVolume(i);
             integral += values[asSize(mesh.index(i, j))] * width * height;
         }
     }
@@ -658,13 +689,24 @@ inline double xDivergence(const TransportProblem& problem, const std::vector<dou
                           const std::vector<double>& x_flux, int i, int j) {
     const StructuredMesh& mesh = problem.mesh();
     const std::size_t centre = asSize(mesh.index(i, j));
-    const double width = (i == 0 || i == mesh.nx()) ? 0.5 * mesh.dx() : mesh.dx();
     const double left_flux = i == 0 ? physicalXFlux(problem, concentration, centre, Boundary::Left)
                                     : x_flux[asSize(j * mesh.nx() + i - 1)];
     const double right_flux = i == mesh.nx()
                                   ? physicalXFlux(problem, concentration, centre, Boundary::Right)
                                   : x_flux[asSize(j * mesh.nx() + i)];
-    return (right_flux - left_flux) / width;
+
+    if (!mesh.isRadial()) {
+        const double width = (i == 0 || i == mesh.nx()) ? 0.5 * mesh.dx() : mesh.dx();
+        return (right_flux - left_flux) / width;
+    }
+
+    // Radial geometry weights each face by its area and divides by the true
+    // control-volume measure. At r = 0 the inner face area is zero, so the
+    // centre flux drops out and symmetry holds without a boundary condition.
+    const double lower_area = mesh.lowerFaceArea(i);
+    const double upper_area = mesh.upperFaceArea(i);
+    const double volume = mesh.controlVolume(i);
+    return (upper_area * right_flux - lower_area * left_flux) / volume;
 }
 
 inline double yDivergence(const TransportProblem& problem, const std::vector<double>& concentration,
@@ -721,30 +763,26 @@ inline void takeStep(const TransportProblem& problem, const EssentialBoundaryDat
     concentration.swap(next);
 }
 
-}  // namespace transport_detail
+struct PreparedTransport {
+    EssentialBoundaryData essential_data;
+    std::vector<double> concentration;
+    TransportPlan plan;
+};
 
-/**
- * @brief Solve every configured term in a TransportProblem.
- *
- * Automatic stepping requires a known reaction derivative bound.  Built-in
- * bounded kinetics provide one.  For a custom reaction, either use
- * TransportProblem::reaction(function, max_abs_dc) or explicitly choose
- * SolveOptions::time_step.  An explicit step with an unbounded custom reaction
- * is marked as uncertified in the diagnostics; no false stability claim is made.
- */
-inline TransportResult solve(const TransportProblem& problem, const SolveOptions& options) {
-    using namespace transport_detail;
-
+/** Prepare once for either planning or solving; never evaluate a reaction callback. */
+inline PreparedTransport prepareTransport(const TransportProblem& problem,
+                                          const SolveOptions& options) {
     validateProblem(problem, options);
-    const EssentialBoundaryData essential_data = makeEssentialBoundaryData(problem);
+    PreparedTransport prepared;
+    prepared.essential_data = makeEssentialBoundaryData(problem);
+    const auto& essential_data = prepared.essential_data;
     validateDegenerateInflows(problem, essential_data);
 
-    TransportResult result;
-    result.concentration = problem.initial();
+    prepared.concentration = problem.initial();
     // Essential values are imposed before the first flux/reaction stencil.
-    applyEssentialBoundaries(result.concentration, essential_data);
+    applyEssentialBoundaries(prepared.concentration, essential_data);
 
-    SolveDiagnostics& diagnostics = result.diagnostics;
+    SolveDiagnostics& diagnostics = prepared.plan.diagnostics;
     diagnostics.requested_final_time = options.final_time;
     diagnostics.requested_time_step = options.time_step;
     diagnostics.automatic_time_step = (options.time_step == 0.0);
@@ -767,18 +805,17 @@ inline TransportResult solve(const TransportProblem& problem, const SolveOptions
         diagnostics.certified_stable_time_step = std::numeric_limits<double>::quiet_NaN();
     }
 
-    const auto initial_bounds = minmax(result.concentration);
+    const auto initial_bounds = minmax(prepared.concentration);
     diagnostics.initial_minimum = initial_bounds.first;
     diagnostics.initial_maximum = initial_bounds.second;
-    diagnostics.initial_mass = integrateMass(problem.mesh(), result.concentration);
+    diagnostics.initial_mass = integrateMass(problem.mesh(), prepared.concentration);
 
     if (options.final_time == 0.0) {
         diagnostics.final_time = 0.0;
         diagnostics.final_minimum = diagnostics.initial_minimum;
         diagnostics.final_maximum = diagnostics.initial_maximum;
         diagnostics.final_mass = diagnostics.initial_mass;
-        result.time = 0.0;
-        return result;
+        return prepared;
     }
 
     double target_step = options.time_step;
@@ -817,11 +854,58 @@ inline TransportResult solve(const TransportProblem& problem, const SolveOptions
         throw std::invalid_argument("the selected time step must be finite and positive");
     }
 
-    const std::size_t step_count = plannedSteps(options.final_time, target_step);
-    if (step_count > options.max_steps) {
+    prepared.plan.selected_time_step = target_step;
+    prepared.plan.planned_steps = plannedSteps(options.final_time, target_step);
+    prepared.plan.within_step_budget = prepared.plan.planned_steps <= options.max_steps;
+    return prepared;
+}
+
+}  // namespace transport_detail
+
+/**
+ * @brief Inspect the exact explicit schedule without advancing the problem.
+ *
+ * Shares validation, initial boundary application, stability certification,
+ * reaction accuracy policy and binary64 step counting with solve(). Planning
+ * does not evaluate reaction callbacks or mutate the problem. A plan exceeding
+ * options.max_steps is returned with within_step_budget=false so callers can
+ * explain its cost; solve() continues to enforce that budget before stepping.
+ *
+ * Diagnostics describe preparation only: steps and final_time remain zero.
+ * A zero-duration plan has zero planned_steps and selected_time_step. Planning
+ * cannot predict state-dependent reaction failures during a later solve.
+ */
+inline TransportPlan planTransport(const TransportProblem& problem, const SolveOptions& options) {
+    return transport_detail::prepareTransport(problem, options).plan;
+}
+
+/**
+ * @brief Solve every configured term in a TransportProblem.
+ *
+ * Automatic stepping requires a known reaction derivative bound. Built-in
+ * bounded kinetics provide one. For a custom reaction, either use
+ * TransportProblem::reaction(function, max_abs_dc) or explicitly choose
+ * SolveOptions::time_step. An explicit step with an unbounded custom reaction
+ * is marked as uncertified in the diagnostics; no false stability claim is made.
+ */
+inline TransportResult solve(const TransportProblem& problem, const SolveOptions& options) {
+    using namespace transport_detail;
+    PreparedTransport prepared = prepareTransport(problem, options);
+    if (!prepared.plan.within_step_budget) {
         throw std::runtime_error(
             "solve would exceed max_steps; refine the mesh/model or raise the guard");
     }
+
+    TransportResult result;
+    result.concentration = std::move(prepared.concentration);
+    result.diagnostics = prepared.plan.diagnostics;
+    if (options.final_time == 0.0) {
+        return result;
+    }
+    const auto& essential_data = prepared.essential_data;
+    const double target_step = prepared.plan.selected_time_step;
+    const std::size_t step_count = prepared.plan.planned_steps;
+    SolveDiagnostics& diagnostics = result.diagnostics;
 
     const StructuredMesh& mesh = problem.mesh();
     const std::size_t x_face_count = asSize(mesh.nx()) * asSize(mesh.is1D() ? 1 : mesh.ny() + 1);

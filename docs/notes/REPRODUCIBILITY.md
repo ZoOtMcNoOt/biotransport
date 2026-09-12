@@ -161,6 +161,8 @@ contain the named positive refinement parameter and finite quantity. Optional
 finite or `null`.
 
 ```python
+import biotransport.reproducibility as repro
+
 table = repro.convergence_table(
     [
         {"h_m": 0.10, "l2_error": 4.0e-2, "observed_order": None},

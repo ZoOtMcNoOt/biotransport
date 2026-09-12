@@ -18,8 +18,8 @@ conditions; they do not inherit the canonical solver's evidence automatically.
 Friendly native adapters
 ------------------------
 
-The primary :func:`solve` adapter and result diagnostics are documented on
-:doc:`core`.
+The primary :func:`solve` adapter and :class:`Solution` are documented on
+:doc:`workflow`; native diagnostics are on :doc:`core`.
 
 .. autofunction:: run
 
@@ -39,7 +39,8 @@ callers that mutate the returned mapping must migrate to their own copy.
 Python reference and legacy time surfaces
 -----------------------------------------
 
-These APIs have separate :class:`PythonNumericalContract` records and do not
+These APIs have separate :class:`~biotransport.contracts.PythonNumericalContract`
+records and do not
 claim native performance.  Explicit ``integrate(method="euler")`` uses the
 canonical native Euler path.  Omitting ``method`` temporarily emits a
 ``FutureWarning`` and preserves historical RK4 behavior; explicit Heun/RK4
@@ -53,6 +54,10 @@ diffusion remains a legacy path.
 
 .. autofunction:: solve_adaptive
 
+.. autoclass:: AdaptiveResult
+   :members:
+   :undoc-members:
+
 .. autoclass:: RK4Integrator
    :members:
 
@@ -61,10 +66,22 @@ diffusion remains a legacy path.
 
 .. autofunction:: integrate
 
+.. autoclass:: IntegrationResult
+   :members:
+   :undoc-members:
+
 .. autofunction:: integrate_explicit_runge_kutta
+
+.. autoclass:: RungeKuttaResult
+   :members:
+   :undoc-members:
 
 .. autoclass:: HighOrderDiffusionSolver
    :members:
+
+.. autoclass:: HighOrderResult
+   :members:
+   :undoc-members:
 
 .. autoclass:: NewtonRaphsonSolver
    :members:
@@ -72,9 +89,23 @@ diffusion remains a legacy path.
 .. autoclass:: NonlinearDiffusionSolver
    :members:
 
+.. autoclass:: ConvergenceCriterion
+   :members:
+
+.. autoclass:: NewtonResult
+   :members:
+   :undoc-members:
+
+.. autoclass:: PulsatileBC
+   :members:
+
 .. autofunction:: solve_pulsatile
 
-Inspect :func:`get_python_numerical_contract` for each backend, failure policy,
+.. autoclass:: PulsatileResult
+   :members:
+   :undoc-members:
+
+Inspect :func:`~biotransport.contracts.get_python_numerical_contract` for each backend, failure policy,
 evidence, and retain/port/deprecate disposition.  Newton iteration exhaustion
 returns a result with ``converged=False`` rather than silently reporting
 success.

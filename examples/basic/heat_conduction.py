@@ -9,6 +9,13 @@ diffusion equation, just with different physical interpretation.
 
 where α is the thermal diffusivity (m²/s).
 
+The clock that matters is the Fourier number, Fo = α t / L². It is the elapsed
+time measured in units of the rod's own diffusion time L²/α. Heat has only
+crossed the rod once Fo is of order 1, so the run has to reach Fo ≈ 1 before
+the linear steady-state profile is anything more than a promise. This example
+prints Fo and the gap to steady state at every saved time so the approach is
+something you can read off the numbers, not just believe from the picture.
+
 Notes:
 - This uses the same numerical diffusion solver; interpret the field as temperature.
 
@@ -16,6 +23,8 @@ BMEN 341 Reference: Weeks 1-2 (Heat Transfer Analogy)
 """
 
 import matplotlib.pyplot as plt
+import numpy as np
+
 import biotransport as bt
 
 EXAMPLE_NAME = "heat_conduction"
@@ -27,41 +36,66 @@ T_right = 20  # Right boundary: 20°C
 T_initial = 20  # Initial temperature: 20°C (room temp)
 thermal_diffusivity = 1e-5  # m²/s (typical for metal)
 
+# Diffusion time of the rod: how long heat needs to cross it end to end.
+diffusion_time = length**2 / thermal_diffusivity  # 1000 s here
+
 # Create mesh
 mesh = bt.mesh_1d(100, x_max=length)
 x = bt.x_nodes(mesh)
 
-# Solve at multiple time points to show evolution
-times = [0.1, 0.5, 1.0, 5.0, 10.0, 50.0]
-solutions = {0.0: bt.uniform(mesh, T_initial)}
+# Analytical steady state: linear temperature profile
+steady_state = T_left + (T_right - T_left) * x / length
 
-for t_target in times:
-    t_current = list(solutions.keys())[-1]
-    print(f"Simulating from t={t_current:.1f}s to t={t_target:.1f}s...")
+# Save at times spanning Fo = 0.01 (barely started) to Fo = 1 (heat has crossed).
+times = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]  # in units of the diffusion time
+save_at = [fraction * diffusion_time for fraction in times]
 
-    # Create problem starting from previous solution
-    problem = (
-        bt.Problem(mesh)
-        .diffusivity(thermal_diffusivity)
-        .initial_condition(solutions[t_current])
-        .dirichlet(bt.Boundary.Left, T_left)
-        .dirichlet(bt.Boundary.Right, T_right)
-    )
+problem = (
+    bt.Problem(mesh)
+    .diffusivity(thermal_diffusivity)
+    .initial(T_initial)
+    .dirichlet("left", T_left)
+    .dirichlet("right", T_right)
+)
 
-    result = bt.solve(problem, end_time=t_target - t_current, safety_factor=0.9)
-    solutions[t_target] = result.concentration.tolist()
+print(problem.describe())
+print()
+print(f"Rod diffusion time L^2/alpha: {diffusion_time:.0f} s")
+print(f"Integrating to t = {save_at[-1]:.0f} s, i.e. Fourier number Fo = {times[-1]:g}")
+print()
+
+solution = bt.solve(problem, end_time=save_at[-1], save_at=save_at)
+print(f"Steps taken: {solution.steps}")
+print()
+
+# How far each saved profile still is from the steady state it is heading for.
+print(f"{'t (s)':>8}  {'Fo = alpha t / L^2':>18}  {'max|T - T_steady| (degC)':>26}")
+for t in solution.times:
+    fourier = thermal_diffusivity * t / length**2
+    gap = float(np.max(np.abs(solution.at(t) - steady_state)))
+    print(f"{t:8.1f}  {fourier:18.3f}  {gap:26.4f}")
+
+final_gap = float(np.max(np.abs(solution.c - steady_state)))
+print()
+print(
+    f"At Fo = {times[-1]:g} the final profile is within {final_gap:.4f} degC of the "
+    f"steady state everywhere."
+)
+print(
+    "For a slab the transient decays like exp(-pi^2 Fo), so Fo = 0.05 (the old "
+    "stopping point) still leaves tens of degrees on the table."
+)
 
 # Plot evolution
 plt.figure(figsize=(12, 8))
-for t, temp in sorted(solutions.items()):
-    plt.plot(x, temp, label=f"t = {t:.1f}s")
+for t in solution.times:
+    fourier = thermal_diffusivity * t / length**2
+    plt.plot(x, solution.at(t), label=f"t = {t:.0f} s (Fo = {fourier:g})")
 
-# Analytical steady state: linear temperature profile
-steady_state = T_left + (T_right - T_left) * x / length
-plt.plot(x, steady_state, "r--", linewidth=2, label="Steady State")
+plt.plot(x, steady_state, "r--", linewidth=2, label="Steady state (linear)")
 
 plt.grid(True)
-plt.title("Heat Conduction in a Rod")
+plt.title("Heat Conduction in a Rod: Approach to Steady State")
 plt.xlabel("Position (m)")
 plt.ylabel("Temperature (°C)")
 plt.legend()

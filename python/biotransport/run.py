@@ -16,9 +16,9 @@ from ._core import (
     SolveDiagnostics,
     SolveOptions,
     TransportProblem,
-    TransportResult,
     solve_transport,
 )
+from .solution import Solution
 
 
 @dataclass(frozen=True)
@@ -164,6 +164,74 @@ def _owned_finite_real_array(value: object, name: str) -> np.ndarray:
     return result
 
 
+def _saved_times(
+    final_time: float,
+    save_every: float | None,
+    save_at: Sequence[float] | None,
+    frames: int | None,
+) -> tuple[float, ...]:
+    """Work out which times to stop and record a field at.
+
+    Always ends exactly on ``final_time``. Returns an empty tuple when nothing
+    needs to be saved along the way.
+    """
+
+    chosen = [
+        name
+        for name, value in (
+            ("save_every", save_every),
+            ("save_at", save_at),
+            ("frames", frames),
+        )
+        if value is not None
+    ]
+    if len(chosen) > 1:
+        raise TypeError(
+            f"pass only one of save_every, save_at or frames (got {', '.join(chosen)})"
+        )
+    if not chosen or final_time == 0.0:
+        return ()
+
+    if save_every is not None:
+        interval = _finite_real(save_every, "save_every")
+        if interval <= 0.0:
+            raise ValueError("save_every must be positive")
+        if interval > final_time:
+            raise ValueError(
+                f"save_every={interval:g} is longer than end_time={final_time:g}, "
+                f"so nothing between the start and the end would be saved"
+            )
+        count = int(math.floor(final_time / interval + 1.0e-9))
+        times = [interval * (index + 1) for index in range(count)]
+    elif frames is not None:
+        if isinstance(frames, bool) or not isinstance(frames, Integral):
+            raise TypeError("frames must be a positive integer")
+        count = int(frames)
+        if count < 1:
+            raise ValueError("frames must be at least 1")
+        times = [final_time * (index + 1) / count for index in range(count)]
+    else:
+        assert save_at is not None
+        if isinstance(save_at, (str, bytes)):
+            raise TypeError("save_at must be a sequence of times")
+        times = sorted(
+            _finite_real(value, f"save_at[{index}]")
+            for index, value in enumerate(save_at)
+        )
+        if any(value <= 0.0 for value in times):
+            raise ValueError("save_at times must be positive")
+        if any(value > final_time for value in times):
+            raise ValueError(
+                f"save_at contains times beyond end_time={final_time:g}; "
+                f"raise end_time or drop those entries"
+            )
+
+    # Land exactly on the end, and drop anything that duplicates it.
+    times = [value for value in times if value < final_time * (1.0 - 1.0e-12)]
+    times.append(final_time)
+    return tuple(times)
+
+
 def solve(
     problem: TransportProblem,
     end_time: float | None = None,
@@ -176,32 +244,87 @@ def solve(
     max_steps: int = 10_000_000,
     check_finite: bool = True,
     method: str = "conservative",
-) -> TransportResult:
-    """Solve a scalar transport problem entirely in the C++ core.
+    save_every: float | None = None,
+    save_at: Sequence[float] | None = None,
+    frames: int | None = None,
+    steady: bool = False,
+) -> Solution:
+    """Run a transport problem forward in time.
 
-    Parameters
-    ----------
-    problem:
-        Physics configured with :class:`biotransport.Problem`.
-    end_time:
-        Requested physical end time. The result lands on this time exactly.
-    time_step:
-        Maximum explicit step. When omitted, the C++ solver selects a certified
-        transport-stable step. Custom reactions require either this argument or
-        a declared derivative bound.
-    safety_factor:
-        Fraction of the certified explicit stability limit used automatically.
-    reaction_step_fraction:
-        Accuracy guard relative to a known reaction timescale.
+    All the arithmetic happens in the C++ core. This function checks your
+    arguments, hands them over, and wraps what comes back in a
+    :class:`~biotransport.Solution` that knows its own mesh.
 
-    Notes
-    -----
-    ``t`` and ``dt`` remain as compatibility aliases. ``method`` accepts
-    ``"conservative"`` or ``"explicit"``; other algorithms are exposed through
-    their specialized APIs until they share this scientific contract.
+    Args:
+        problem: Physics built with :class:`biotransport.Problem`.
+        end_time: How long to run for. The solver lands on this time exactly,
+            shortening its last step if it has to.
+        time_step: Largest step to take. Leave it out and the core picks a step
+            that is provably stable for your grid and coefficients. A custom
+            reaction without a declared derivative bound needs this set.
+        safety_factor: What fraction of the certified stability limit to use
+            when choosing a step automatically. Default 0.8.
+        reaction_step_fraction: Accuracy guard against a known reaction
+            timescale. Default 0.1.
+        max_steps: Refuse to run longer than this many steps. Counted across
+            every segment when you are saving frames.
+        check_finite: Reject a run that produces a NaN or infinity.
+        save_every: Also record the field at this time interval, so you can
+            plot or animate the evolution.
+        save_at: Record the field at these specific times.
+        frames: Record this many equally spaced fields, ending at ``end_time``.
+        steady: Skip the transient entirely and solve for the steady state.
+            Equivalent to :func:`biotransport.solve_steady`; leave ``end_time``
+            out when you use it.
+
+    Returns:
+        A :class:`~biotransport.Solution`. It behaves like the native result
+        (``concentration``, ``time``, ``diagnostics``) and adds geometry, saved
+        frames, plotting and comparison.
+
+    Raises:
+        ValueError: If the configuration is outside what this solver certifies
+            -- an unstable step, an unverified method, an uncertified reaction
+            with automatic stepping. The library refuses rather than quietly
+            solving a different problem.
+
+    Example:
+        >>> sol = bt.solve(problem, end_time=0.1)
+        >>> sol.plot()
+
+        Recording the evolution so you can watch it:
+
+        >>> sol = bt.solve(problem, end_time=0.1, save_every=0.01)
+        >>> sol.plot(times=[0.0, 0.02, 0.05, 0.1])
+
+    Note:
+        ``t`` and ``dt`` still work as aliases for ``end_time`` and
+        ``time_step``. ``method`` accepts ``"conservative"`` or ``"explicit"``,
+        which name the same verified algorithm; other schemes live behind their
+        own APIs until they carry the same evidence.
+
+        Saving frames splits the run into segments that each start their clock
+        at zero, so a reaction written as ``R(c, x, y, t)`` gets its clock
+        shifted back to absolute time. That happens automatically for problems
+        built with :class:`biotransport.Problem`. Segment boundaries also pin
+        step boundaries, so a saved run can follow a very slightly different
+        (equally valid) discrete path than the same run done in one shot.
     """
     if not isinstance(problem, TransportProblem):
         raise TypeError("problem must be a TransportProblem")
+    if steady:
+        from .steady import solve_steady
+
+        if end_time is not None or t is not None:
+            raise TypeError(
+                "a steady solve has no end time -- drop end_time, or leave "
+                "steady out to march through the transient"
+            )
+        if save_every is not None or save_at is not None or frames is not None:
+            raise TypeError(
+                "a steady solve produces a single field, so there are no frames to save"
+            )
+        return solve_steady(problem)
     if end_time is not None and t is not None:
         raise TypeError("Pass either end_time or t, not both")
     if end_time is None:
@@ -227,8 +350,11 @@ def solve(
     normalized_method = method.lower().replace("-", "_")
     if normalized_method not in {"conservative", "explicit", "explicit_euler"}:
         raise ValueError(
-            "The intuitive solve() API currently supports the verified conservative "
-            "explicit solver only. Use a specialized solver explicitly for other methods."
+            f"solve() runs the verified conservative explicit scheme; {method!r} is "
+            f"not one of its names ('conservative', 'explicit', 'explicit_euler'). "
+            f"Other algorithms have their own classes -- CrankNicolsonDiffusion, "
+            f"ADIDiffusion2D, ImplicitDiffusion2D -- because they carry different "
+            f"stability and accuracy evidence."
         )
 
     safety = _finite_real(safety_factor, "safety_factor")
@@ -245,18 +371,288 @@ def solve(
     if not isinstance(check_finite, bool):
         raise TypeError("check_finite must be a boolean")
 
-    options = SolveOptions()
-    options.final_time = final_time
-    options.time_step = requested_step
-    options.safety_factor = safety
-    options.reaction_step_fraction = reaction_fraction
-    options.max_steps = step_limit
-    options.check_finite = check_finite
-    return solve_transport(problem, options)
+    def _options(duration: float, remaining: int) -> SolveOptions:
+        options = SolveOptions()
+        options.final_time = duration
+        options.time_step = requested_step
+        options.safety_factor = safety
+        options.reaction_step_fraction = reaction_fraction
+        options.max_steps = remaining
+        options.check_finite = check_finite
+        return options
+
+    mesh = problem.mesh()
+    starting_field = _starting_field(problem, mesh)
+    checkpoints = _saved_times(final_time, save_every, save_at, frames)
+
+    # The common case: one native solve, no problem mutation at all.
+    if len(checkpoints) <= 1:
+        try:
+            native = solve_transport(problem, _options(final_time, step_limit))
+        except Exception as error:
+            raise _explain_step_error(problem, mesh, requested_step, error) from None
+        times: list[float] = []
+        fields: list[np.ndarray] = []
+        if starting_field is not None and native.time > 0.0:
+            times.append(0.0)
+            fields.append(starting_field)
+        times.append(float(native.time))
+        fields.append(np.asarray(native.concentration, dtype=np.float64))
+        return Solution(
+            mesh=mesh,
+            times=times,
+            fields=fields,
+            diagnostics=[native.diagnostics],
+            problem=problem,
+            total_steps=int(native.diagnostics.steps),
+        )
+
+    return _solve_in_segments(
+        problem,
+        mesh=mesh,
+        starting_field=starting_field,
+        checkpoints=checkpoints,
+        options_for=_options,
+        step_limit=step_limit,
+        requested_step=requested_step,
+    )
 
 
-def run(problem: TransportProblem, t_end: float, **kwargs) -> TransportResult:
-    """Compatibility alias for :func:`solve`; computation remains in C++."""
+def _step_limits(problem: TransportProblem, mesh) -> list[tuple[str, str, float]]:
+    """Per-process explicit step limits, as ``(process, formula, limit)``.
+
+    Computed from the configured coefficients so an error can say *which* term
+    is throttling the run, not just that something is.
+    """
+
+    recipe = getattr(problem, "_recipe", None)
+    if recipe is None:
+        return []
+
+    limits: list[tuple[str, str, float]] = []
+    dx = float(mesh.x(1) - mesh.x(0))
+    is_1d = bool(mesh.is_1d())
+
+    diffusivity = recipe._diffusivity_scale()
+    if diffusivity and diffusivity > 0.0:
+        if is_1d:
+            limits.append(("diffusion", "dx^2 / (2 D)", dx * dx / (2.0 * diffusivity)))
+        else:
+            dy = float(mesh.y(0, 1) - mesh.y(0, 0))
+            limit = 1.0 / (2.0 * diffusivity * (1.0 / (dx * dx) + 1.0 / (dy * dy)))
+            limits.append(("diffusion", "1 / (2 D (1/dx^2 + 1/dy^2))", limit))
+
+    speed = recipe._speed()
+    if speed and speed > 0.0:
+        limits.append(("advection", "dx / |v|", dx / speed))
+
+    if problem.reaction_stability_bound_known():
+        bound = float(problem.reaction_stability_rate_bound())
+        if bound > 0.0:
+            limits.append(("reaction", "1 / max|dR/dc|", 1.0 / bound))
+
+    return limits
+
+
+def _explain_step_error(
+    problem: TransportProblem,
+    mesh,
+    requested_step: float,
+    error: Exception,
+) -> Exception:
+    """Rebuild a bare stability complaint into something a student can act on."""
+
+    text = str(error).lower()
+    # Two different failures land here and they need opposite advice: a step that
+    # is too large, and automatic stepping with nothing to size itself from.
+    unbounded_reaction = "derivative bound" in text or "max_abs_dc" in text
+    too_large = "stability" in text or "time_step" in text or "time step" in text
+    if not (unbounded_reaction or too_large):
+        return error
+
+    try:
+        if unbounded_reaction:
+            lines = [str(error).rstrip("."), ""]
+            lines.append(
+                "  Automatic stepping sizes the step from the fastest process in the "
+                "problem, and it"
+            )
+            lines.append(
+                "  cannot differentiate your reaction to find out how fast that is. So:"
+            )
+            lines.append("")
+            lines.append(
+                "    declare the bound         problem.reaction(f, max_abs_dc=B)"
+            )
+            lines.append(
+                "                              where B >= max |dR/dc| over the "
+                "concentrations you expect"
+            )
+            lines.append(
+                "    or pick the step yourself bt.solve(problem, end_time=..., "
+                "time_step=...)"
+            )
+            transport = _step_limits(problem, mesh)
+            if transport:
+                smallest = min(limit for _name, _formula, limit in transport)
+                lines.append("")
+                lines.append(
+                    f"  transport alone would allow about dt = {smallest:.4g}, so start "
+                    f"below that."
+                )
+            return type(error)("\n".join(lines))
+
+        limits = _step_limits(problem, mesh)
+        certified = None
+        stable_probe = getattr(problem, "stable_time_step", None)
+        if callable(stable_probe):
+            certified = float(stable_probe())
+
+        lines = [str(error).rstrip(".")]
+        lines.append("")
+        if requested_step > 0.0:
+            lines.append(f"  you asked for dt = {requested_step:.4g}")
+        if certified and certified > 0.0:
+            lines.append(f"  the certified stable limit here is dt = {certified:.4g}")
+        if limits:
+            lines.append("")
+            lines.append(
+                "  which process is squeezing you (indicative scalings; the certified "
+                "limit above"
+            )
+            lines.append("  combines them):")
+            for index, (name, formula, limit) in enumerate(
+                sorted(limits, key=lambda item: item[2])
+            ):
+                marker = "  <-- smallest" if index == 0 else ""
+                lines.append(f"    {name:<10} {formula:<28} = {limit:.4g}{marker}")
+        lines.append("")
+        lines.append("  your options:")
+        lines.append(
+            "    - leave time_step out entirely and let the solver choose a stable step"
+        )
+        if limits and min(limits, key=lambda item: item[2])[0] == "diffusion":
+            lines.append(
+                "    - use a coarser mesh: the diffusion limit scales as dx^2, so "
+                "halving the cell count buys you 4x the step"
+            )
+        lines.append(
+            "    - use an implicit solver, which has no step limit: "
+            "CrankNicolsonDiffusion (1D), ADIDiffusion2D or ImplicitDiffusion2D (2D)"
+        )
+        lines.append(
+            "    - if you only want the final steady answer, skip the transient "
+            "with bt.solve_steady(problem)"
+        )
+        return type(error)("\n".join(lines))
+    except Exception:  # noqa: BLE001 - diagnosis must never mask the real error
+        return error
+
+
+def _starting_field(problem: TransportProblem, mesh) -> np.ndarray | None:
+    """Read the configured initial condition back, when the core exposes it."""
+
+    getter = getattr(problem, "initial", None)
+    if not callable(getter):
+        return None
+    try:
+        raw = getter()
+    except TypeError:
+        return None
+    field = np.asarray(raw, dtype=np.float64).reshape(-1)
+    if field.size != int(mesh.num_nodes()):
+        return None
+    return field
+
+
+def _solve_in_segments(
+    problem: TransportProblem,
+    *,
+    mesh,
+    starting_field: np.ndarray | None,
+    checkpoints: tuple[float, ...],
+    options_for,
+    step_limit: int,
+    requested_step: float = 0.0,
+) -> Solution:
+    """Advance through the checkpoints, recording a field at each one.
+
+    Each segment reuses the same problem object, so every configured term
+    survives; only the initial condition is replaced between segments. The
+    problem is put back the way it was found before returning.
+    """
+
+    if starting_field is None:
+        raise ValueError(
+            "saving frames needs to read the problem's initial condition, which "
+            "this problem does not expose. Build it with bt.Problem(mesh) and set "
+            "an initial condition."
+        )
+
+    recipe = getattr(problem, "_recipe", None)
+    needs_clock_shift = recipe is not None and recipe.has_custom_reaction
+
+    times: list[float] = [0.0]
+    fields: list[np.ndarray] = [starting_field.copy()]
+    diagnostics: list[SolveDiagnostics] = []
+    current = starting_field.copy()
+    elapsed = 0.0
+    total_steps = 0
+
+    try:
+        for target in checkpoints:
+            remaining = step_limit - total_steps
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"max_steps={step_limit} ran out at t={elapsed:g} before "
+                    f"reaching t={checkpoints[-1]:g}. Raise max_steps, or shorten "
+                    f"end_time."
+                )
+            if needs_clock_shift:
+                recipe.replay_reactions(problem, elapsed)
+            # Native call: the field is already validated, and going through a
+            # recording override would be redundant work inside the loop.
+            TransportProblem.initial_condition(problem, current.tolist())
+
+            duration = target - elapsed
+            try:
+                native = solve_transport(problem, options_for(duration, remaining))
+            except Exception as error:
+                raise _explain_step_error(
+                    problem, mesh, requested_step, error
+                ) from None
+            if native.time != duration:
+                raise RuntimeError(
+                    "the native solver did not land exactly on the requested "
+                    f"segment: asked for {duration}, reached {native.time}"
+                )
+            current = np.asarray(native.concentration, dtype=np.float64)
+            times.append(target)
+            fields.append(current.copy())
+            diagnostics.append(native.diagnostics)
+            total_steps += int(native.diagnostics.steps)
+            elapsed = target
+    finally:
+        # Leave the problem exactly as the caller configured it.
+        if needs_clock_shift:
+            recipe.replay_reactions(problem, 0.0)
+        TransportProblem.initial_condition(problem, starting_field.tolist())
+
+    return Solution(
+        mesh=mesh,
+        times=times,
+        fields=fields,
+        diagnostics=diagnostics,
+        problem=problem,
+        total_steps=total_steps,
+    )
+
+
+def run(problem: TransportProblem, t_end: float, **kwargs) -> Solution:
+    """Older name for :func:`solve`, kept so existing scripts keep working.
+
+    New code should call ``bt.solve(problem, end_time=...)``.
+    """
     return solve(problem, end_time=t_end, **kwargs)
 
 
@@ -270,9 +666,14 @@ def run_checkpoints(
 ) -> CheckpointResult:
     """Solve pure diffusion in C++ and return fields at requested times.
 
-    This helper is deliberately scoped to uniform diffusion. For reactions or
-    advection, construct a :class:`Problem` and call :func:`solve` so configured
-    terms cannot be lost while rebuilding checkpoint segments. Checkpoints may
+    Superseded by ``bt.solve(problem, end_time=..., save_at=[...])``, which does
+    the same thing for *any* configured problem and hands back a
+    :class:`~biotransport.Solution` you can plot directly. This function stays
+    for older scripts.
+
+    It is deliberately scoped to uniform diffusion, because it rebuilds the
+    problem from scratch for each segment and so cannot carry a reaction or a
+    velocity across. Checkpoints may
     be supplied in any order; returned keys are sorted physical times. Each
     checkpoint segment lands exactly on its requested duration and keeps its
     native diagnostics.

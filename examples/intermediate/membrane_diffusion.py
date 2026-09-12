@@ -9,6 +9,10 @@ Notes:
 - Units are SI (meters, seconds, m^2/s).
 - The PDE is dC/dt = ∇·(D(x)∇C) with a low-D membrane region.
 - Uses the new variable diffusivity support in the C++ solver.
+- The solute starts in the left compartment only; the membrane is initially
+  solute-free, so the run shows the barrier filling and then breaking through.
+- Snapshots are log-spaced over the membrane diffusion time
+  tau_mem = membrane_width^2 / D_membrane, which is the slow scale here.
 
 BMEN 341 Reference: Week 4 (Membrane Transport)
 """
@@ -42,39 +46,40 @@ D_field = np.asarray(
     dtype=np.float64,
 )
 
-# Initial condition: linear ramp across membrane
-frac = np.clip((x - mem_lo) / membrane_width, 0.0, 1.0)
-initial = np.where(
-    x < mem_lo,
-    C_left,
-    np.where(x > mem_hi, C_right, C_left * (1 - frac) + C_right * frac),
-)
+# Initial condition: solute fills the left compartment, the membrane and the
+# right compartment start empty.
+initial = np.where(x < mem_lo, C_left, C_right)
 
 # Build the problem with variable diffusivity
 problem = (
     bt.Problem(mesh)
     .diffusivity_field(D_field)
-    .initial_condition(initial)
+    .initial(initial)
     .dirichlet(bt.Boundary.Left, C_left)
     .dirichlet(bt.Boundary.Right, C_right)
 )
 
-# Run simulation at multiple time snapshots
-times_to_save = [0.1, 0.5, 1.0, 5.0, 10.0, 50.0, 100.0]
+# Snapshot times: log-spaced across the membrane diffusion time so the curves
+# are actually separated instead of piling up at one end of the transient.
+tau_mem = membrane_width**2 / D_membrane  # s
+times_to_save = list(tau_mem * np.logspace(np.log10(0.002), np.log10(6.0), 7))
+
+print(f"Membrane diffusion time tau_mem = {tau_mem:.1f} s")
+print(f"Certified stable time step: {problem.stable_time_step():.4g} s")
+print(
+    f"Running to t = {times_to_save[-1]:.1f} s = {times_to_save[-1] / tau_mem:.1f} tau_mem"
+)
+
+result = bt.solve(problem, end_time=times_to_save[-1], save_at=times_to_save)
 saved_solutions = {0.0: initial.copy()}
-
-t = 0.0
 for t_target in times_to_save:
-    print(f"Simulating from t={t:.1f}s to t={t_target:.1f}s...")
-    result = bt.solve(problem, end_time=t_target - t)
-    sol = np.asarray(result.concentration).copy()
-    problem = problem.initial_condition(sol)
-    saved_solutions[t_target] = sol
-    t = t_target
+    saved_solutions[t_target] = np.asarray(result.at(t_target)).copy()
 
-# Analytical steady state for comparison
+# Steady state of this exact discretization (what the transient converges to)
+c_steady = np.asarray(bt.solve_steady(problem).concentration)
+
+# Analytical sharp-interface steady state (series resistances) for comparison
 x_analytical = np.linspace(0, L, 1000)
-# Steady-state flux through series resistances
 flux = (C_left - C_right) / (
     (mem_lo / D_medium) + (membrane_width / D_membrane) + ((L - mem_hi) / D_medium)
 )
@@ -90,11 +95,46 @@ c_analytical = np.where(
     ),
 )
 
+# Report how far apart the plotted curves actually are
+plotted_times = sorted(saved_solutions)
+spreads = [
+    float(np.max(np.abs(saved_solutions[t2] - saved_solutions[t1])))
+    for t1, t2 in zip(plotted_times[:-1], plotted_times[1:])
+]
+print("\nSeparation between consecutive plotted curves (max |dC|):")
+for (t1, t2), s in zip(zip(plotted_times[:-1], plotted_times[1:]), spreads):
+    print(f"  t = {t1:7.1f} s -> {t2:7.1f} s : {s:.4f}")
+print(f"  smallest consecutive spread: {min(spreads):.4f}")
+print(f"  largest consecutive spread:  {max(spreads):.4f}")
+
+final_gap = float(np.max(np.abs(saved_solutions[plotted_times[-1]] - c_steady)))
+mesh_gap = float(np.max(np.abs(c_steady - np.interp(x, x_analytical, c_analytical))))
+print("\nApproach to steady state:")
+print(f"  max |C(t_end) - C_steady(numerical)| = {final_gap:.2e}")
+print(
+    f"  max |C_steady(numerical) - C_steady(sharp interface)| = {mesh_gap:.4f}\n"
+    f"  (the interface is only resolved to +/- dx/2 = {0.5 * mesh.dx() * 1e6:.1f} um of a "
+    f"{membrane_width * 1e6:.0f} um membrane, an O(dx) offset in the membrane resistance)"
+)
+
 # Plot time evolution
 plt.figure(figsize=(10, 6))
-for t, sol in sorted(saved_solutions.items()):
-    plt.plot(x * 1e3, sol, label=f"t = {t:.1f}s")
-plt.plot(x_analytical * 1e3, c_analytical, "r--", linewidth=2, label="Steady State")
+for t in plotted_times:
+    plt.plot(x * 1e3, saved_solutions[t], label=f"t = {t:.1f}s")
+plt.plot(
+    x * 1e3,
+    c_steady,
+    "k--",
+    linewidth=2,
+    label="Steady state (numerical)",
+)
+plt.plot(
+    x_analytical * 1e3,
+    c_analytical,
+    "r:",
+    linewidth=2,
+    label="Steady state (sharp interface)",
+)
 plt.axvspan(mem_lo * 1e3, mem_hi * 1e3, color="gray", alpha=0.3, label="Membrane")
 plt.grid(True)
 plt.title("Diffusion Through a Membrane")
@@ -106,5 +146,5 @@ plt.savefig(bt.get_result_path("membrane_diffusion.png", EXAMPLE_NAME))
 plt.show()
 
 print(
-    f"Simulation complete. Results saved to '{bt.get_result_path('', EXAMPLE_NAME)}'."
+    f"\nSimulation complete. Results saved to '{bt.get_result_path('', EXAMPLE_NAME)}'."
 )

@@ -47,6 +47,7 @@ class CrankNicolsonDiffusion {
 public:
     CrankNicolsonDiffusion(const StructuredMesh& mesh, double diffusivity)
         : mesh_(mesh), diffusivity_(diffusivity), solution_(mesh.numNodes(), 0.0) {
+        requireCartesian(mesh, "CrankNicolsonDiffusion");
         requirePositiveFinite(diffusivity, "Diffusivity");
         boundary_conditions_.fill(BoundaryCondition::Dirichlet(0.0));
     }

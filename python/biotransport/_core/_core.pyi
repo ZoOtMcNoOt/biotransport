@@ -838,8 +838,22 @@ class NonuniformDiffusion1D:
     def reset_balance_reference(self) -> None: ...
     def diagnostics(self) -> NonuniformDiffusionDiagnostics: ...
 
+class Geometry(Enum):
+    """Coordinate system of a 1D mesh.
+
+    Only the face area and the control-volume measure differ between them:
+    ``CARTESIAN`` uses an area factor of 1, ``CYLINDRICAL`` uses ``r`` and
+    ``SPHERICAL`` uses ``r**2``. Because the factor vanishes at ``r = 0``,
+    symmetry at the centre follows from the geometry rather than from a
+    boundary condition.
+    """
+
+    CARTESIAN = 0
+    CYLINDRICAL = 1
+    SPHERICAL = 2
+
 class StructuredMesh:
-    """Uniform structured mesh for 1D or 2D rectangular domains.
+    """Uniform structured mesh for 1D or 2D domains.
 
     A structured mesh divides the domain into a regular grid of cells.
     Nodes are located at cell corners, and the solution is typically
@@ -848,10 +862,16 @@ class StructuredMesh:
     For 1D problems, the mesh has `nx` cells and `nx+1` nodes.
     For 2D problems, the mesh has `nx*ny` cells and `(nx+1)*(ny+1)` nodes.
 
+    A 1D mesh may be Cartesian, cylindrical or spherical; a 2D mesh is always
+    Cartesian.
+
     Examples:
         >>> # 1D mesh: 100 cells from x=0 to x=1
         >>> mesh_1d = StructuredMesh(100, 0.0, 1.0)
         >>> print(f"dx = {mesh_1d.dx()}")  # 0.01
+        >>>
+        >>> # A spherical mesh over a 50 um cell
+        >>> cell = StructuredMesh(100, 0.0, 50e-6, Geometry.SPHERICAL)
         >>>
         >>> # 2D mesh: 50x50 cells on unit square
         >>> mesh_2d = StructuredMesh(50, 50, 0.0, 1.0, 0.0, 1.0)
@@ -863,13 +883,21 @@ class StructuredMesh:
     """
 
     @overload
-    def __init__(self, nx: int, xmin: float, xmax: float) -> None:
+    def __init__(
+        self,
+        nx: int,
+        xmin: float,
+        xmax: float,
+        geometry: Geometry = ...,
+    ) -> None:
         """Create a 1D structured mesh.
 
         Args:
             nx: Number of cells in x-direction.
-            xmin: Minimum x-coordinate.
+            xmin: Minimum x-coordinate. The inner radius for a curved geometry,
+                which must not be negative.
             xmax: Maximum x-coordinate.
+            geometry: Coordinate system; Cartesian by default.
         """
         ...
 
@@ -882,17 +910,54 @@ class StructuredMesh:
         xmax: float,
         ymin: float,
         ymax: float,
+        geometry: Geometry = ...,
     ) -> None:
         """Create a 2D structured mesh.
 
         Args:
-            nx: Number of cells in x-direction.
-            ny: Number of cells in y-direction.
+            nx: Number of cells in x-direction (r, when axisymmetric).
+            ny: Number of cells in y-direction (z, when axisymmetric).
             xmin: Minimum x-coordinate.
             xmax: Maximum x-coordinate.
             ymin: Minimum y-coordinate.
             ymax: Maximum y-coordinate.
+            geometry: ``CARTESIAN`` or ``CYLINDRICAL``, the latter meaning
+                axisymmetric ``(r, z)``. ``SPHERICAL`` is 1D only.
         """
+        ...
+
+    def geometry(self) -> Geometry:
+        """Coordinate system of this mesh. Always Cartesian in 2D."""
+        ...
+
+    def is_radial(self) -> bool:
+        """Whether this mesh is cylindrical or spherical."""
+        ...
+
+    def area_factor(self, r: float) -> float:
+        """Face area factor at coordinate ``r``: 1, ``r``, or ``r**2``."""
+        ...
+
+    def control_volume(self, i: int) -> float:
+        """Radial measure of node ``i``'s control volume.
+
+        Reduces to ``dx`` for an interior node and ``dx/2`` at either end on a
+        Cartesian mesh, and to the exact shell measure on a curved one. On a 2D
+        axisymmetric mesh this is the radial part only; multiply by
+        :meth:`axial_height` for the full volume.
+        """
+        ...
+
+    def lower_face_area(self, i: int) -> float:
+        """Area factor at the lower x face of node ``i``'s control volume."""
+        ...
+
+    def upper_face_area(self, i: int) -> float:
+        """Area factor at the upper x face of node ``i``'s control volume."""
+        ...
+
+    def axial_height(self, j: int) -> float:
+        """Axial control height of row ``j``. Always 1 on a 1D mesh."""
         ...
 
     def nx(self) -> int:
@@ -1606,6 +1671,26 @@ class SolveDiagnostics:
     def final_minimum(self) -> float: ...
     @property
     def final_maximum(self) -> float: ...
+
+class TransportPlan:
+    """Read-only schedule prepared without advancing the field or evaluating reactions."""
+
+    @property
+    def selected_time_step(self) -> float:
+        """Nominal selected step cap; the final step may be shorter. Zero for zero duration."""
+        ...
+    @property
+    def planned_steps(self) -> int: ...
+    @property
+    def within_step_budget(self) -> bool: ...
+    @property
+    def diagnostics(self) -> SolveDiagnostics:
+        """Independent initial-state and stability diagnostics, with zero executed steps."""
+        ...
+
+def plan_transport(problem: TransportProblem, options: SolveOptions) -> TransportPlan:
+    """Use the solver's exact scheduling policy without executing time steps."""
+    ...
 
 class TransportResult:
     """Final scalar field, exact physical time, and solve diagnostics."""

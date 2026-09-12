@@ -54,6 +54,29 @@ void register_transport_bindings(py::module_& module) {
         .def_readonly("final_minimum", &SolveDiagnostics::final_minimum)
         .def_readonly("final_maximum", &SolveDiagnostics::final_maximum);
 
+    py::class_<TransportPlan>(module, "TransportPlan")
+        .def_readonly("selected_time_step", &TransportPlan::selected_time_step)
+        .def_readonly("planned_steps", &TransportPlan::planned_steps)
+        .def_readonly("within_step_budget", &TransportPlan::within_step_budget)
+        .def_property_readonly("diagnostics", [](const TransportPlan& plan) {
+            return SolveDiagnostics(plan.diagnostics);
+        });
+
+    module.def(
+        "plan_transport",
+        [](const TransportProblem& problem, const SolveOptions& options) {
+            return planTransport(problem, options);
+        },
+        py::arg("problem"), py::arg("options"),
+        R"doc(Prepare the exact explicit schedule without advancing the problem.
+
+The read-only plan reports the selected nominal step, exact planned step count,
+and whether it fits options.max_steps. It uses the same validation, stability
+limit, reaction accuracy policy and binary64 schedule as solve_transport.
+Diagnostics are returned as independent copies and report no executed steps.
+Zero-duration plans have zero selected step and zero planned steps. No reaction
+callbacks execute during planning; their future numerical values are not checked.)doc");
+
     py::class_<TransportResult>(module, "TransportResult")
         .def_property_readonly(
             "concentration",

@@ -7,7 +7,6 @@ import numpy as np
 import pytest
 
 import biotransport as bt
-import biotransport.visualization as visualization
 
 
 def _canonical_result(mesh):
@@ -49,10 +48,24 @@ def test_plot_accepts_result_with_callable_concentration() -> None:
 
 
 def test_plot_result_only_error_explicitly_names_missing_mesh() -> None:
+    """A result that genuinely has no mesh must say so, and say what to pass."""
     mesh = bt.mesh_1d(4, 0.0, 1.0)
+    problem = bt.TransportProblem(mesh).diffusivity(0.0).initial_condition(2.0)
+    native = bt.solve_transport(problem, bt.SolveOptions.until(0.0))
 
     with pytest.raises(ValueError, match=r"bt\.plot\(mesh, result\)"):
-        bt.plot(_canonical_result(mesh), show=False)
+        bt.plot(native, show=False)
+
+
+def test_plot_accepts_a_solution_on_its_own() -> None:
+    """A Solution carries its mesh, so it needs no second argument."""
+    mesh = bt.mesh_1d(4, 0.0, 1.0)
+
+    figure = bt.plot(_canonical_result(mesh), show=False)
+    try:
+        np.testing.assert_array_equal(figure.axes[0].lines[0].get_ydata(), 2.0)
+    finally:
+        plt.close(figure)
 
 
 @pytest.mark.parametrize(
@@ -75,7 +88,8 @@ def test_plot_rejects_kind_incompatible_with_mesh_dimension(
 def test_plot_forwards_1d_labels_and_does_not_show(monkeypatch) -> None:
     mesh = bt.mesh_1d(4, 0.0, 1.0)
     calls = []
-    monkeypatch.setattr(visualization.plt, "show", lambda: calls.append("show"))
+    # visualization imports pyplot lazily, so patch the module itself.
+    monkeypatch.setattr(plt, "show", lambda: calls.append("show"))
 
     figure = bt.plot(
         mesh,
@@ -97,7 +111,8 @@ def test_plot_forwards_1d_labels_and_does_not_show(monkeypatch) -> None:
 def test_plot_show_true_calls_matplotlib(monkeypatch) -> None:
     mesh = bt.mesh_1d(4, 0.0, 1.0)
     calls = []
-    monkeypatch.setattr(visualization.plt, "show", lambda: calls.append("show"))
+    # visualization imports pyplot lazily, so patch the module itself.
+    monkeypatch.setattr(plt, "show", lambda: calls.append("show"))
 
     figure = bt.plot(mesh, np.zeros(mesh.num_nodes()), show=True)
     try:

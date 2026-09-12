@@ -199,22 +199,71 @@ def as_2d(mesh, values) -> np.ndarray:
 # ===========================================================================
 
 
-def mesh_1d(n: int, x_min: float = 0.0, x_max: float = 1.0):
+_GEOMETRY_NAMES = {
+    "cartesian": "CARTESIAN",
+    "slab": "CARTESIAN",
+    "planar": "CARTESIAN",
+    "cylindrical": "CYLINDRICAL",
+    "cylinder": "CYLINDRICAL",
+    "radial": "CYLINDRICAL",
+    # In 2D, cylindrical means an (r, z) slice of a solid of revolution.
+    "axisymmetric": "CYLINDRICAL",
+    "rz": "CYLINDRICAL",
+    "spherical": "SPHERICAL",
+    "sphere": "SPHERICAL",
+}
+
+
+def _resolve_geometry(geometry):
+    """Accept a Geometry value or a plain name like ``"spherical"``."""
+    from ._core import Geometry
+
+    if isinstance(geometry, Geometry):
+        return geometry
+    if isinstance(geometry, str):
+        member = _GEOMETRY_NAMES.get(geometry.strip().casefold())
+        if member is not None:
+            return getattr(Geometry, member)
+        raise ValueError(
+            f"{geometry!r} is not a geometry. Use 'cartesian', 'cylindrical' or "
+            f"'spherical'."
+        )
+    raise TypeError(
+        "geometry must be a string like 'spherical' or a bt.Geometry value, "
+        f"not {type(geometry).__name__}"
+    )
+
+
+def mesh_1d(n: int, x_min: float = 0.0, x_max: float = 1.0, geometry="cartesian"):
     """Create a 1D mesh with n cells from x_min to x_max.
 
-    This is a convenience wrapper for StructuredMesh with a more intuitive API.
-
     Args:
-        n: Number of cells (results in n+1 nodes)
-        x_min: Left boundary coordinate (default 0.0)
-        x_max: Right boundary coordinate (default 1.0)
+        n: Number of cells. A mesh of n cells has n + 1 nodes, because nodes sit
+            on the cell edges including both ends.
+        x_min: Left boundary coordinate (default 0.0). For a curved geometry this
+            is the inner radius, and must not be negative.
+        x_max: Right boundary coordinate (default 1.0).
+        geometry: ``"cartesian"`` (default), ``"cylindrical"`` or ``"spherical"``.
+            A curved geometry makes the finite-volume balance carry the right
+            face areas -- ``r`` for a cylinder, ``r^2`` for a sphere -- so shells
+            near the outside hold more than shells near the centre.
 
     Returns:
-        StructuredMesh: A 1D mesh ready for use with solvers
+        StructuredMesh: a mesh ready for :class:`biotransport.Problem`.
 
     Example:
-        >>> mesh = mesh_1d(100)  # 100 cells, domain [0, 1]
-        >>> mesh = mesh_1d(50, 0.0, 0.01)  # 50 cells, domain [0, 0.01]
+        >>> mesh = mesh_1d(100)                              # slab, [0, 1]
+        >>> mesh = mesh_1d(50, 0.0, 0.01)                    # slab, [0, 1 cm]
+        >>> mesh = mesh_1d(100, 0.0, 50e-6, "spherical")     # a 50 um cell
+        >>> mesh = mesh_1d(100, 0.0, 25e-6, "cylindrical")   # a Krogh cylinder
+
+    Note:
+        Starting a curved mesh at ``r = 0`` is the usual case and needs no
+        special handling: the area factor vanishes there, so symmetry at the
+        centre falls out of the geometry rather than out of a boundary
+        condition. Only the canonical :class:`biotransport.Problem` path
+        understands a curved mesh; the specialized solvers refuse one rather
+        than quietly returning a slab answer.
     """
     from ._core import StructuredMesh
 
@@ -224,7 +273,7 @@ def mesh_1d(n: int, x_min: float = 0.0, x_max: float = 1.0):
     if x_max <= x_min:
         raise ValueError("x_max must be greater than x_min")
 
-    return StructuredMesh(n, x_min, x_max)
+    return StructuredMesh(n, x_min, x_max, _resolve_geometry(geometry))
 
 
 def mesh_2d(
@@ -234,26 +283,36 @@ def mesh_2d(
     x_max: float = 1.0,
     y_min: float = 0.0,
     y_max: float = 1.0,
+    geometry="cartesian",
 ):
-    """Create a 2D mesh with nx × ny cells.
-
-    This is a convenience wrapper for StructuredMesh with a more intuitive API.
+    """Create a 2D mesh with nx by ny cells.
 
     Args:
-        nx: Number of cells in x direction
-        ny: Number of cells in y direction
-        x_min: Left boundary x coordinate (default 0.0)
-        x_max: Right boundary x coordinate (default 1.0)
-        y_min: Bottom boundary y coordinate (default 0.0)
-        y_max: Top boundary y coordinate (default 1.0)
+        nx: Number of cells in x. This is the radial direction when the mesh is
+            axisymmetric.
+        ny: Number of cells in y, the axial direction when axisymmetric.
+        x_min: Lower x bound (default 0.0). The inner radius when axisymmetric.
+        x_max: Upper x bound (default 1.0).
+        y_min: Lower y bound (default 0.0).
+        y_max: Upper y bound (default 1.0).
+        geometry: ``"cartesian"`` (default) or ``"cylindrical"`` -- also spelled
+            ``"axisymmetric"`` -- which makes the mesh an ``(r, z)`` wedge of a
+            solid of revolution. ``"spherical"`` is 1D only.
 
     Returns:
-        StructuredMesh: A 2D mesh ready for use with solvers
+        StructuredMesh: a 2D mesh ready for :class:`biotransport.Problem`.
 
     Example:
-        >>> mesh = mesh_2d(50, 50)  # 50×50 cells, unit square
-        >>> mesh = mesh_2d(100, 50, x_max=0.01, y_max=0.005)  # 100×50 cells, 10mm × 5mm
-        >>> mesh = mesh_2d(50, 50, -1.0, 1.0, -1.0, 1.0)  # centered at origin
+        >>> mesh = mesh_2d(50, 50)                       # unit square
+        >>> mesh = mesh_2d(100, 50, x_max=0.01, y_max=0.005)
+        >>> mesh = mesh_2d(50, 50, -1.0, 1.0, -1.0, 1.0)  # centred on the origin
+        >>> vessel = mesh_2d(60, 200, 0.0, 25e-6, 0.0, 500e-6, "axisymmetric")
+
+    Note:
+        An axisymmetric mesh is a slice through a shape with rotational symmetry,
+        so a cell at larger radius holds proportionally more. Volumes, fluxes and
+        the stability limit all account for that. The axial direction behaves
+        exactly as it does on a Cartesian mesh.
     """
     from ._core import StructuredMesh
 
@@ -268,7 +327,9 @@ def mesh_2d(
     if y_max <= y_min:
         raise ValueError("y_max must be greater than y_min")
 
-    return StructuredMesh(nx, ny, x_min, x_max, y_min, y_max)
+    return StructuredMesh(
+        nx, ny, x_min, x_max, y_min, y_max, _resolve_geometry(geometry)
+    )
 
 
 # ===========================================================================

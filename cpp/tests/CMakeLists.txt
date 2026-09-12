@@ -72,6 +72,9 @@ target_link_libraries(test_navier_stokes PRIVATE biotransport)
 add_executable(test_transport_solver_science physics/test_transport_solver_science.cpp)
 target_link_libraries(test_transport_solver_science PRIVATE biotransport)
 
+add_executable(test_radial_geometry physics/test_radial_geometry.cpp)
+target_link_libraries(test_radial_geometry PRIVATE biotransport)
+
 add_executable(test_cylindrical_science core/test_cylindrical_science.cpp)
 target_link_libraries(test_cylindrical_science PRIVATE biotransport)
 
@@ -140,6 +143,7 @@ add_test(NAME biotransport.test_stokes COMMAND test_stokes)
 add_test(NAME biotransport.test_navier_stokes COMMAND test_navier_stokes)
 
 add_test(NAME biotransport.test_transport_solver_science COMMAND test_transport_solver_science)
+add_test(NAME biotransport.test_radial_geometry COMMAND test_radial_geometry)
 add_test(NAME biotransport.test_cylindrical_science COMMAND test_cylindrical_science)
 add_test(NAME biotransport.test_high_order_integrators COMMAND test_high_order_integrators)
 add_test(NAME biotransport.test_bioheat_science COMMAND test_bioheat_science)

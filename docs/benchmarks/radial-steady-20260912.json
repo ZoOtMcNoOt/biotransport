@@ -1,0 +1,170 @@
+{
+  "recorded_at": "2026-09-12T08:29:58.871680+00:00",
+  "environment": {
+    "python": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+    "numpy": "2.5.1",
+    "scipy": "1.18.0",
+    "platform": "Windows-11-10.0.22631-SP0",
+    "threads_requested": 1,
+    "package": "C:\\Users\\grant\\OneDrive - Texas A&M University\\Documents\\biotransport\\python\\biotransport"
+  },
+  "source_sha256": {
+    "steady.py": "1e89e92c00ed547f39a36f9a05b6fbfadfe9ae043b71511d192d5bb94093f962",
+    "newton_raphson.py": "58c8a4b12b736498b61090c20e99a795d0ddc5224d2f6cf772569b8d6a0f5753",
+    "analytical.py": "72c4b04ec7f476b7534cade37c332e35dbd930f8786bdecbf0876d2333dddf75"
+  },
+  "problem": {
+    "D": 1e-09,
+    "R": 0.001,
+    "k": 0.001,
+    "surface": 1.0,
+    "initial": 1.0
+  },
+  "method": "warm complete direct solves, default dimensionless Newton tolerance; exact profile and balance gates",
+  "historical_case": "200-cell sphere matches former Fourier-number-20 equilibration test; that transient is not rerun or included in speedup claims",
+  "repeats": 3,
+  "direct": [
+    {
+      "geometry": "cylindrical",
+      "cells": 200,
+      "seconds": [
+        0.003654899999673944,
+        0.004095399999641813,
+        0.004713800000899937
+      ],
+      "median_seconds": 0.004095399999641813,
+      "newton_iterations": 1,
+      "dimensionless_residual": 1.3464005459142963e-15,
+      "max_absolute_error": 4.1136422368470704e-07,
+      "relative_balance_residual": 7.373946700283341e-13
+    },
+    {
+      "geometry": "cylindrical",
+      "cells": 2000,
+      "seconds": [
+        0.01738649999606423,
+        0.01728039999579778,
+        0.019068900001002476
+      ],
+      "median_seconds": 0.01738649999606423,
+      "newton_iterations": 2,
+      "dimensionless_residual": 3.553056382934401e-15,
+      "max_absolute_error": 4.1137909745359025e-09,
+      "relative_balance_residual": 6.566727448975074e-14
+    },
+    {
+      "geometry": "cylindrical",
+      "cells": 10000,
+      "seconds": [
+        0.07029609999881359,
+        0.06141930000012508,
+        0.06371349999972153
+      ],
+      "median_seconds": 0.06371349999972153,
+      "newton_iterations": 2,
+      "dimensionless_residual": 7.868862734339754e-15,
+      "max_absolute_error": 1.6455292684014466e-10,
+      "relative_balance_residual": 9.692582537497004e-13
+    },
+    {
+      "geometry": "spherical",
+      "cells": 200,
+      "seconds": [
+        0.0042354000033810735,
+        0.0034460000024409965,
+        0.005128899996634573
+      ],
+      "median_seconds": 0.0042354000033810735,
+      "newton_iterations": 1,
+      "dimensionless_residual": 1.2929606329854174e-15,
+      "max_absolute_error": 3.134341521882078e-07,
+      "relative_balance_residual": 1.2047780321763762e-13
+    },
+    {
+      "geometry": "spherical",
+      "cells": 2000,
+      "seconds": [
+        0.017919400001119357,
+        0.017239200002222788,
+        0.017166600002383348
+      ],
+      "median_seconds": 0.017239200002222788,
+      "newton_iterations": 2,
+      "dimensionless_residual": 3.4646769741686135e-15,
+      "max_absolute_error": 3.134491333156575e-09,
+      "relative_balance_residual": 1.598309059475822e-13
+    },
+    {
+      "geometry": "spherical",
+      "cells": 10000,
+      "seconds": [
+        0.05840400000306545,
+        0.059510500002943445,
+        0.06625450000137789
+      ],
+      "median_seconds": 0.059510500002943445,
+      "newton_iterations": 2,
+      "dimensionless_residual": 7.951385199346787e-15,
+      "max_absolute_error": 1.2538015070617803e-10,
+      "relative_balance_residual": 1.5192806826402173e-12
+    }
+  ],
+  "bounded_transient_comparisons": [
+    {
+      "geometry": "cylindrical",
+      "cells": 20,
+      "fourier_number": 3.0,
+      "direct": {
+        "geometry": "cylindrical",
+        "cells": 20,
+        "seconds": [
+          0.004033899997011758,
+          0.003511299997626338,
+          0.002934899996034801
+        ],
+        "median_seconds": 0.003511299997626338,
+        "newton_iterations": 1,
+        "dimensionless_residual": 5.391963156403933e-16,
+        "max_absolute_error": 4.103341656602755e-05,
+        "relative_balance_residual": 1.3084731284748185e-14
+      },
+      "transient_seconds": [
+        0.005005800005164929,
+        0.004865900002187118,
+        0.004518199995800387
+      ],
+      "transient_median_seconds": 0.004865900002187118,
+      "transient_steps": 6004,
+      "max_steady_transient_difference": 3.396654069121041e-10,
+      "median_speedup": 1.3857830448769681
+    },
+    {
+      "geometry": "spherical",
+      "cells": 20,
+      "fourier_number": 3.0,
+      "direct": {
+        "geometry": "spherical",
+        "cells": 20,
+        "seconds": [
+          0.003961999995226506,
+          0.0032678999996278435,
+          0.0032559999963268638
+        ],
+        "median_seconds": 0.0032678999996278435,
+        "newton_iterations": 1,
+        "dimensionless_residual": 3.8556278085140746e-16,
+        "max_absolute_error": 3.1238891889717735e-05,
+        "relative_balance_residual": 8.06287001404047e-16
+      },
+      "transient_seconds": [
+        0.009831900002609473,
+        0.0070496999978786334,
+        0.009631200002331752
+      ],
+      "transient_median_seconds": 0.009631200002331752,
+      "transient_steps": 9004,
+      "max_steady_transient_difference": 2.142730437526552e-14,
+      "median_speedup": 2.9472138080812074
+    }
+  ]
+}

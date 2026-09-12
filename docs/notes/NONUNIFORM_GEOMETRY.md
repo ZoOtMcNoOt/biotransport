@@ -13,56 +13,56 @@ uniform grid, and the Python API only calls the C++ implementation.
 
 The solver advances
 
-\[
+$$
   \frac{\partial c}{\partial t}
     = \frac{\partial}{\partial x}\left(D(x)\frac{\partial c}{\partial x}\right).
-\]
+$$
 
-`NonuniformMesh1D` accepts nodal coordinates \(x_0,\ldots,x_N\). Every
+`NonuniformMesh1D` accepts nodal coordinates $x_0,\ldots,x_N$. Every
 coordinate must be finite and the sequence must be strictly increasing. Face
 spacing and node-centred control-volume width are
 
-\[
+$$
   \Delta x_{i+1/2}=x_{i+1}-x_i,
-\]
+$$
 
-\[
+$$
   V_0=\frac{\Delta x_{1/2}}{2},\qquad
   V_i=\frac{\Delta x_{i-1/2}+\Delta x_{i+1/2}}{2},\qquad
   V_N=\frac{\Delta x_{N-1/2}}{2}.
-\]
+$$
 
-All \(V_i\) are positive and their sum is the domain length. Diffusivity is
+All $V_i$ are positive and their sum is the domain length. Diffusivity is
 supplied at nodes and must be finite and non-negative. A face uses the harmonic
 mean
 
-\[
+$$
   D_{i+1/2}=\frac{2D_iD_{i+1}}{D_i+D_{i+1}},
-\]
+$$
 
 with a zero face value if either adjacent value is zero. The single face flux
 and conductance are
 
-\[
+$$
   J_{i+1/2}=-D_{i+1/2}\frac{c_{i+1}-c_i}{\Delta x_{i+1/2}},\qquad
   K_{i+1/2}=\frac{D_{i+1/2}}{\Delta x_{i+1/2}}.
-\]
+$$
 
-Using the same \(J_{i+1/2}\) for both neighbouring control volumes makes the
+Using the same $J_{i+1/2}$ for both neighbouring control volumes makes the
 interior update conservative, including across discontinuous material data.
 
 ### Boundary signs
 
 Neumann data are the **outward-normal concentration derivative**
-\(q=\partial c/\partial n\), not a flux. The physical Fickian outward flux is
+$q=\partial c/\partial n$, not a flux. The physical Fickian outward flux is
 
-\[
+$$
   J_{\mathrm{out}}=-Dq.
-\]
+$$
 
 Consequently, positive `q` adds integrated concentration to the domain at rate
-\(Dq\), while negative `q` removes it. At the left boundary the outward normal
-points toward decreasing \(x\); users do not manually reverse the sign.
+$Dq$, while negative `q` removes it. At the left boundary the outward normal
+points toward decreasing $x$; users do not manually reverse the sign.
 
 Dirichlet boundary nodes are held exactly at their prescribed non-negative
 concentration. Exchange with that reservoir is inferred from the adjacent
@@ -73,11 +73,11 @@ conditions are not implemented in this slice and are rejected explicitly.
 
 Forward Euler uses the local conductance/control-volume certificate
 
-\[
+$$
   \Delta t \le
   \min_{i\ \mathrm{not\ Dirichlet}}
   \frac{V_i}{K_{i-1/2}+K_{i+1/2}},
-\]
+$$
 
 where a missing boundary face contributes zero. This is evaluated from the
 actual local mesh and material coefficients; it is not a minimum-spacing
@@ -97,15 +97,15 @@ can make an implicit method preferable.
 `diagnostics()` reports:
 
 - the current and balance-reference times, accepted step count, and current CFL limit;
-- reference and current integrated concentration \(\sum_i c_iV_i\);
+- reference and current integrated concentration $\sum_i c_iV_i$;
 - cumulative boundary input and the residual
   `total_mass - reference_mass - cumulative_boundary_input`;
 - minimum and maximum concentration; and
 - left and right physical outward Fickian fluxes.
 
 In a unit-area interpretation, `total_mass` is mass per cross-sectional area.
-If concentration has units \(M/L^3\), `total_mass` has units \(M/L^2\), while
-diffusivity has units \(L^2/T\). The library does not attach units at runtime,
+If concentration has units $M/L^3$, `total_mass` has units $M/L^2$, while
+diffusivity has units $L^2/T$. The library does not attach units at runtime,
 so one consistent unit system must be used throughout a simulation.
 
 Calling `resetBalanceReference()` begins a new accounting interval without
@@ -128,6 +128,8 @@ const auto report = solver.diagnostics();
 ```
 
 ```python
+import biotransport as bt
+
 mesh = bt.NonuniformMesh1D([0.0, 0.02, 0.08, 0.25, 1.0])
 solver = bt.NonuniformDiffusion1D(mesh, [1e-9, 1e-9, 5e-10, 2e-10, 2e-10])
 solver.set_dirichlet_boundary(bt.Boundary.Left, 1.0)

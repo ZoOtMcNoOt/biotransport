@@ -520,10 +520,13 @@ class TestNonlinearDiffusionSolver:
         with pytest.raises(ValueError, match="finite"):
             solver.set_boundary(bt.Boundary.Left, np.nan)
 
-    def test_neumann_boundary_requires_three_nodes(self) -> None:
+    def test_two_node_neumann_balance_preserves_linear_field(self) -> None:
         solver = NonlinearDiffusionSolver(bt.StructuredMesh(1, 0.0, 1.0), D=1.0)
-        with pytest.raises(ValueError, match="at least three nodes"):
-            solver.set_boundary(bt.Boundary.Left, 0.0, bc_type="neumann")
+        solver.set_boundary(bt.Boundary.Left, -2.0, bc_type="neumann")
+        solver.set_boundary(bt.Boundary.Right, 3.0)
+        result = solver.solve([0.0, 0.0])
+        assert result.converged
+        np.testing.assert_allclose(result.solution, [1.0, 3.0], atol=1e-12)
 
     @pytest.mark.parametrize(
         "value",

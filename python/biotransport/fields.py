@@ -1,17 +1,26 @@
 """Spatial field builders for defining variable properties.
 
-This module provides a declarative API for building spatially-varying fields
-such as diffusivity, reaction rates, or source terms.
+Use these to describe a property that varies across the domain -- a membrane
+embedded in tissue, a tumour region with its own uptake rate, a layered
+scaffold -- without writing index arithmetic.
 
-Example usage:
-    >>> from biotransport import SpatialField
-    >>> D_field = (
-    ...     SpatialField(mesh)
-    ...     .default(D_medium)
-    ...     .region_box(x_min, x_max, D_membrane)
-    ...     .build()
-    ... )
-    >>> problem.diffusivity_field(D_field)
+Every region method takes ``value`` as a keyword argument, which keeps a call
+readable when it already carries four coordinates.
+
+Example:
+    A low-diffusivity membrane occupying the middle fifth of a 1D domain::
+
+        >>> import biotransport as bt
+        >>> mesh = bt.mesh_1d(100, 0.0, 1.0)
+        >>> D_field = (
+        ...     bt.SpatialField(mesh)
+        ...     .default(1.0e-9)
+        ...     .region_box(0.4, 0.6, value=1.0e-11)
+        ...     .build()
+        ... )
+        >>> problem = bt.Problem(mesh).diffusivity(D_field)
+
+    For a simple stack of layers, :func:`layered_1d` is shorter.
 """
 
 from __future__ import annotations

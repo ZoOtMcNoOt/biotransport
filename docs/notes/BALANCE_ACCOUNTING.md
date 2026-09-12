@@ -84,6 +84,8 @@ when deciding whether a single ledger is closed; that tolerance is in the ledger
 Record a transfer on both participating ledgers with a globally unique transfer ID:
 
 ```python
+import biotransport as bt
+
 donor = bt.BalanceLedger("donor", bt.BalanceUnit.MOLE)
 donor.set_initial_inventory(10.0).set_final_inventory(8.0)
 donor.add_transfer_out("solute handoff", "receiver", 2.0)
@@ -92,7 +94,8 @@ receiver = bt.BalanceLedger("receiver", bt.BalanceUnit.MILLIMOLE)
 receiver.set_initial_inventory(1000.0).set_final_inventory(3000.0)
 receiver.add_transfer_in("solute handoff", "donor", 2000.0)
 
-coupled = bt.reconcile_balances([donor, receiver])
+ledgers = [donor, receiver]
+coupled = bt.reconcile_balances(ledgers)
 assert coupled.is_closed()
 ```
 
@@ -114,7 +117,8 @@ complete expected = external expected + internal transfer net + representation a
 Aggregate closure compares the converted complete observed and expected changes directly. Boundary
 exchanges, generation, and consumption remain external terms.
 
-The optional transfer tolerances compare the two recorded transfer magnitudes after conversion:
+The optional transfer tolerances compare the two recorded transfer magnitudes after conversion.
+Continuing from the `ledgers` built above:
 
 ```python
 bt.reconcile_balances(

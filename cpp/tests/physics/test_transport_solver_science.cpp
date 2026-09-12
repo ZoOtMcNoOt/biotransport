@@ -513,6 +513,120 @@ void unsupportedAndUncertifiedModelsFailLoudly() {
                                          "unstable explicit diffusion step was accepted");
 }
 
+void plansMatchExecutionWithoutAdvancing() {
+    using biotransport::Geometry;
+    using biotransport::planTransport;
+    for (Geometry geometry : {Geometry::CARTESIAN, Geometry::CYLINDRICAL, Geometry::SPHERICAL}) {
+        TransportProblem problem(StructuredMesh(8, 0.0, 1.0, geometry));
+        problem.diffusivity(0.25)
+            .linearDecay(0.9)
+            .addConstantSource(0.3)
+            .initialCondition(0.2)
+            .neumann(Boundary::Left, 0.0)
+            .dirichlet(Boundary::Right, 1.0);
+        const auto original = problem.initial();
+        SolveOptions options;
+        options.final_time = 0.25;
+        const auto plan = planTransport(problem, options);
+        require(problem.initial() == original, "planning changed the initial field");
+        require(plan.diagnostics.steps == 0 && plan.diagnostics.final_time == 0.0,
+                "planning diagnostics claimed executed steps");
+        require(plan.diagnostics.requested_final_time == options.final_time,
+                "planning lost the requested final time");
+        const auto result = solve(problem, options);
+        require(plan.planned_steps == result.diagnostics.steps,
+                "planned count differs from executed count");
+        requireNear(plan.selected_time_step, result.diagnostics.maximum_time_step, 0.0,
+                    "planned step differs from the executed cap");
+        requireNear(plan.diagnostics.initial_mass, result.diagnostics.initial_mass, 0.0,
+                    "planning did not apply essential boundary values");
+        requireNear(plan.diagnostics.certified_stable_time_step,
+                    result.diagnostics.certified_stable_time_step, 0.0,
+                    "planning used a different stability limit");
+        options.max_steps = 1;
+        const auto expensive = planTransport(problem, options);
+        require(!expensive.within_step_budget && expensive.planned_steps > 1,
+                "planning did not report an over-budget schedule");
+        requireThrows<std::runtime_error>([&] { (void)solve(problem, options); },
+                                          "execution ignored the reported budget");
+    }
+
+    TransportProblem decay(StructuredMesh(2, 0.0, 1.0));
+    decay.diffusivity(0.0).linearDecay(1.0).initialCondition(1.0);
+    SolveOptions reaction_options;
+    reaction_options.final_time = 1.0;
+    const auto reaction_plan = planTransport(decay, reaction_options);
+    requireNear(reaction_plan.selected_time_step, 0.1, 0.0,
+                "planning ignored the reaction accuracy step cap");
+    require(reaction_plan.planned_steps == 10, "reaction plan did not select ten steps");
+
+    std::size_t calls = 0;
+    TransportProblem custom(StructuredMesh(2, 0.0, 1.0));
+    custom.diffusivity(0.0).initialCondition(1.0).reaction(
+        [&calls](double value, double, double, double) {
+            ++calls;
+            return -value;
+        },
+        1.0);
+    (void)planTransport(custom, reaction_options);
+    require(calls == 0, "planning evaluated a custom reaction");
+    const auto evolved = solve(custom, reaction_options);
+    require(calls > 0 && evolved.diagnostics.steps == 10,
+            "callback probe did not exercise a subsequent solve");
+
+    TransportProblem source(StructuredMesh(2, 0.0, 1.0));
+    source.diffusivity(0.0).constantSource(1.0).initialCondition(0.0);
+    SolveOptions options;
+    options.final_time = 3.0;
+    const auto source_plan = planTransport(source, options);
+    require(source_plan.planned_steps == 1 && source_plan.selected_time_step == 3.0,
+            "constant-source plan did not use its exact one-step schedule");
+    options.final_time = 0.0;
+    const auto zero = planTransport(source, options);
+    require(zero.planned_steps == 0 && zero.selected_time_step == 0.0 && zero.within_step_budget,
+            "zero-duration plan is not empty");
+    requireNear(zero.diagnostics.initial_mass, zero.diagnostics.final_mass, 0.0,
+                "zero-duration diagnostics changed the mass");
+
+    options.time_step = 0.01;
+    options.max_steps = 10;
+    for (double endpoint : {std::nextafter(0.1, 0.0), 0.1}) {
+        options.final_time = endpoint;
+        const auto plan = planTransport(source, options);
+        require(plan.planned_steps == 10 && plan.within_step_budget,
+                "plan disagrees at a rounded binary64 endpoint");
+        require(solve(source, options).diagnostics.steps == plan.planned_steps,
+                "binary64 plan count differs from execution");
+    }
+    options.final_time = std::nextafter(0.1, 1.0);
+    const auto above = planTransport(source, options);
+    require(above.planned_steps == 11 && !above.within_step_budget,
+            "plan dropped the endpoint residue above a nominal ten-step schedule");
+}
+
+void planningKeepsScientificValidation() {
+    using biotransport::planTransport;
+    TransportProblem problem(StructuredMesh(10, 0.0, 1.0));
+    problem.diffusivity(0.1).initialCondition(1.0);
+    SolveOptions options;
+    options.final_time = 1.0;
+    options.time_step = 1.0;
+    requireThrows<std::invalid_argument>([&] { (void)planTransport(problem, options); },
+                                         "planning accepted an unstable requested step");
+    options.time_step = 0.0;
+    problem.reaction([](double value, double, double, double) { return -value * value; });
+    requireThrows<std::invalid_argument>([&] { (void)planTransport(problem, options); },
+                                         "planning certified an unbounded custom reaction");
+    options.time_step = 0.001;
+    const auto uncertified = planTransport(problem, options);
+    require(!uncertified.diagnostics.reaction_stability_bound_known &&
+                std::isnan(uncertified.diagnostics.certified_stable_time_step),
+            "explicit custom-reaction planning invented a stability certificate");
+    options.max_steps = 0;
+    requireThrows<std::invalid_argument>([&] { (void)planTransport(problem, options); },
+                                         "planning accepted a zero step budget");
+}
+
 }  // namespace
 
 int main() {
@@ -531,6 +645,8 @@ int main() {
         {"boundary and corner policy",
          boundaryIsAppliedBeforeFirstStencilAndCornersAreDeterministic},
         {"loud rejection", unsupportedAndUncertifiedModelsFailLoudly},
+        {"native planning parity", plansMatchExecutionWithoutAdvancing},
+        {"native planning validation", planningKeepsScientificValidation},
     };
 
     int failures = 0;

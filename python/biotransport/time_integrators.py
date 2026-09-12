@@ -358,6 +358,14 @@ def _reject_problem_contract_overrides(
     for problem_type in type(problem).__mro__:
         if problem_type is TransportProblem:
             break
+        # biotransport.Problem overrides some of these to record what the caller
+        # configured, but it always delegates to the native method, so the native
+        # state stays authoritative -- and every read below goes through an
+        # unbound TransportProblem accessor, which bypasses the override anyway.
+        # A class only earns this exemption by declaring it, so an arbitrary user
+        # subclass that shadows a contract method is still rejected.
+        if problem_type.__dict__.get("_NATIVE_STATE_IS_AUTHORITATIVE") is True:
+            continue
         overridden.extend(
             name for name in _PROBLEM_CONTRACT_METHODS if name in problem_type.__dict__
         )

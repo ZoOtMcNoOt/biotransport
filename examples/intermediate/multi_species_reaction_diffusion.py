@@ -316,6 +316,11 @@ def example_brusselator():
     For B > 1 + A², the homogeneous system loses stability through a Hopf
     bifurcation. Here B is below that threshold; unequal diffusion can instead
     destabilize spatial modes for the selected illustrative parameters.
+
+    The Turing pattern is mean-preserving: the spatial mean of X stays pinned
+    at the homogeneous steady state while structure grows around it. Progress
+    is therefore reported as the spatial standard deviation and the min/max
+    range, not as the mean.
     """
     print("\n" + "=" * 60)
     print("Example 3: Brusselator Diffusion-Driven Pattern")
@@ -380,18 +385,40 @@ def example_brusselator():
     print(f"Time step: {dt:.4f}")
     print(f"Running for {num_steps} steps (T = {T_final})...")
 
-    # Store snapshots
+    # Store snapshots. Times are concentrated on the growth phase (the pattern
+    # saturates well before T_final) so the panels are not five copies of the
+    # same saturated state.
     X_snapshots = [X_ic.copy()]
     snapshot_times = [0]
 
-    for target_time in np.linspace(T_final / 5.0, T_final, 5):
+    std0 = float(np.std(X_ic))
+    range0 = float(np.ptp(X_ic))
+    print(
+        f"  t =   0.0: X_mean = {np.mean(X_ic):.3f}, X_std = {std0:.4f}, "
+        f"X range = [{np.min(X_ic):.3f}, {np.max(X_ic):.3f}]"
+    )
+
+    for target_time in [2.0, 3.0, 5.0, 10.0, T_final]:
         solver.solve_until(float(target_time), maximum_dt=dt)
-        X_snapshots.append(solver.solution(0).copy())
+        X_now = np.asarray(solver.solution(0))
+        X_snapshots.append(X_now.copy())
         snapshot_times.append(solver.time())
         print(
-            f"  t = {solver.time():.1f}: X_mean = {np.mean(solver.solution(0)):.3f}, "
-            f"Y_mean = {np.mean(solver.solution(1)):.3f}"
+            f"  t = {solver.time():5.1f}: X_mean = {X_now.mean():.3f}, "
+            f"X_std = {X_now.std():.4f}, "
+            f"X range = [{X_now.min():.3f}, {X_now.max():.3f}]"
         )
+
+    X_final = np.asarray(solver.solution(0))
+    print(
+        "\nThe spatial mean stays pinned at X* by construction, so it shows "
+        "nothing. The pattern lives in the spread:"
+    )
+    print(
+        f"  spatial std of X: {std0:.4f} -> {X_final.std():.4f} "
+        f"({X_final.std() / std0:.1f}x growth)"
+    )
+    print(f"  peak-to-peak range of X: {range0:.4f} -> {np.ptp(X_final):.4f}")
 
     # Plot results
     fig, axes = plt.subplots(2, 3, figsize=(12, 8))
@@ -400,7 +427,7 @@ def example_brusselator():
         ax = axes.flat[idx]
         X_2d = np.array(X_data).reshape(ny + 1, nx + 1)
         im = ax.imshow(X_2d, origin="lower", cmap="viridis", extent=[0, Lx, 0, Ly])
-        ax.set_title(f"X (t = {t:.0f})")
+        ax.set_title(f"X (t = {t:.0f}), std = {np.std(X_2d):.3f}")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         plt.colorbar(im, ax=ax, shrink=0.8)
@@ -427,6 +454,11 @@ def example_signaling_cascade():
 
         dE0/dt = -kdeg0*E0
         dEi/dt = Vmax_i*E(i-1)/(Km_i + E(i-1)) - kdeg_i*Ei
+
+    Downstream degradation is what makes the cascade settle. With kdeg = 0 the
+    activation terms are pure sources and B and C grow without bound, so this
+    example gives the two products a finite lifetime and shows their totals
+    levelling off at the balance between activation and turnover.
     """
     print("\n" + "=" * 60)
     print("Example 4: Enzyme Signaling Cascade")
@@ -447,13 +479,21 @@ def example_signaling_cascade():
     # Parameters: activation Vmax/Km per link and degradation per species.
     Vmax_list = [0.5, 0.3]
     Km_list = [1.0, 1.0]  # Michaelis constants
-    kdeg_list = [0.0, 0.0, 0.0]  # No degradation for A, B, C
+    # A is held by its boundary source, so it needs no decay term. B and C do:
+    # without turnover they are driven by pure sources and never level off.
+    kdeg_list = [0.0, 0.05, 0.05]
 
     reaction_model = bt.EnzymeCascadeReaction(Vmax_list, Km_list, kdeg_list)
     solver.set_reaction_model(reaction_model)
     print("Activation cascade: E0 activates E1, which activates E2")
     print(f"Step 1: Vmax={Vmax_list[0]}, Km={Km_list[0]}")
     print(f"Step 2: Vmax={Vmax_list[1]}, Km={Km_list[1]}")
+    print(
+        f"Degradation rates: kdeg_A={kdeg_list[0]}, kdeg_B={kdeg_list[1]}, kdeg_C={kdeg_list[2]}"
+    )
+    print(
+        f"Product lifetimes: 1/kdeg_B = {1 / kdeg_list[1]:.0f}, 1/kdeg_C = {1 / kdeg_list[2]:.0f}"
+    )
 
     # Initial condition: A at left boundary
     A_ic = np.zeros(mesh.num_nodes())
@@ -474,9 +514,10 @@ def example_signaling_cascade():
     solver.set_neumann_boundary(2, bt.Boundary.Left, 0.0)
     solver.set_neumann_boundary(2, bt.Boundary.Right, 0.0)
 
-    # Time integration
+    # Time integration. Run long enough for the degradation timescale
+    # (1/kdeg = 20) to actually bite, so the totals visibly level off.
     dt = solver.max_stable_time_step()
-    T_final = 100.0
+    T_final = 400.0
     num_steps = int(np.ceil(T_final / dt))
 
     print(f"Time step: {dt:.4f}")
@@ -486,19 +527,41 @@ def example_signaling_cascade():
     x_coords = [mesh.x(i) for i in range(nx + 1)]
     profiles = {"A": [], "B": [], "C": [], "t": []}
 
-    snapshot_times = [0, 10, 25, 50, 100]
+    snapshot_times = [0, 25, 50, 100, 200, 400]
+    previous_totals = None
     for t_target in snapshot_times:
         if t_target > 0:
             solver.solve_until(float(t_target), maximum_dt=dt)
 
+        totals = (solver.total_mass(0), solver.total_mass(1), solver.total_mass(2))
         profiles["t"].append(solver.time())
         profiles["A"].append(solver.solution(0).copy())
         profiles["B"].append(solver.solution(1).copy())
         profiles["C"].append(solver.solution(2).copy())
+        if previous_totals is None:
+            change = ""
+        else:
+            change = (
+                f"  (since last: dB = {totals[1] - previous_totals[1]:+.2f}, "
+                f"dC = {totals[2] - previous_totals[2]:+.2f})"
+            )
         print(
-            f"  t = {solver.time():.1f}: A_total = {solver.total_mass(0):.2f}, "
-            f"B_total = {solver.total_mass(1):.2f}, C_total = {solver.total_mass(2):.2f}"
+            f"  t = {solver.time():5.1f}: A_total = {totals[0]:6.2f}, "
+            f"B_total = {totals[1]:6.2f}, C_total = {totals[2]:6.2f}{change}"
         )
+        previous_totals = totals
+
+    # With degradation the products approach the balance between activation
+    # and turnover instead of growing without bound.
+    A_uniform = 5.0  # the value A relaxes to under its Dirichlet source
+    B_ss = Vmax_list[0] * A_uniform / (Km_list[0] + A_uniform) / kdeg_list[1]
+    C_ss = Vmax_list[1] * B_ss / (Km_list[1] + B_ss) / kdeg_list[2]
+    print("\nBalance point once A has filled the domain (A -> 5 everywhere):")
+    print(f"  B_ss = Vmax_1*A/(Km_1+A)/kdeg_B = {B_ss:.2f} per unit length")
+    print(f"  C_ss = Vmax_2*B/(Km_2+B)/kdeg_C = {C_ss:.2f} per unit length")
+    print(
+        f"  Over the {Lx:.0f}-unit domain that is B_total -> {B_ss * Lx:.1f}, C_total -> {C_ss * Lx:.1f}"
+    )
 
     # Plot
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))

@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: If you use BioTransport in work you publish, please cite it.
+title: "BioTransport: a science-first transport solver for teaching and prototyping"
+abstract: >-
+  BioTransport solves diffusion, advection and reaction problems on structured
+  meshes with a C++17 finite-volume core and a Python API. It is built around
+  verification: it ships the exact solutions to compare numerical results
+  against, reports the dimensionless groups that govern a configured problem,
+  records what each solver claims and excludes, and refuses configurations it
+  cannot certify rather than returning an unverified answer.
+type: software
+authors:
+  - given-names: Grant
+    family-names: McNatt
+    email: gmcnatt1@tamu.edu
+    affiliation: Texas A&M University
+repository-code: "https://github.com/ZoOtMcNoOt/biotransport"
+license: MIT
+version: 0.1.0
+keywords:
+  - biotransport
+  - transport phenomena
+  - finite volume
+  - reaction-diffusion
+  - computational science
+  - verification

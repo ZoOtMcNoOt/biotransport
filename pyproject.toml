@@ -67,6 +67,9 @@ dev = [
     "twine>=5.0",
 ]
 
+[project.scripts]
+biotransport-studio = "biotransport.studio.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/ZoOtMcNoOt/biotransport"
 Repository = "https://github.com/ZoOtMcNoOt/biotransport"
@@ -86,3 +89,4 @@ include = ["biotransport*"]
 [tool.setuptools.package-data]
 "biotransport" = ["py.typed"]
 "biotransport._core" = ["*.pyi"]
+"biotransport.studio" = ["static/*.html", "static/*.css", "static/*.js", "static/*.mjs"]

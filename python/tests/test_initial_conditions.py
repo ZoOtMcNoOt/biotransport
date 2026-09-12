@@ -21,7 +21,7 @@ class TestGaussian:
         mesh = bt.mesh_1d(50)  # 50 cells = 51 nodes
         ic = gaussian(mesh, amplitude=1.0, width=0.1)
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
         assert len(ic) == 51
 
     def test_gaussian_1d_default_center(self):
@@ -58,7 +58,7 @@ class TestGaussian:
         mesh = bt.mesh_2d(20, 20)  # 20x20 cells = 21x21 nodes
         ic = gaussian(mesh, amplitude=1.0, width=0.1)
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
         assert len(ic) == 21 * 21
 
     def test_gaussian_2d_custom_center(self):
@@ -121,7 +121,7 @@ class TestStep:
         mesh = bt.mesh_1d(100)
         ic = step(mesh)
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
         assert len(ic) == 101
 
     def test_step_1d_basic(self):
@@ -178,7 +178,7 @@ class TestUniform:
         mesh = bt.mesh_1d(50)
         ic = uniform(mesh, value=3.14)
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
         assert len(ic) == 51
 
     def test_uniform_1d_values(self):
@@ -250,7 +250,7 @@ class TestCircle:
             mesh, center_x=0.5, center_y=0.5, radius=0.2, inside=1.0, outside=0.0
         )
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
         assert len(ic) == 21 * 21
 
     def test_circle_has_both_values(self):
@@ -318,7 +318,7 @@ class TestSinusoidal:
         mesh = bt.mesh_1d(100)
         ic = sinusoidal(mesh, periods=1, amplitude=1.0)
 
-        assert isinstance(ic, list)
+        assert isinstance(ic, np.ndarray)
         assert len(ic) == 101
 
     def test_sinusoidal_amplitude(self):

@@ -77,7 +77,12 @@ class CMakeBuild(build_ext):
         build_args = ["--config", configuration, "--parallel", parallelism]
 
         subprocess.check_call(
-            ["cmake", "-S", str(ext.sourcedir), "-B", str(build_dir), *cmake_args]
+            # Reconfigure from current declared options. Reusing a cache from
+            # an audit/debug build can silently retain empty Release flags and
+            # produce an unoptimized wheel despite --config Release. CMake
+            # --fresh resets only its generated configuration in this build dir;
+            # explicit CMAKE_ARGS and toolchain/environment settings still apply.
+            ["cmake", "--fresh", "-S", str(ext.sourcedir), "-B", str(build_dir), *cmake_args]
         )
         subprocess.check_call(["cmake", "--build", str(build_dir), *build_args])
 

@@ -38,6 +38,12 @@ number in the requested unit. `q.require(Dimension.DIFFUSIVITY)` both checks
 the runtime dimension and returns the solver-ready SI scalar:
 
 ```python
+import biotransport as bt
+from biotransport import units
+
+diffusion = units.diffusivity(1.33e-5, "cm^2/s")
+problem = bt.Problem(bt.mesh_1d(100, 0.0, 0.01))
+
 D_m2_s = diffusion.require(units.Dimension.DIFFUSIVITY)
 problem.diffusivity(D_m2_s)
 ```
@@ -54,6 +60,8 @@ This prevents two common mistakes: treating 20 degrees Celsius as 20 kelvin,
 and applying the Celsius offset to a temperature interval.
 
 ```python
+from biotransport import units
+
 arterial = units.temperature(37.0, "degC")
 drop = units.temperature_difference(5.0, "delta_degC")
 cooled = arterial - drop
@@ -127,6 +135,8 @@ volumetric perfusion [1/s]
 Accordingly, this ambiguous conversion fails unless density is explicit:
 
 ```python
+import math
+
 from biotransport import units
 
 # This raises ConversionContextError:
@@ -137,8 +147,13 @@ w = units.perfusion_rate(
     "mL/(min*100g)",
     tissue_density_kg_m3=1000.0,
 )
-assert w.to("1/s") == 0.01
+assert math.isclose(w.to("1/s"), 0.01, rel_tol=1e-12)
 ```
+
+The exact conversion is 0.01 1/s. The assertion uses a tolerance because the
+binary64 chain 60 mL -> m^3, 1 min -> s, 100 g -> kg returns
+`0.009999999999999998`; conversions in this module are declared-scale
+multiplications, not exact decimal arithmetic.
 
 `mass_specific_perfusion` preserves the reported basis without assuming a
 density. Calling its `to("1/s", tissue_density_kg_m3=...)` performs the same

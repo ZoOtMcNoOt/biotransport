@@ -8,7 +8,7 @@ high-performance path for large production meshes.
 
 ## Newton contract
 
-`NewtonRaphsonSolver` solves a finite system \(F(u)=0\). The initial guess and
+`NewtonRaphsonSolver` solves a finite system $F(u)=0$. The initial guess and
 every callback result must be finite. The residual must have shape `(n,)`; a
 user Jacobian must be a finite dense or sparse matrix with shape `(n, n)`.
 Finite differences use a perturbation scaled to each component when no
@@ -57,27 +57,30 @@ reported as usable corrections.
 
 `NonlinearDiffusionSolver` solves
 
-\[
+$$
   -\nabla\!\cdot(D\nabla u) + R(u) = S
-\]
+$$
 
 on a uniform `StructuredMesh`. Scalar diffusivity must be finite and positive.
 In 1D, a finite positive nodal diffusivity vector is also supported. Its face
 coefficient is the harmonic mean
 
-\[
+$$
   D_{i+1/2}=\frac{2D_iD_{i+1}}{D_i+D_{i+1}},
-\]
+$$
 
 and the discrete interior operator is the difference of the two face fluxes.
 This gives one conservative flux through a material interface. It does not
-silently approximate variable-coefficient diffusion as \(-D_i\nabla^2u\).
+silently approximate variable-coefficient diffusion as $-D_i\nabla^2u$.
 
 A boundary condition is required on every domain side. One-dimensional
-Neumann values are the outward-normal derivative \(du/dn\): the left formula
+Neumann values are the outward-normal derivative $du/dn$: the left formula
 therefore has the opposite sign from the positive-x derivative. The boundary
-derivative uses a second-order one-sided stencil and requires at least three
-nodes. Pure Neumann diffusion without a reaction or another gauge remains
+is inserted into the boundary control-volume balance, including that volume's
+reaction and source. Two-node domains are supported. Cartesian, cylindrical
+and spherical 1D domains share the conservative face-area/volume operator.
+At a radial origin only symmetry is valid; annuli admit either supported
+boundary condition at both walls. Pure Neumann diffusion without a reaction or another gauge remains
 singular and raises by default.
 
 Two-dimensional Dirichlet data must agree at every corner. Conflicting traces
@@ -95,8 +98,16 @@ Current explicit limitations are:
 - only pointwise scalar reaction callbacks are modeled;
 - no nonlinear boundary laws, coupled species, constraints, or continuation;
 - no unstructured or nonuniform mesh support; and
-- the 2D fallback Jacobian is dense finite difference, so this is not a
-  large-mesh solver.
+- the 2D Jacobian uses sparse assembly with differentiable reactions, but its
+  fallback for reactions without a derivative is dense finite difference.
+
+For built-in saturable uptake combined with nonnegative sources and fixed
+concentrations or sealed walls, `solve_steady` keeps Newton trial concentrations
+nonnegative. It projects the starting guess and rejects negative trial states
+so the line search backtracks. This avoids entering the flat branch of the
+native clipped uptake law and losing the Jacobian's reaction constraint.
+Negative prescribed concentrations and nonzero Neumann data retain the
+unrestricted clipped law. The model's initial field is never changed.
 
 Reaction, derivative, source, and initial fields must match the mesh shape and
 contain finite values. Unknown boundary types and missing boundary data fail
