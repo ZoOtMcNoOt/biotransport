@@ -24,6 +24,29 @@ Solving
 
 .. autofunction:: solve_steady
 
+Coupled domains and species
+---------------------------
+
+See :doc:`../coupled_transport` for physical units, membrane conventions,
+stoichiometric reactions, sparse numerical access and verified scope.
+
+.. autoclass:: CoupledModel
+   :members:
+
+.. autoclass:: CompiledModel
+   :members:
+   :exclude-members: __init__
+
+.. autoclass:: CoupledSolution
+   :members:
+   :exclude-members: __init__
+
+.. autoclass:: CoupledDiagnostics
+   :members:
+
+.. autoclass:: ConservationReport
+   :members:
+
 Reusable experiments
 --------------------
 

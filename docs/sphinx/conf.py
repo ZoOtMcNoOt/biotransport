@@ -45,12 +45,14 @@ autodoc_default_options = {
     "member-order": "bysource",
 }
 autodoc_typehints = "description"
+autodoc_type_aliases = {"csc_matrix": "scipy.sparse.csc_matrix"}
 
 # Intersphinx mapping
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("https://numpy.org/doc/stable", None),
     "matplotlib": ("https://matplotlib.org/stable", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy", None),
 }
 
 # MyST parser for Markdown support

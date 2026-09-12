@@ -21,7 +21,7 @@ wheel are retained.
 
 ## Current priority
 
-The user has deferred further UI work. The next increment focuses on a simple
+The user has deferred further UI work. The current increment focuses on a simple
 Python API for multiple physical domains, named species, conservative membrane
 coupling and stoichiometric reactions, with inspectable sparse operators and
 independent numerical verification.
@@ -32,7 +32,74 @@ path that shadowed the installed wheel. The fixes require source-based typing
 and real native imports for documentation. Locally, 416 affected Python tests,
 Ruff, source-based mypy and a strict Sphinx build importing the installed wheel
 pass. Evidence is in `build/extension-validation/ci-fix-pytest.log` and
-`ci-docs-fix.log`. Remote CI acceptance is pending the repair push.
+`ci-docs-fix.log`. The repair was pushed as
+`6cadff2d2a636b38ac7814e0648a480fa8f42ca7`; all CI jobs passed in
+[run 34685185488](https://github.com/ZoOtMcNoOt/biotransport/actions/runs/34685185488).
+
+## Coupled engine increment
+
+- `CoupledModel` composes named species across well-mixed compartments and 1D
+  Cartesian, cylindrical or spherical domains. Physical SI volumes and face
+  areas determine concentration changes and amount accounting.
+- A membrane contributes equal and opposite amount transfer to its endpoints,
+  with explicit target/source partition convention. Domain boundaries retain
+  separate concentration states; interface area cannot exceed a spatial face.
+- Stoichiometric mass-action reactions support production, loss, conversion,
+  binding and reversible chemistry. Custom local rates supply analytic partial
+  derivatives. Declared chemical invariants reject incompatible reactions.
+- `compile()` produces an owned model with named state slices, coordinates,
+  physical volumes, a sparse transport matrix, RHS and analytic Jacobian.
+  Linear reactions are assembled once; BDF and Radau integrate all domains
+  together without restarting for saved frames. No new dependencies were added.
+- `CoupledSolution` exposes named fields, histories, moles, signed membrane rates
+  and conservation reports. Diagnostics report actual evaluations and sparse
+  factorizations. Concentrations are never silently clipped.
+- The [coupled engine guide](../coupled_transport.md) and README examples execute
+  in the test suite. Sphinx documents the public API and resolves SciPy types.
+  CI checks both source-only typing and NumPy-aware coupled-engine typing.
+
+### Coupled engine verification
+
+The implementation in the commit containing this section follows `6cadff2`.
+All **1,958 Python tests and 15 subtests** pass against a separately installed
+wheel, with the six existing pulsatile-reference warnings, in 93.44 seconds.
+This includes 77 coupled-engine checks and executable README, tutorial and
+coupled-guide snippets. Tests independently verify exchange equilibria,
+first- and second-order reaction laws, reversible binding, second-order slab
+and spherical convergence, native radial agreement, dense matrix-exponential
+references, sparse Jacobian directional derivatives and conservation.
+
+Ruff, the source-only typing contract, the NumPy-aware coupled module check and
+a fresh strict Sphinx build against the installed wheel pass. All 47 packaged
+Python, typing and frontend source files match the wheel byte for byte.
+Native sources are unchanged from the preceding green cross-platform CI run;
+the repository CI also runs those gates for each push.
+
+The final wheel is
+`build/coupled-validation/final-dist/biotransport-0.1.0-cp314-cp314-win_amd64.whl`,
+SHA-256 `863a584acdb49fef670b2a7d1064195e476209f12eb9e64aa0129b370756b8df`.
+Logs are `build/coupled-validation/final-pytest.log`, `final-docs.log`,
+`final-wheel.log` and `final-benchmark.log`.
+
+A closed reservoir/spherical-tissue model with drug, binding sites and bound
+drug was integrated for 300 seconds, saving 41 states. Three warm repetitions
+against the installed wheel on Windows / Python 3.14.3 / SciPy 1.18.0, with one
+BLAS thread requested, produced:
+
+| Spatial cells | Concentration states | Median assembly | Median solve |
+| ---: | ---: | ---: | ---: |
+| 100 | 306 | 1.37 ms | 92.75 ms |
+| 1,000 | 3,006 | 6.30 ms | 139.80 ms |
+| 10,000 | 30,006 | 81.30 ms | 2,139.02 ms |
+
+At 30,006 states, the maximum final concentration difference against a tighter
+run was `6.55e-8 mol/m^3`. Maximum relative drug-amount drift was `8.17e-12`;
+site-amount drift was `1.58e-15`. The initial sparse Jacobian had 80,009 nonzeros
+and 1,080,136 bytes of array storage, excluding factorization and process memory.
+These are workload measurements under shared machine load, not a universal
+speedup or biological validation claim. Timing varied across local runs; no
+best-run selection was used. The final raw samples, settings and source hashes
+are in [coupled-transport-20260912.json](../benchmarks/coupled-transport-20260912.json).
 
 ## Follow-on extension: completed
 
@@ -238,16 +305,21 @@ intervals and 200,000 explicit steps. The Python experiment adapter allows 2,000
 cells and 200 intervals; direct `Problem` users can work beyond those adapter
 limits. Example values are illustrative, not calibrated biological data.
 
-The next architectural gap is an explicit coupling contract for multiple
-domains, species and membranes: units, interface fluxes, conservation accounting
-and numerical reference cases. A connected-node editor should follow that
-contract. Arbitrary networks, 2D editing, mesh adaptation and adapters for the
-specialized multiphysics solvers remain outside this increment. Transient flow
-still uses first-order upwind spatial discretization; the improved steady path
-and visual editor do not change that accuracy limit.
+The separate coupled engine now supports closed networks of compartments and
+1D spatial domains, multiple species and local reactions. Studio and the JSON
+experiment adapter continue to cover their single-field scope. Further UI work
+is deferred.
 
 Long explicit radial transients still require a step count proportional to
 resolution squared. The direct steady path now avoids that work when only the
 final balance is needed; native planning exposes the cost when physical time
-evolution is required. An implicit radial transient method, coupled domains and
-species, and mesh refinement remain substantive future engine work.
+evolution is required. `CoupledModel` now provides sparse implicit transients
+for its closed-network scope, including radial domains.
+
+Remaining engine boundaries are prescribed external baths and boundary schedules,
+advection/flow coupling, nonuniform or adaptive meshes, 2D/3D interface mappings,
+coupled steady solving, parameter fitting and model serialization. Custom
+reaction callbacks are local and must provide consistent derivatives. BDF and
+Radau do not guarantee nonnegative states; inspect ranges, conserved quantities,
+spatial refinement and tolerance convergence. Transient advection in the
+existing native solver remains first-order upwind.

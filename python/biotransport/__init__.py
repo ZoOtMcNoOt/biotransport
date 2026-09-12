@@ -161,6 +161,13 @@ from .mesh_utils import (
 from .problem import Problem
 from .fluxes import FluxReport
 from .solution import ErrorReport, Solution
+from .coupled import (
+    CoupledModel,
+    CompiledModel,
+    CoupledSolution,
+    CoupledDiagnostics,
+    ConservationReport,
+)
 from .run import CheckpointResult, run, run_checkpoints, solve
 from .steady import solve_steady
 from .experiment import (
@@ -342,6 +349,11 @@ AdvectionDiffusionProblem = Problem
 __version__ = "0.1.0"
 
 __all__ = [
+    "CoupledModel",
+    "CompiledModel",
+    "CoupledSolution",
+    "CoupledDiagnostics",
+    "ConservationReport",
     "ComponentDefinition",
     "ComponentRegistry",
     "Experiment",

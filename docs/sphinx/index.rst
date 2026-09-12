@@ -3,7 +3,8 @@ BioTransport
 
 BioTransport solves diffusion, advection and reaction problems — the equations
 behind oxygen reaching tissue, a drug crossing a membrane, heat moving through
-skin during cryotherapy. The numerics run in a C++17 finite-volume core. The API
+skin during cryotherapy. A C++17 finite-volume core and sparse SciPy integration
+support single-domain problems and coupled networks. The API
 you touch is Python, and it is built around one question: **how do you know your
 answer is right?**
 
@@ -24,6 +25,7 @@ is a separate question, and this library does not answer it.
 
    getting_started
    tutorial
+   coupled_transport
    science_contract
    api/index
    examples

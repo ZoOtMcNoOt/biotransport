@@ -24,7 +24,7 @@ matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg", force=True)
 
 REPO = Path(__file__).resolve().parents[2]
-DOCUMENTS = [REPO / "readme.md", REPO / "docs" / "tutorial.md"]
+DOCUMENTS = [REPO / "readme.md", REPO / "docs" / "tutorial.md", REPO / "docs" / "coupled_transport.md"]
 
 _BLOCK = re.compile(r"```(python|text)\n(.*?)```", re.DOTALL)
 

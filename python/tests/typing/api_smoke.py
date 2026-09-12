@@ -2,6 +2,19 @@
 
 import biotransport as bt
 
+coupled: bt.CoupledModel = bt.CoupledModel(["drug", "metabolite"])
+coupled.compartment("blood", volume=1e-6, initial={"drug": 1.0})
+coupled.domain("tissue", bt.mesh_1d(8), cross_section=1e-4, diffusivity={"drug": 1e-9})
+coupled.membrane("wall", "blood", ("tissue", "left"), area=1e-4, permeability={"drug": 1e-6})
+coupled.mass_action("tissue", reactants={"drug": 1}, products={"metabolite": 1}, rate_constant=0.1)
+coupled.conserve("total", {"drug": 1, "metabolite": 1})
+compiled: bt.CompiledModel = coupled.compile()
+coupled_solution: bt.CoupledSolution = compiled.solve(10)
+coupled_report: bt.ConservationReport = coupled_solution.balance("total")
+coupled_diagnostics: bt.CoupledDiagnostics = coupled_solution.diagnostics
+relative_drift: float | None = coupled_report.relative_drift
+coupled_indices: slice = compiled.state_slice("tissue", "drug")
+
 
 mesh = bt.StructuredMesh(10, 0.0, 1.0)
 problem = bt.TransportProblem(mesh).diffusivity(0.1).initial_condition(1.0)

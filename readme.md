@@ -15,7 +15,8 @@
 
 BioTransport solves diffusion, advection and reaction problems — the equations behind oxygen
 reaching tissue, a drug crossing a membrane, heat moving through skin during cryotherapy. The
-numerics run in C++. The part you touch is Python, and it is designed around one question:
+engine combines a C++ finite-volume core with sparse SciPy integration for coupled
+domain networks. The part you touch is Python, and it is designed around one question:
 
 **how do you know your answer is right?**
 
@@ -44,6 +45,34 @@ first. On macOS, `xcode-select --install`. On Linux you almost certainly already
 
 **New here?** [`docs/tutorial.md`](docs/tutorial.md) walks from install to checking a real problem
 against its textbook answer, in about half an hour. The rest of this page is the tour.
+
+## Multiple domains and species
+
+Build a physical model with named compartments, spatial domains, membrane
+connections and reactions. The engine integrates them together and checks
+declared chemical conservation laws:
+
+```python
+import biotransport as bt
+
+model = bt.CoupledModel(["drug", "metabolite"])
+model.compartment("blood", volume=5e-6, initial={"drug": 1})
+model.domain("tissue", bt.mesh_1d(60, 0, 1e-3), cross_section=1e-4,
+             diffusivity={"drug": 1e-9})
+model.membrane("wall", "blood", ("tissue", "left"), area=1e-4,
+               permeability={"drug": 2e-6})
+model.mass_action("tissue", reactants={"drug": 1}, products={"metabolite": 1},
+                  rate_constant=0.01)
+model.conserve("drug equivalents", {"drug": 1, "metabolite": 1})
+
+solution = model.solve(600)
+print(solution.balance("drug equivalents"))
+```
+
+The [coupled engine guide](docs/coupled_transport.md) covers units, partitioning,
+reversible binding, custom kinetics, sparse Jacobians, numerical checks and
+current limits. Engine and research API development is the priority; further UI
+development is deferred.
 
 ## Visual workbench and reusable experiments
 
