@@ -14,11 +14,11 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence, Union
 
 import numpy as np
-from scipy.integrate import solve_ivp
 from scipy.sparse import coo_matrix, csc_matrix
 
 from ._core import Geometry, StructuredMesh
 from .mesh_utils import _finite_float, _numeric_array, x_nodes
+from .protocols import ConcentrationSchedule
 from .units import Dimension, Quantity
 
 Rate = Callable[[float, Mapping[str, np.ndarray]], Union[float, np.ndarray]]
@@ -186,6 +186,7 @@ class CoupledModel:
             )
         self._species = names
         self._domains: dict[str, _Domain] = {}
+        self._baths: dict[str, tuple[ConcentrationSchedule, ...]] = {}
         self._membranes: dict[str, _Membrane] = {}
         self._reactions: list[_Reaction] = []
         self._invariants: dict[str, np.ndarray] = {}
@@ -197,8 +198,8 @@ class CoupledModel:
 
     def _new_domain(self, name: str) -> str:
         name = _name(name, "domain")
-        if name in self._domains:
-            raise ValueError(f"domain {name!r} already exists")
+        if name in self._domains or name in self._baths:
+            raise ValueError(f"domain or bath {name!r} already exists")
         return name
 
     def _values(
@@ -240,6 +241,26 @@ class CoupledModel:
             _owned(np.zeros((len(self.species), 1))),
         )
         self._domains[name] = data
+        return self
+
+    def bath(self, name: str, *, concentration: Mapping[str, Any]) -> CoupledModel:
+        """Add an external reservoir with a prescribed concentration in mol/m^3.
+
+        Each species accepts a nonnegative scalar, a concentration quantity, or
+        a :class:`ConcentrationSchedule`. Missing species have zero concentration.
+        Connect the bath through a membrane, just like a compartment. A bath is
+        maintained externally and has no modeled volume or depletion; exchanged
+        moles are integrated and reported separately from stored domain amounts.
+        """
+        name = self._new_domain(name)
+        values = _mapping(concentration, self.species, "bath concentration")
+        schedules = tuple(
+            value
+            if isinstance(value, ConcentrationSchedule)
+            else ConcentrationSchedule([0.0], [value])
+            for value in (values.get(species, 0.0) for species in self.species)
+        )
+        self._baths[name] = schedules
         return self
 
     def domain(
@@ -323,6 +344,8 @@ class CoupledModel:
 
     def _endpoint(self, endpoint: str | tuple[str, str]) -> tuple[str, int]:
         if isinstance(endpoint, str):
+            if endpoint in self._baths:
+                return endpoint, 0
             domain = self._domains.get(endpoint)
             if domain is None:
                 raise ValueError(
@@ -368,6 +391,10 @@ class CoupledModel:
         left, right = self._endpoint(source), self._endpoint(target)
         if left == right:
             raise ValueError("a membrane needs two different endpoints")
+        if left[0] in self._baths and right[0] in self._baths:
+            raise ValueError(
+                "a membrane must connect at least one modeled domain, not two external baths"
+            )
         area = _scalar(area, "area", positive=True)
         p = (
             _mapping(permeability, self.species, "permeability")
@@ -396,6 +423,8 @@ class CoupledModel:
             ]
         )
         for endpoint in (left, right):
+            if endpoint[0] in self._baths:
+                continue
             domain = self._domains[endpoint[0]]
             if domain.geometry != "compartment":
                 available = domain.face_areas[0 if endpoint[1] == 0 else -1]
@@ -571,6 +600,7 @@ class CompiledModel:
     def __init__(self, model: CoupledModel):
         self._species = model.species
         self._domains = dict(model._domains)
+        self._baths = dict(model._baths)
         self._membranes = dict(model._membranes)
         self._invariants = dict(model._invariants)
         self._slices: dict[tuple[str, str], slice] = {}
@@ -593,6 +623,12 @@ class CompiledModel:
             )
         )
         self._forcing = np.zeros(offset)
+        self._external_keys: dict[tuple[str, str], int] = {}
+        external_indices: list[int] = []
+        external_loss: list[float] = []
+        external_gain: list[float] = []
+        external_volumes: list[float] = []
+        external_schedules: list[ConcentrationSchedule] = []
         rows: list[int] = []
         cols: list[int] = []
         values: list[float] = []
@@ -627,7 +663,37 @@ class CompiledModel:
                 )
                 transfer(left, left + 1, g)
         for membrane in self._membranes.values():
+            bath_is_source = membrane.source[0] in self._baths
+            bath_is_target = membrane.target[0] in self._baths
             for i, species in enumerate(self.species):
+                if bath_is_source or bath_is_target:
+                    if membrane.permeability[i] == 0:
+                        continue
+                    bath = membrane.source[0] if bath_is_source else membrane.target[0]
+                    endpoint = membrane.target if bath_is_source else membrane.source
+                    index = self.state_slice(endpoint[0], species).start + endpoint[1]
+                    volume = self._volumes[index]
+                    conductance = membrane.area * membrane.permeability[i]
+                    # Rates into the modeled domain, independent of the declared
+                    # source/target orientation of the membrane's signed flux.
+                    loss = (
+                        conductance / membrane.partition[i]
+                        if bath_is_source
+                        else conductance
+                    ) / volume
+                    gain = (
+                        conductance
+                        if bath_is_source
+                        else conductance / membrane.partition[i]
+                    ) / volume
+                    add(index, index, -loss)
+                    self._external_keys[membrane.name, species] = len(external_indices)
+                    external_indices.append(index)
+                    external_loss.append(loss)
+                    external_gain.append(gain)
+                    external_volumes.append(volume)
+                    external_schedules.append(self._baths[bath][i])
+                    continue
                 left = (
                     self.state_slice(membrane.source[0], species).start
                     + membrane.source[1]
@@ -646,6 +712,20 @@ class CompiledModel:
             (values, (rows, cols)), shape=(offset, offset)
         ).tocsc()
         self._transport.eliminate_zeros()
+        self._external_indices = np.asarray(external_indices, dtype=int)
+        self._external_loss = _owned(external_loss)
+        self._external_gain = _owned(external_gain)
+        self._external_volumes = _owned(external_volumes)
+        self._external_schedules = tuple(external_schedules)
+        self._breakpoints = tuple(
+            sorted(
+                {time for schedule in external_schedules for time in schedule.times[1:]}
+            )
+        )
+        if not np.all(np.isfinite(self._external_gain)):
+            raise ValueError(
+                "external transport coefficients overflow; rescale parameters or units"
+            )
         self._nonlinear: list[_Reaction] = []
         for reaction in model._reactions:
             domain = self._domains[reaction.domain]
@@ -703,13 +783,39 @@ class CompiledModel:
         return tuple(self._domains)
 
     @property
+    def baths(self) -> tuple[str, ...]:
+        """Names of prescribed external reservoirs, excluded from the state."""
+        return tuple(self._baths)
+
+    @property
+    def breakpoints(self) -> tuple[float, ...]:
+        """Positive knots of connected, permeable bath schedules, in seconds.
+
+        External integrator users must split at these times and respect the
+        left/right boundary limits. The built-in solve handles this automatically.
+        """
+        return self._breakpoints
+
+    def bath_concentration(
+        self, bath: str, species: str, time: float | Quantity, *, side: str = "right"
+    ) -> float:
+        """Prescribed mol/m^3 at time, using the new value at a scheduled jump."""
+        if bath not in self._baths or species not in self.species:
+            raise ValueError(f"unknown bath/species pair: {bath!r}, {species!r}")
+        return self._baths[bath][self.species.index(species)].at(time, side=side)
+
+    @property
     def initial_state(self) -> np.ndarray:
         """An owned flat concentration vector for external integrators."""
         return self._initial.copy()
 
     @property
     def transport_matrix(self) -> csc_matrix:
-        """Sparse diffusion and membrane operator, excluding all reactions."""
+        """Sparse diffusion/membrane operator, excluding reactions and bath input.
+
+        Includes the diagonal outflow to external baths. Their prescribed inflow
+        is a time-dependent forcing term included by ``rhs``.
+        """
         return self._transport.copy()
 
     @property
@@ -740,7 +846,7 @@ class CompiledModel:
             )
         return result
 
-    def _rhs(self, time: float, state: np.ndarray) -> np.ndarray:
+    def _local_rhs(self, time: float, state: np.ndarray) -> np.ndarray:
         result = self._linear @ state + self._forcing
         for reaction in self._nonlinear:
             index = self._domain_slices[reaction.domain]
@@ -751,9 +857,52 @@ class CompiledModel:
             raise ValueError("reaction or transport rate is nonfinite")
         return result
 
-    def rhs(self, time: float, state: np.ndarray) -> np.ndarray:
-        """Evaluate dc/dt in mol/m^3/s without changing the supplied state."""
-        return self._rhs(_finite_float(time, "time"), self._state(state))
+    def _bath_values(self, time: float, side: str) -> np.ndarray:
+        if side not in ("left", "right"):
+            raise ValueError("bath_side must be 'left' or 'right'")
+        return np.asarray(
+            [
+                schedule._value(time, left=side == "left")
+                for schedule in self._external_schedules
+            ]
+        )
+
+    def rhs(
+        self, time: float, state: np.ndarray, *, bath_side: str = "right"
+    ) -> np.ndarray:
+        """Evaluate dc/dt in mol/m^3/s without changing the supplied state.
+
+        ``bath_side='left'`` evaluates pre-jump bath values at a schedule knot;
+        the default uses post-jump values. Reactions keep the supplied time.
+        """
+        time = _scalar(time, "time", dimension=Dimension.TIME)
+        result = self._local_rhs(time, self._state(state))
+        bath = self._bath_values(time, bath_side)
+        np.add.at(result, self._external_indices, self._external_gain * bath)
+        if not np.all(np.isfinite(result)):
+            raise ValueError("external transport rate is nonfinite")
+        return result
+
+    def external_rates(
+        self, time: float, state: np.ndarray, *, bath_side: str = "right"
+    ) -> dict[tuple[str, str], float]:
+        """Signed mol/s entering modeled domains, keyed by (membrane, species).
+
+        Only permeable external connections appear. Internal exchanges do not
+        enter this ledger. Positive is into the model even when the bath is the
+        declared target of a membrane; ``interface_rate`` instead follows the
+        declared source-to-target direction.
+        """
+        time = _scalar(time, "time", dimension=Dimension.TIME)
+        state = self._state(state)
+        bath = self._bath_values(time, bath_side)
+        rates = (
+            self._external_gain * bath
+            - self._external_loss * state[self._external_indices]
+        ) * self._external_volumes
+        if not np.all(np.isfinite(rates)):
+            raise ValueError("external transport rate is nonfinite")
+        return {key: float(rates[index]) for key, index in self._external_keys.items()}
 
     def jacobian(self, time: float, state: np.ndarray) -> csc_matrix:
         """Analytic sparse derivative of rhs with respect to concentrations."""
@@ -792,6 +941,7 @@ class CompiledModel:
             f"CoupledModel: {len(self.domains)} domains, {len(self.species)} species, "
             f"{self._initial.size} concentrations",
             f"Species: {', '.join(self.species)}",
+            f"External baths: {', '.join(self.baths) or 'none'}; {len(self.breakpoints)} scheduled changes",
         ]
         parts.extend(
             f"  {d.name}: {d.geometry}, {d.nodes} nodes, volume={sum(d.volumes):.6g} m^3"
@@ -819,6 +969,10 @@ class CompiledModel:
         ``frames`` defaults to 40 output intervals; ``save_at`` specifies exact
         output times instead. Initial and final states are always included.
         Output sampling does not restart integration or set its internal steps.
+        Connected bath schedule knots are always saved and split integration
+        into intervals with the correct one-sided boundary laws. Counts below
+        sum work across all intervals. External transfer states use the same
+        concentration tolerance as their connected physical control volume.
         ``atol`` is in concentration units and may map every species to its own
         positive absolute tolerance. ``rtol`` is a positive relative tolerance.
         ``max_step`` can resolve fast explicit time dependence in custom rates.
@@ -864,30 +1018,12 @@ class CompiledModel:
         times = (
             np.asarray([0.0] + sorted(set(requested))) if final else np.asarray([0.0])
         )
-        if final:
-            jac = self.jacobian if self._nonlinear else self._linear
-            result = solve_ivp(
-                self._rhs,
-                (0.0, final),
-                self._initial.copy(),
-                method=method,
-                t_eval=times,
-                jac=jac,
-                rtol=rtol,
-                atol=tolerances,
-                max_step=step,
-            )
-            if not result.success or result.t[-1] != final:
-                raise RuntimeError(f"coupled integration failed: {result.message}")
-            states = result.y.T
-            evaluations, jacobians, factorizations = (
-                result.nfev,
-                result.njev,
-                result.nlu,
-            )
-        else:
-            states = self._initial[None, :].copy()
-            evaluations = jacobians = factorizations = 0
+        from ._coupled_integration import integrate
+
+        times, states, external_amounts, counts = integrate(
+            self, final, times, method, rtol, tolerances, step
+        )
+        evaluations, jacobians, factorizations = counts
         if not np.all(np.isfinite(states)):
             raise RuntimeError("coupled integration returned nonfinite concentrations")
         diagnostics = CoupledDiagnostics(
@@ -900,7 +1036,7 @@ class CompiledModel:
             float(np.min(tolerances)),
             float(np.max(tolerances)),
         )
-        return CoupledSolution(self, times, states, diagnostics)
+        return CoupledSolution(self, times, states, external_amounts, diagnostics)
 
 
 @dataclass(frozen=True)
@@ -924,10 +1060,12 @@ class CoupledDiagnostics:
 
 @dataclass(frozen=True)
 class ConservationReport:
-    """Drift of a declared conserved amount over saved states.
+    """Balance residual after accounting for integrated external transfers.
 
-    ``relative_drift`` is undefined (None) when the initial conserved amount is
-    zero. Absolute drift is always available in weighted moles.
+    Expected amount is initial amount plus net external exchange. Relative drift
+    uses the largest absolute expected amount over saved states as its scale,
+    and is undefined (None) only when that scale is zero. Absolute drift is
+    always available in weighted moles. Closed systems have zero external change.
     """
 
     name: str
@@ -935,6 +1073,8 @@ class ConservationReport:
     final: float
     maximum_absolute_drift: float
     relative_drift: float | None
+    external_change: float
+    expected_final: float
 
 
 class CoupledSolution:
@@ -945,11 +1085,13 @@ class CoupledSolution:
         model: CompiledModel,
         times: np.ndarray,
         states: np.ndarray,
+        external_amounts: np.ndarray,
         diagnostics: CoupledDiagnostics,
     ):
         self._model = model
         self._times = _owned(times)
         self._states = _owned(states)
+        self._external_amounts = _owned(external_amounts)
         self._diagnostics = diagnostics
 
     @property
@@ -988,14 +1130,56 @@ class CoupledSolution:
         if name not in self._model._membranes:
             raise ValueError(f"unknown membrane {name!r}")
         membrane = self._model._membranes[name]
-        source = self.history(membrane.source[0], species)[:, membrane.source[1]]
-        target = self.history(membrane.target[0], species)[:, membrane.target[1]]
+
+        def concentrations(endpoint):
+            if endpoint[0] in self._model.baths:
+                return self.bath_history(endpoint[0], species)
+            return self._states[
+                :, self._model.state_slice(endpoint[0], species).start + endpoint[1]
+            ]
+
+        source = concentrations(membrane.source)
+        target = concentrations(membrane.target)
         i = self._model.species.index(species)
         return (
             membrane.area
             * membrane.permeability[i]
             * (source - target / membrane.partition[i])
         )
+
+    def bath_history(self, bath: str, species: str) -> np.ndarray:
+        """Prescribed bath mol/m^3 at saved times, using the new value at jumps."""
+        return np.asarray(
+            [self._model.bath_concentration(bath, species, t) for t in self._times]
+        )
+
+    def external_amount(
+        self, species: str, *, membrane: str | None = None
+    ) -> np.ndarray:
+        """Cumulative signed moles entering the modeled domains at saved times.
+
+        Positive means net entry, negative means net removal. Optionally select
+        one membrane connected to a bath. Values are integrated alongside the
+        concentrations, not estimated by trapezoids over saved output frames.
+        Baths have no modeled inventory and are excluded from ``amount``.
+        """
+        if species not in self._model.species:
+            raise ValueError(f"unknown species {species!r}")
+        if membrane is not None:
+            link = self._model._membranes.get(membrane)
+            if link is None or not any(
+                endpoint[0] in self._model.baths
+                for endpoint in (link.source, link.target)
+            ):
+                raise ValueError(
+                    f"{membrane!r} is not a membrane connected to an external bath"
+                )
+        indices = [
+            index
+            for (name, s), index in self._model._external_keys.items()
+            if s == species and (membrane is None or name == membrane)
+        ]
+        return self._external_amounts[:, indices].sum(axis=1)
 
     def balance(self, name: str) -> ConservationReport:
         """Check a quantity previously declared with ``model.conserve``."""
@@ -1007,10 +1191,22 @@ class CoupledSolution:
         amounts = sum(
             weights[i] * self.amount(s) for i, s in enumerate(self._model.species)
         )
-        if not np.all(np.isfinite(amounts)):
+        external = sum(
+            weights[i] * self.external_amount(s)
+            for i, s in enumerate(self._model.species)
+        )
+        expected = amounts[0] + external
+        if not np.all(np.isfinite(amounts)) or not np.all(np.isfinite(expected)):
             raise ValueError("conserved amount overflows; rescale conservation weights")
         initial, final = float(amounts[0]), float(amounts[-1])
-        drift = float(np.max(np.abs(amounts - initial)))
+        drift = float(np.max(np.abs(amounts - expected)))
+        scale = float(np.max(np.abs(expected)))
         return ConservationReport(
-            name, initial, final, drift, drift / abs(initial) if initial else None
+            name,
+            initial,
+            final,
+            drift,
+            drift / scale if scale else None,
+            float(external[-1]),
+            float(expected[-1]),
         )

@@ -1,6 +1,7 @@
 # Multiple domains, multiple species
 
-`CoupledModel` joins well-mixed compartments and spatial transport domains.
+`CoupledModel` joins well-mixed compartments, spatial transport domains and
+prescribed external baths.
 Name the species, add the domains, connect their boundaries, and describe the
 chemistry. The engine assembles one system and integrates every domain together.
 This API is independent of Studio and does not require a browser.
@@ -124,8 +125,10 @@ Two reaction declarations represent a reversible reaction.
 `conserve(name, weights)` verifies `weights dot stoichiometry = 0` for every
 reaction, including future edits. It checks a chemical invariant, not whether
 the biological model is appropriate. The balance report measures drift of
-`sum(weights[s] * V[i] * c[s,i])` over saved states. Its relative drift is
-undefined when the initial amount is zero; absolute drift remains available.
+`sum(weights[s] * V[i] * c[s,i])` against its initial amount plus integrated
+external exchange. Relative drift uses the largest absolute expected amount
+over saved states, and is undefined when that scale is zero. Absolute drift
+always remains available. Closed networks have zero external exchange.
 
 ## Reversible binding and custom kinetics
 
@@ -167,6 +170,82 @@ Keep callbacks pure because their captured external state cannot be frozen.
 Do not clip Newton trial concentrations: the supplied rate and derivative must
 agree in the neighborhood the nonlinear solver explores.
 
+## External baths, dosing and washout
+
+A bath is maintained at a prescribed concentration. Its supply and depletion
+are outside the modeled system. Use a compartment when the reservoir has a
+finite volume whose concentration should change through exchange.
+
+```python
+pulse = bt.ConcentrationSchedule([0, 60, 120], [0, 1, 0])
+dosing = bt.CoupledModel(["drug", "metabolite"])
+dosing.compartment("tissue", volume=1e-9)
+dosing.bath("dose", concentration={"drug": pulse})
+dosing.membrane("wall", "dose", "tissue", area=1e-6,
+                 permeability={"drug": 1e-5})
+dosing.mass_action("tissue", reactants={"drug": 1},
+                    products={"metabolite": 1}, rate_constant=0.02)
+dosing.conserve("drug equivalents", {"drug": 1, "metabolite": 1})
+
+dose_result = dosing.solve(240, save_at=[30, 90, 240])
+assert dose_result.times.tolist() == [0, 30, 60, 90, 120, 240]
+stored_drug = dose_result.amount("drug")
+net_supplied = dose_result.external_amount("drug", membrane="wall")
+prescribed = dose_result.bath_history("dose", "drug")
+report = dose_result.balance("drug equivalents")
+print(report.expected_final, report.final, report.maximum_absolute_drift)
+```
+
+Each bath species accepts a nonnegative scalar, a concentration quantity, or a
+`ConcentrationSchedule`. Missing species have zero concentration. A bath can
+connect to a compartment or a spatial boundary through the same membrane law
+and partition convention. Two baths cannot connect directly without a modeled
+domain. Baths do not add concentration states, and `amount` counts only modeled
+domains. `bath_history` shows the prescribed input.
+
+Schedules start at zero and have strictly increasing times. They own their
+input data. The default `interpolation="step"` holds each concentration until
+the next change; `interpolation="linear"` provides ramps between values. Both
+hold the last value indefinitely. Times accept seconds or time quantities;
+values accept mol/m^3 or concentration quantities.
+
+**The solver lands on every connected schedule knot**, including knots between
+the requested output frames. Those times are always saved. A finishing interval
+uses the boundary value immediately before a jump; the next interval uses the
+new value. Domain concentrations and cumulative transferred amounts remain
+continuous. `bath_history` and `interface_rate` show the new instantaneous value
+at a jump. A change exactly at `end_time` therefore changes the reported bath
+concentration and instantaneous rate, but has not yet delivered material.
+Scalar constants and inactive, impermeable bath species add no restart times.
+
+The engine integrates a signed amount ledger for each permeable bath connection
+alongside the concentrations:
+
+$$
+\frac{dQ_{m,s}}{dt} = F_{m,s}^{\mathrm{into\ model}},\qquad Q_{m,s}(0)=0.
+$$
+
+`external_amount` is cumulative net moles entering the modeled domains, with
+negative increments during removal. Its positive direction always means into
+the model. `interface_rate` follows the membrane's declared source-to-target
+direction, so the signs are opposite when a bath is the membrane target.
+Selecting one membrane preserves separate entry and exit records when multiple
+baths exchange material with a stationary domain.
+
+The balance expectation is
+
+$$
+M_{\mathrm{expected}}(t)=M(0)+\sum_{m,s} w_s Q_{m,s}(t).
+$$
+
+Accounting uses the same integration stages as transport. It does not estimate
+amounts from sparsely saved fluxes. Internally each ledger variable is divided
+by its connected physical control volume, giving concentration units and the
+same absolute tolerance as that domain/species state. This keeps tiny-volume
+amounts within the integrator's error controls. Chemical invariants continue
+to validate reaction stoichiometry; external entry and exit are handled by the
+ledger, including when initial concentrations are zero.
+
 ## Research access and integration controls
 
 ```python
@@ -186,17 +265,29 @@ precise = compiled.solve(
 )
 ```
 
-The public RHS and sparse Jacobian can be passed directly to SciPy or other
-integrators. State ordering is domains in insertion order, then species, then
+The public RHS and sparse Jacobian can be passed to SciPy or other integrators.
+For scheduled baths, external integrator users must split at
+`compiled.breakpoints`. At the finishing endpoint, `compiled.rhs(t, c,
+bath_side="left")` evaluates the pre-jump bath without shifting reaction time;
+the default evaluates the post-jump bath. `external_rates` accepts the same
+control and returns mol/s into the model, keyed by `(membrane, species)`, for
+independent amount integration. `ConcentrationSchedule.at` and
+`bath_concentration` expose the time limits with `side="left"` or `"right"`.
+The public state remains concentrations only; built-in `solve` handles its
+internal amount ledger automatically.
+
+State ordering is domains in insertion order, then species, then
 nodes. Prefer `state_slice` to hand-written offsets. Configuration arrays are
 owned and compiled models are independent of later builder edits.
 
 The default method is SciPy BDF; Radau is also supported. Both use sparse
 Jacobians. Diffusion, membranes and first-order reactions are assembled once;
 nonlinear rates and their derivatives are vectorized over each domain.
-Output times do not restart integration. `frames=40` saves 41 states including
-the initial state. `save_at` sorts and deduplicates times and includes the final
-time. `max_step` bounds internal steps when a callback has rapid time dependence.
+Output times do not restart integration. `frames=40` requests 41 states including
+the initial state; any additional bath schedule knots are also saved. `save_at`
+sorts and deduplicates times and includes the final time. Scheduled bath changes
+restart integration with the appropriate boundary law. `max_step` bounds
+internal steps when a custom reaction callback has rapid time dependence.
 
 `rtol` and `atol` control local error estimates, not global error. Use
 species-specific absolute tolerances when concentration scales differ. Implicit
@@ -211,12 +302,18 @@ Tests cover unequal-volume exchange with partitioning, exact first- and
 second-order reaction kinetics, reversible binding, separate spatial domains,
 second-order slab diffusion convergence, native radial diffusion agreement,
 physical shell volumes, conservation, sparse Jacobians and owned state.
+Protocol checks include exact open-system kinetics, independent quadrature and
+matrix-exponential references, one-microsecond pulses, ramps, interleaved baths,
+one-sided endpoint behavior and volume-scaled transfer accounting down to 1e-18 m^3.
 `examples/verification/benchmark_coupled.py` measures assembly and integration
 with balance and tighter-tolerance checks; it does not claim biological accuracy.
+`examples/verification/benchmark_protocols.py` measures a prescribed bath pulse
+with sparse implicit transport, reversible binding and integrated amount checks.
 
-This increment covers closed networks of compartments and 1D Cartesian,
-cylindrical and spherical domains with local reactions. Prescribed external
-baths, flow/advection, 2D/3D interface mappings, nonuniform meshes, coupled steady
+This API covers open and closed networks of compartments and 1D Cartesian,
+cylindrical and spherical domains with local reactions. Bath concentration
+protocols support steps and linear ramps; permeability and partition coefficients
+remain constant. Flow/advection, 2D/3D interface mappings, nonuniform meshes, coupled steady
 solves, parameter fitting and model serialization are not implemented in this
 API. Existing single-domain solvers remain available for their documented scope.
 The UI is deferred; future interfaces can build on this engine.

@@ -550,7 +550,7 @@ def test_supported_quantities_convert_and_wrong_dimensions_fail():
 
 
 def test_integrator_failure_is_not_returned_as_a_success(monkeypatch):
-    import biotransport.coupled as module
+    import biotransport._coupled_integration as module
 
     monkeypatch.setattr(
         module,

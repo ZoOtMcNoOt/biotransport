@@ -14,6 +14,15 @@ coupled_report: bt.ConservationReport = coupled_solution.balance("total")
 coupled_diagnostics: bt.CoupledDiagnostics = coupled_solution.diagnostics
 relative_drift: float | None = coupled_report.relative_drift
 coupled_indices: slice = compiled.state_slice("tissue", "drug")
+protocol: bt.ConcentrationSchedule = bt.ConcentrationSchedule([0, 1, 2], [0, 1, 0])
+prescribed_value: float = protocol.at(1, side="left")
+coupled.bath("dose", concentration={"drug": protocol})
+coupled.membrane("dosing", "dose", "blood", area=1e-4, permeability={"drug": 1e-6})
+open_compiled: bt.CompiledModel = coupled.compile()
+protocol_knots: tuple[float, ...] = open_compiled.breakpoints
+rates: dict[tuple[str, str], float] = open_compiled.external_rates(1, open_compiled.initial_state)
+open_solution: bt.CoupledSolution = open_compiled.solve(3)
+expected_amount: float = open_solution.balance("total").expected_final
 
 
 mesh = bt.StructuredMesh(10, 0.0, 1.0)

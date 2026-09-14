@@ -45,6 +45,7 @@ jobs:
         run: >-
           python -m mypy --no-incremental --ignore-missing-imports
           --follow-imports=silent python/biotransport/coupled.py
+          python/biotransport/protocols.py python/biotransport/_coupled_integration.py
 
   python-tests:
     name: Python ${{ matrix.python-version }} ${{ matrix.os }}

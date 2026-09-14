@@ -33,6 +33,9 @@ stoichiometric reactions, sparse numerical access and verified scope.
 .. autoclass:: CoupledModel
    :members:
 
+.. autoclass:: ConcentrationSchedule
+   :members: at
+
 .. autoclass:: CompiledModel
    :members:
    :exclude-members: __init__

@@ -1,0 +1,186 @@
+{
+  "created_at_utc": "2026-09-14T02:03:38.986110+00:00",
+  "python": "3.14.3",
+  "platform": "Windows-11-10.0.22631-SP0",
+  "numpy": "2.5.1",
+  "scipy": "1.18.0",
+  "native_build": {
+    "compiler": {
+      "id": "MSVC",
+      "version": "19.44.35228"
+    },
+    "cxx": {
+      "standard": 201703,
+      "standard_name": "C++17",
+      "assertions_enabled": false
+    },
+    "features": {
+      "eigen": {
+        "compile_definition": true,
+        "enabled": true,
+        "version": "3.4.1"
+      },
+      "openmp": {
+        "compile_definition": false,
+        "enabled": false,
+        "specification_date": null
+      }
+    }
+  },
+  "blas_threads_requested": 1,
+  "source_sha256": {
+    "coupled.py": "d7c677fa98f884355ecb5804c9579b0ff3014138a2864d4f08553bc0e6148f6f",
+    "protocols.py": "09bd33562057f824feb48dafe2d2a69a1d445d1a544c03223250f9eb6f597d25",
+    "_coupled_integration.py": "911697d768f27a5b790fd9685a5abc416112b02f58a4a2d5d63f44e0ae37c677"
+  },
+  "script_sha256": "44bd30af7321bf6a24bed65b21619808c9e8ddfca47507e4e0760130eaf9a404",
+  "workload": "prescribed bath pulse / spherical tissue / drug + site <-> bound",
+  "end_time_s": 120,
+  "rtol": 1e-07,
+  "atol": 1e-10,
+  "reference_rtol": 1e-10,
+  "reference_atol": 1e-13,
+  "results": [
+    {
+      "cells": 100,
+      "concentration_states": 303,
+      "external_ledger_states": 1,
+      "solve_seconds": [
+        0.0704901000008249,
+        0.07019680000121298,
+        0.07639449999987846
+      ],
+      "median_solve_seconds": 0.0704901000008249,
+      "saved_times": [
+        0.0,
+        20.0,
+        40.0,
+        120.0
+      ],
+      "max_final_concentration_difference_to_tighter_run": 2.505999185942187e-09,
+      "max_external_moles_difference_to_tighter_run": 2.683526935535344e-19,
+      "drug_balance": {
+        "name": "drug",
+        "initial": 0.0,
+        "final": 4.316470489075233e-10,
+        "maximum_absolute_drift": 4.1359030627651384e-25,
+        "relative_drift": 8.941436847170962e-16,
+        "external_change": 4.3164704890752307e-10,
+        "expected_final": 4.3164704890752307e-10
+      },
+      "site_balance": {
+        "name": "sites",
+        "initial": 4.188790204786391e-09,
+        "final": 4.188790204786391e-09,
+        "maximum_absolute_drift": 0.0,
+        "relative_drift": 0.0,
+        "external_change": 0.0,
+        "expected_final": 4.188790204786391e-09
+      },
+      "diagnostics": {
+        "method": "BDF",
+        "rhs_evaluations": 769,
+        "jacobian_evaluations": 3,
+        "factorizations": 79,
+        "minimum_concentration": 0.0,
+        "rtol": 1e-07,
+        "minimum_atol": 1e-10,
+        "maximum_atol": 1e-10
+      }
+    },
+    {
+      "cells": 1000,
+      "concentration_states": 3003,
+      "external_ledger_states": 1,
+      "solve_seconds": [
+        0.26818199999979697,
+        0.2688317000011011,
+        0.2710879999995086
+      ],
+      "median_solve_seconds": 0.2688317000011011,
+      "saved_times": [
+        0.0,
+        20.0,
+        40.0,
+        120.0
+      ],
+      "max_final_concentration_difference_to_tighter_run": 2.7718088380090933e-09,
+      "max_external_moles_difference_to_tighter_run": 2.7783073580732014e-19,
+      "drug_balance": {
+        "name": "drug",
+        "initial": 0.0,
+        "final": 4.3162410845431047e-10,
+        "maximum_absolute_drift": 3.841219969543122e-23,
+        "relative_drift": 8.305400099777777e-14,
+        "external_change": 4.316241084543489e-10,
+        "expected_final": 4.316241084543489e-10
+      },
+      "site_balance": {
+        "name": "sites",
+        "initial": 4.188790204786392e-09,
+        "final": 4.188790204786391e-09,
+        "maximum_absolute_drift": 8.271806125530277e-25,
+        "relative_drift": 1.9747482497639432e-16,
+        "external_change": 0.0,
+        "expected_final": 4.188790204786392e-09
+      },
+      "diagnostics": {
+        "method": "BDF",
+        "rhs_evaluations": 980,
+        "jacobian_evaluations": 3,
+        "factorizations": 100,
+        "minimum_concentration": 0.0,
+        "rtol": 1e-07,
+        "minimum_atol": 1e-10,
+        "maximum_atol": 1e-10
+      }
+    },
+    {
+      "cells": 10000,
+      "concentration_states": 30003,
+      "external_ledger_states": 1,
+      "solve_seconds": [
+        3.0058377999994264,
+        3.5849381999996695,
+        3.0036194999993313
+      ],
+      "median_solve_seconds": 3.0058377999994264,
+      "saved_times": [
+        0.0,
+        20.0,
+        40.0,
+        120.0
+      ],
+      "max_final_concentration_difference_to_tighter_run": 2.517624331233037e-09,
+      "max_external_moles_difference_to_tighter_run": 2.880053675344521e-19,
+      "drug_balance": {
+        "name": "drug",
+        "initial": 0.0,
+        "final": 4.3162387909172345e-10,
+        "maximum_absolute_drift": 1.9973309865858544e-21,
+        "relative_drift": 4.31858990723282e-12,
+        "external_change": 4.316238790937208e-10,
+        "expected_final": 4.316238790937208e-10
+      },
+      "site_balance": {
+        "name": "sites",
+        "initial": 4.188790204786391e-09,
+        "final": 4.188790204786392e-09,
+        "maximum_absolute_drift": 1.6543612251060553e-24,
+        "relative_drift": 3.9494964995278875e-16,
+        "external_change": 0.0,
+        "expected_final": 4.188790204786391e-09
+      },
+      "diagnostics": {
+        "method": "BDF",
+        "rhs_evaluations": 1104,
+        "jacobian_evaluations": 3,
+        "factorizations": 116,
+        "minimum_concentration": 0.0,
+        "rtol": 1e-07,
+        "minimum_atol": 1e-10,
+        "maximum_atol": 1e-10
+      }
+    }
+  ]
+}

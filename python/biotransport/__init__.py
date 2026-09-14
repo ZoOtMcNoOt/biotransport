@@ -161,6 +161,7 @@ from .mesh_utils import (
 from .problem import Problem
 from .fluxes import FluxReport
 from .solution import ErrorReport, Solution
+from .protocols import ConcentrationSchedule
 from .coupled import (
     CoupledModel,
     CompiledModel,
@@ -349,6 +350,7 @@ AdvectionDiffusionProblem = Problem
 __version__ = "0.1.0"
 
 __all__ = [
+    "ConcentrationSchedule",
     "CoupledModel",
     "CompiledModel",
     "CoupledSolution",

@@ -71,7 +71,9 @@ print(solution.balance("drug equivalents"))
 
 The [coupled engine guide](docs/coupled_transport.md) covers units, partitioning,
 reversible binding, custom kinetics, sparse Jacobians, numerical checks and
-current limits. Engine and research API development is the priority; further UI
+current limits. Prescribed baths and concentration schedules support controlled
+dosing and washout, with integrated records of external amount transfer.
+Engine and research API development is the priority; further UI
 development is deferred.
 
 ## Visual workbench and reusable experiments

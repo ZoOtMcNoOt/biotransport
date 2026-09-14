@@ -1,0 +1,361 @@
+{
+  "before": {
+    "created_at_utc": "2026-09-14T01:56:32.923261+00:00",
+    "python": "3.14.3",
+    "platform": "Windows-11-10.0.22631-SP0",
+    "numpy": "2.5.1",
+    "scipy": "1.18.0",
+    "native_build": {
+      "compiler": {
+        "id": "MSVC",
+        "version": "19.44.35228"
+      },
+      "cxx": {
+        "standard": 201703,
+        "standard_name": "C++17",
+        "assertions_enabled": false
+      },
+      "features": {
+        "eigen": {
+          "compile_definition": true,
+          "enabled": true,
+          "version": "3.4.1"
+        },
+        "openmp": {
+          "compile_definition": false,
+          "enabled": false,
+          "specification_date": null
+        }
+      }
+    },
+    "blas_threads": 1,
+    "source_sha256": "3b69dd796965ecba6aa37e818123536f55cb9d2ced220f3dc190626dbf3870f9",
+    "script_sha256": "90c66faf915a7c953733d115273054e5b6bd84dd2a3b9c1f26d5e1b7dc6e4a1b",
+    "workload": "closed reservoir / spherical tissue / drug + site <-> bound",
+    "end_time_s": 300,
+    "rtol": 1e-07,
+    "atol": 1e-10,
+    "reference_rtol": 1e-10,
+    "reference_atol": 1e-13,
+    "results": [
+      {
+        "cells": 100,
+        "state_size": 306,
+        "assembly_seconds": [
+          0.0009597999996913131,
+          0.0010609000000840751,
+          0.0010383999997429783
+        ],
+        "solve_seconds": [
+          0.04168050000043877,
+          0.04501720000007481,
+          0.04674410000006901
+        ],
+        "median_assembly_seconds": 0.0010383999997429783,
+        "median_solve_seconds": 0.04501720000007481,
+        "initial_jacobian_nonzeros": 809,
+        "initial_jacobian_storage_bytes": 10936,
+        "saved_frames": 41,
+        "final_max_abs_difference_to_tighter_run": 6.580402156508569e-08,
+        "drug_balance": {
+          "name": "drug",
+          "initial": 5e-09,
+          "final": 5.00000000000002e-09,
+          "maximum_absolute_drift": 1.9852334701272664e-23,
+          "relative_drift": 3.970466940254533e-15
+        },
+        "site_balance": {
+          "name": "sites",
+          "initial": 4.188790204786391e-09,
+          "final": 4.188790204786392e-09,
+          "maximum_absolute_drift": 8.271806125530277e-25,
+          "relative_drift": 1.9747482497639437e-16
+        },
+        "diagnostics": {
+          "method": "BDF",
+          "rhs_evaluations": 598,
+          "jacobian_evaluations": 1,
+          "factorizations": 52,
+          "minimum_concentration": 0.0,
+          "rtol": 1e-07,
+          "minimum_atol": 1e-10,
+          "maximum_atol": 1e-10
+        }
+      },
+      {
+        "cells": 1000,
+        "state_size": 3006,
+        "assembly_seconds": [
+          0.005919799999901443,
+          0.0058808000012504635,
+          0.006325500000457396
+        ],
+        "solve_seconds": [
+          0.1403740999994625,
+          0.1484149999996589,
+          0.145566900000631
+        ],
+        "median_assembly_seconds": 0.005919799999901443,
+        "median_solve_seconds": 0.145566900000631,
+        "initial_jacobian_nonzeros": 8009,
+        "initial_jacobian_storage_bytes": 108136,
+        "saved_frames": 41,
+        "final_max_abs_difference_to_tighter_run": 6.293814458491198e-08,
+        "drug_balance": {
+          "name": "drug",
+          "initial": 5e-09,
+          "final": 4.999999999999204e-09,
+          "maximum_absolute_drift": 7.957477492760126e-22,
+          "relative_drift": 1.5914954985520252e-13
+        },
+        "site_balance": {
+          "name": "sites",
+          "initial": 4.188790204786394e-09,
+          "final": 4.188790204786389e-09,
+          "maximum_absolute_drift": 5.790264287871194e-24,
+          "relative_drift": 1.3823237748347595e-15
+        },
+        "diagnostics": {
+          "method": "BDF",
+          "rhs_evaluations": 742,
+          "jacobian_evaluations": 1,
+          "factorizations": 63,
+          "minimum_concentration": 0.0,
+          "rtol": 1e-07,
+          "minimum_atol": 1e-10,
+          "maximum_atol": 1e-10
+        }
+      },
+      {
+        "cells": 10000,
+        "state_size": 30006,
+        "assembly_seconds": [
+          0.06499690000055125,
+          0.06702779999977793,
+          0.06039939999936905
+        ],
+        "solve_seconds": [
+          1.6357523999995465,
+          1.8082918999989488,
+          1.6646882000004553
+        ],
+        "median_assembly_seconds": 0.06499690000055125,
+        "median_solve_seconds": 1.6646882000004553,
+        "initial_jacobian_nonzeros": 80009,
+        "initial_jacobian_storage_bytes": 1080136,
+        "saved_frames": 41,
+        "final_max_abs_difference_to_tighter_run": 6.550263653704036e-08,
+        "drug_balance": {
+          "name": "drug",
+          "initial": 5e-09,
+          "final": 4.999999999959132e-09,
+          "maximum_absolute_drift": 4.086851252440744e-20,
+          "relative_drift": 8.173702504881488e-12
+        },
+        "site_balance": {
+          "name": "sites",
+          "initial": 4.18879020478639e-09,
+          "final": 4.188790204786388e-09,
+          "maximum_absolute_drift": 6.617444900424222e-24,
+          "relative_drift": 1.5797985998111552e-15
+        },
+        "diagnostics": {
+          "method": "BDF",
+          "rhs_evaluations": 836,
+          "jacobian_evaluations": 1,
+          "factorizations": 74,
+          "minimum_concentration": 0.0,
+          "rtol": 1e-07,
+          "minimum_atol": 1e-10,
+          "maximum_atol": 1e-10
+        }
+      }
+    ]
+  },
+  "after": {
+    "created_at_utc": "2026-09-14T01:58:00.867251+00:00",
+    "python": "3.14.3",
+    "platform": "Windows-11-10.0.22631-SP0",
+    "numpy": "2.5.1",
+    "scipy": "1.18.0",
+    "native_build": {
+      "compiler": {
+        "id": "MSVC",
+        "version": "19.44.35228"
+      },
+      "cxx": {
+        "standard": 201703,
+        "standard_name": "C++17",
+        "assertions_enabled": false
+      },
+      "features": {
+        "eigen": {
+          "compile_definition": true,
+          "enabled": true,
+          "version": "3.4.1"
+        },
+        "openmp": {
+          "compile_definition": false,
+          "enabled": false,
+          "specification_date": null
+        }
+      }
+    },
+    "blas_threads": 1,
+    "source_sha256": "d7c677fa98f884355ecb5804c9579b0ff3014138a2864d4f08553bc0e6148f6f",
+    "script_sha256": "90c66faf915a7c953733d115273054e5b6bd84dd2a3b9c1f26d5e1b7dc6e4a1b",
+    "workload": "closed reservoir / spherical tissue / drug + site <-> bound",
+    "end_time_s": 300,
+    "rtol": 1e-07,
+    "atol": 1e-10,
+    "reference_rtol": 1e-10,
+    "reference_atol": 1e-13,
+    "results": [
+      {
+        "cells": 100,
+        "state_size": 306,
+        "assembly_seconds": [
+          0.0010946000002149958,
+          0.000998299999992014,
+          0.00101610000092478
+        ],
+        "solve_seconds": [
+          0.040807900000800146,
+          0.040544199999203556,
+          0.04068079999888141
+        ],
+        "median_assembly_seconds": 0.00101610000092478,
+        "median_solve_seconds": 0.04068079999888141,
+        "initial_jacobian_nonzeros": 809,
+        "initial_jacobian_storage_bytes": 10936,
+        "saved_frames": 41,
+        "final_max_abs_difference_to_tighter_run": 6.580402156508569e-08,
+        "drug_balance": {
+          "name": "drug",
+          "initial": 5e-09,
+          "final": 5.00000000000002e-09,
+          "maximum_absolute_drift": 1.9852334701272664e-23,
+          "relative_drift": 3.970466940254533e-15,
+          "external_change": 0.0,
+          "expected_final": 5e-09
+        },
+        "site_balance": {
+          "name": "sites",
+          "initial": 4.188790204786391e-09,
+          "final": 4.188790204786391e-09,
+          "maximum_absolute_drift": 8.271806125530277e-25,
+          "relative_drift": 1.9747482497639437e-16,
+          "external_change": 0.0,
+          "expected_final": 4.188790204786391e-09
+        },
+        "diagnostics": {
+          "method": "BDF",
+          "rhs_evaluations": 598,
+          "jacobian_evaluations": 1,
+          "factorizations": 52,
+          "minimum_concentration": 0.0,
+          "rtol": 1e-07,
+          "minimum_atol": 1e-10,
+          "maximum_atol": 1e-10
+        }
+      },
+      {
+        "cells": 1000,
+        "state_size": 3006,
+        "assembly_seconds": [
+          0.005946100000073784,
+          0.006266700000196579,
+          0.006605600001421408
+        ],
+        "solve_seconds": [
+          0.14259599999968486,
+          0.14132319999953324,
+          0.14464719999887166
+        ],
+        "median_assembly_seconds": 0.006266700000196579,
+        "median_solve_seconds": 0.14259599999968486,
+        "initial_jacobian_nonzeros": 8009,
+        "initial_jacobian_storage_bytes": 108136,
+        "saved_frames": 41,
+        "final_max_abs_difference_to_tighter_run": 6.293814458491198e-08,
+        "drug_balance": {
+          "name": "drug",
+          "initial": 5e-09,
+          "final": 4.999999999999203e-09,
+          "maximum_absolute_drift": 7.974021105011187e-22,
+          "relative_drift": 1.5948042210022374e-13,
+          "external_change": 0.0,
+          "expected_final": 5e-09
+        },
+        "site_balance": {
+          "name": "sites",
+          "initial": 4.188790204786392e-09,
+          "final": 4.188790204786391e-09,
+          "maximum_absolute_drift": 2.481541837659083e-24,
+          "relative_drift": 5.92424474929183e-16,
+          "external_change": 0.0,
+          "expected_final": 4.188790204786392e-09
+        },
+        "diagnostics": {
+          "method": "BDF",
+          "rhs_evaluations": 742,
+          "jacobian_evaluations": 1,
+          "factorizations": 63,
+          "minimum_concentration": 0.0,
+          "rtol": 1e-07,
+          "minimum_atol": 1e-10,
+          "maximum_atol": 1e-10
+        }
+      },
+      {
+        "cells": 10000,
+        "state_size": 30006,
+        "assembly_seconds": [
+          0.06090869999934512,
+          0.06367590000081691,
+          0.06229619999976421
+        ],
+        "solve_seconds": [
+          1.7099540999988676,
+          1.6622760999998718,
+          1.6374691000000894
+        ],
+        "median_assembly_seconds": 0.06229619999976421,
+        "median_solve_seconds": 1.6622760999998718,
+        "initial_jacobian_nonzeros": 80009,
+        "initial_jacobian_storage_bytes": 1080136,
+        "saved_frames": 41,
+        "final_max_abs_difference_to_tighter_run": 6.550263653704036e-08,
+        "drug_balance": {
+          "name": "drug",
+          "initial": 5e-09,
+          "final": 4.999999999959133e-09,
+          "maximum_absolute_drift": 4.086685816318233e-20,
+          "relative_drift": 8.173371632636466e-12,
+          "external_change": 0.0,
+          "expected_final": 5e-09
+        },
+        "site_balance": {
+          "name": "sites",
+          "initial": 4.188790204786391e-09,
+          "final": 4.188790204786392e-09,
+          "maximum_absolute_drift": 1.6543612251060553e-24,
+          "relative_drift": 3.9494964995278875e-16,
+          "external_change": 0.0,
+          "expected_final": 4.188790204786391e-09
+        },
+        "diagnostics": {
+          "method": "BDF",
+          "rhs_evaluations": 836,
+          "jacobian_evaluations": 1,
+          "factorizations": 74,
+          "minimum_concentration": 0.0,
+          "rtol": 1e-07,
+          "minimum_atol": 1e-10,
+          "maximum_atol": 1e-10
+        }
+      }
+    ]
+  },
+  "note": "Three warm repeats per mesh, serial runs on the same host; benchmark timings are workload observations, not a universal speedup claim. Before uses the retained 1b5388d wheel; after uses the new protocol implementation."
+}

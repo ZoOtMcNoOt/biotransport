@@ -1,4 +1,4 @@
-# Engine and workbench increment — 12 September 2026
+# BioTransport engine implementation and verification record
 
 This is the implementation and verification record for the shared experiment
 API, local Studio, and steady solver improvements. The usage and extension guide
@@ -60,7 +60,9 @@ pass. Evidence is in `build/extension-validation/ci-fix-pytest.log` and
 
 ### Coupled engine verification
 
-The implementation in the commit containing this section follows `6cadff2`.
+The coupled engine was pushed as `1b5388de1a014cfdef294ce9e79d90254c8b71ac`.
+All 12 CI jobs passed in
+[run 34686269172](https://github.com/ZoOtMcNoOt/biotransport/actions/runs/34686269172).
 All **1,958 Python tests and 15 subtests** pass against a separately installed
 wheel, with the six existing pulsatile-reference warnings, in 93.44 seconds.
 This includes 77 coupled-engine checks and executable README, tutorial and
@@ -100,6 +102,80 @@ These are workload measurements under shared machine load, not a universal
 speedup or biological validation claim. Timing varied across local runs; no
 best-run selection was used. The final raw samples, settings and source hashes
 are in [coupled-transport-20260912.json](../benchmarks/coupled-transport-20260912.json).
+
+## Open systems and dosing protocols — 13 September 2026
+
+This engine increment follows `1b5388d`; its implementation is the commit
+containing this section. UI work remains deferred.
+
+- `bath` defines maintained external concentrations. `ConcentrationSchedule`
+  supplies immutable step or linear protocols with dimension-checked values
+  and explicit left/right limits. Names are shared with domain endpoints;
+  existing membrane laws and spatial face-area constraints still apply.
+- Integration is split at every connected, permeable schedule knot, even when
+  it falls between requested output frames. The finishing interval sees the
+  pre-jump bath and the next sees the new bath. State and cumulative transfers
+  remain continuous; saved instantaneous bath values use the right limit.
+- Each external membrane/species pair has a signed integrated amount ledger.
+  Ledger states are divided by their connected physical volume so concentration
+  tolerances remain meaningful for tiny modeled volumes. Sparse augmented
+  Jacobians carry the same loss coefficients as the physical state equations.
+- `external_amount`, `bath_history`, and expanded conservation reports separate
+  stored moles from externally supplied or removed moles. `external_rates`,
+  `breakpoints`, and the RHS's `bath_side` control support external integrators.
+  Public state vectors contain concentrations; built-in solving manages the
+  internal ledger automatically.
+- The integration implementation is isolated in `_coupled_integration.py` and
+  schedules in `protocols.py`. Closed networks call their existing local RHS
+  directly. Interface-rate queries now read endpoint concentrations directly,
+  avoiding a copy of a whole field history just to read one boundary node.
+
+### Protocol verification
+
+All **2,004 Python tests and 15 subtests** pass against the separately installed
+wheel in 73.93 seconds, with six existing pulsatile-reference warnings. The 45
+new protocol checks cover both membrane orientations, partition equilibrium,
+one-microsecond pulses, linear ramps, interleaved baths, exact open reaction
+kinetics, independent quadrature and matrix-exponential references, sparse
+Jacobian derivatives, endpoint limits, state ownership and volumes down to
+`1e-18 m^3`. The 77 earlier coupled checks and executable documentation also pass.
+
+Ruff, source-only API typing, NumPy-aware typing for all three engine modules,
+and strict Sphinx against the installed wheel pass. All 49 packaged source
+files match the wheel byte for byte. Native sources and frontend assets are
+unchanged; the push's CI performs the cross-platform release checks.
+
+The retained wheel is
+`build/protocol-validation/dist/biotransport-0.1.0-cp314-cp314-win_amd64.whl`,
+SHA-256 `78194497018496f953253e650a1c90de9f87e107f246dc05427c66c502484d20`.
+Evidence: `build/protocol-validation/installed-pytest.log`, `installed-docs.log`,
+`wheel.log` and `installed-benchmark.log`.
+
+The closed-network benchmark ran serially against the retained `1b5388d` wheel
+and the new implementation, with identical equations, output frames and
+tolerances. All integrator diagnostic values and tighter-reference differences
+match at every size. At 30,006 states the three-run median was 1.6647 seconds
+before and 1.6623 seconds after; these observations do not establish a speedup.
+Raw samples and environment metadata are in
+[protocol-closed-regression-20260913.json](../benchmarks/protocol-closed-regression-20260913.json).
+
+The new installed-wheel benchmark applies a 20-second bath pulse to a sphere
+with reversible binding and follows washout through 120 seconds. It requests
+only a final output frame; the solver also saves both protocol changes.
+
+| Spatial cells | Concentration states | External ledger states | Median solve |
+| ---: | ---: | ---: | ---: |
+| 100 | 303 | 1 | 70.49 ms |
+| 1,000 | 3,003 | 1 | 268.83 ms |
+| 10,000 | 30,003 | 1 | 3,005.84 ms |
+
+At 10,000 cells, maximum final concentration difference against a tighter run
+was `2.52e-9 mol/m^3`; the maximum external-accounted drug balance residual was
+`2.00e-21 mol`, or `4.32e-12` relative. These are three warm repetitions on
+Windows / Python 3.14.3 / SciPy 1.18.0 with one BLAS thread requested, under
+shared host load. Raw values, settings and module hashes are in
+[bath-protocols-20260913.json](../benchmarks/bath-protocols-20260913.json).
+Reproduce with `examples/verification/benchmark_protocols.py`.
 
 ## Follow-on extension: completed
 
@@ -305,8 +381,9 @@ intervals and 200,000 explicit steps. The Python experiment adapter allows 2,000
 cells and 200 intervals; direct `Problem` users can work beyond those adapter
 limits. Example values are illustrative, not calibrated biological data.
 
-The separate coupled engine now supports closed networks of compartments and
-1D spatial domains, multiple species and local reactions. Studio and the JSON
+The separate coupled engine supports open and closed networks of compartments
+and 1D spatial domains, multiple species, local reactions and prescribed bath
+concentration protocols. Studio and the JSON
 experiment adapter continue to cover their single-field scope. Further UI work
 is deferred.
 
@@ -314,10 +391,10 @@ Long explicit radial transients still require a step count proportional to
 resolution squared. The direct steady path now avoids that work when only the
 final balance is needed; native planning exposes the cost when physical time
 evolution is required. `CoupledModel` now provides sparse implicit transients
-for its closed-network scope, including radial domains.
+for its coupled-network scope, including radial domains and external baths.
 
-Remaining engine boundaries are prescribed external baths and boundary schedules,
-advection/flow coupling, nonuniform or adaptive meshes, 2D/3D interface mappings,
+Remaining engine boundaries are advection/flow coupling, time-varying membrane
+permeability and partition coefficients, nonuniform or adaptive meshes, 2D/3D interface mappings,
 coupled steady solving, parameter fitting and model serialization. Custom
 reaction callbacks are local and must provide consistent derivatives. BDF and
 Radau do not guarantee nonnegative states; inspect ranges, conserved quantities,
